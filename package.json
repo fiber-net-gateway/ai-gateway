@@ -1,28 +1,27 @@
 {
-  "name": "fiber-gateway-introduction",
+  "name": "ai-server-console",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
+  "description": "Management console for fiber-gateway-cpp ai-server",
+  "workspaces": [
+    "web",
+    "server"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0",
-    "typecheck": "tsc --noEmit",
+    "dev": "concurrently -n web,server -c cyan,magenta \"npm run dev:web\" \"npm run dev:server\"",
+    "dev:web": "npm run dev --workspace web",
+    "dev:server": "npm run dev --workspace server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
-  "dependencies": {
-    "@fontsource/dm-mono": "^5.3.0",
-    "@fontsource/manrope": "^5.3.0",
-    "lucide-react": "^0.468.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
   "devDependencies": {
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "prettier": "^3.4.2",
-    "typescript": "^5.7.2",
-    "vite": "^6.4.3"
+    "concurrently": "^10.0.4",
+    "prettier": "^3.4.2"
   }
 }

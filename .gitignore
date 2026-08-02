@@ -1,10 +1,11 @@
-# Downloaded source used while preparing the introduction site.
+# Downloaded upstream source used only for local research.
 .temp/
 
-# Front-end dependencies and generated output.
+# Dependencies and generated output.
 node_modules/
 dist/
 .vite/
+coverage/
 *.tsbuildinfo
 
 # Local environment and editor files.
