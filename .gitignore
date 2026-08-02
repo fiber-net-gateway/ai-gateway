@@ -1,0 +1,17 @@
+# Downloaded source used while preparing the introduction site.
+.temp/
+
+# Front-end dependencies and generated output.
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Local environment and editor files.
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+*.log
