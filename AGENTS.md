@@ -94,6 +94,19 @@ Fastify schemas. Return stable machine-readable error codes and field paths for 
 Parse environment variables only through `server/src/config/`; do not scatter `process.env` reads.
 Do not log request bodies or secrets.
 
+## Database Query Rules
+
+Server runtime SQL must be strict, parameterized, single-table SQL: each statement may read or
+write only one physical table. Do not use `JOIN`, subqueries (including correlated subqueries and
+`INSERT ... SELECT`), CTEs, `UNION`/`INTERSECT`/`EXCEPT`, window functions, or complex database-side
+aggregation. Do not hide these constructs behind views, stored procedures, triggers, or dynamic SQL.
+
+Load related rows with separate repository calls and assemble relationships in TypeScript with
+typed maps. Use single-table read projections or explicitly maintained counters for list summaries,
+and use `LIMIT pageSize + 1` instead of a separate `COUNT(*)` for cursor pagination. Multi-table
+business changes may use a transaction, but the transaction must execute a stable sequence of
+simple single-table statements. Keep SQL in repositories and add tests that enforce these rules.
+
 ## Configuration and Release Rules
 
 Validate configuration in three stages: individual fields, resource relationships, and the whole
