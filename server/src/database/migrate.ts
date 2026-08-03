@@ -1,8 +1,9 @@
 import type { Pool, RowDataPacket } from 'mysql2/promise'
 
 import { userModuleMigration } from './migrations/001-user-module.js'
+import { modelMarketplaceMigration } from './migrations/002-model-marketplace.js'
 
-const migrations = [userModuleMigration]
+const migrations = [userModuleMigration, modelMarketplaceMigration]
 
 export async function runMigrations(pool: Pool): Promise<void> {
   const connection = await pool.getConnection()

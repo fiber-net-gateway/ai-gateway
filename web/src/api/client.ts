@@ -83,12 +83,13 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly correlationId?: string,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message)
   }
 }
 
-function readCookie(name: string): string | undefined {
+export function readCookie(name: string): string | undefined {
   return document.cookie
     .split('; ')
     .find((entry) => entry.startsWith(`${name}=`))
@@ -114,7 +115,7 @@ function createIdempotencyKey(): string {
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function performRequest(path: string, init: RequestInit = {}): Promise<Response> {
   const method = init.method?.toUpperCase() ?? 'GET'
   const headers = new Headers(init.headers)
   if (init.body) headers.set('Content-Type', 'application/json')
@@ -122,22 +123,45 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const csrf = readCookie('fg_csrf')
     if (csrf) headers.set('X-CSRF-Token', decodeURIComponent(csrf))
   }
-  const response = await fetch(path, { ...init, headers, credentials: 'same-origin' })
+  return fetch(path, { ...init, headers, credentials: 'same-origin' })
+}
+
+async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as {
       code?: string
       message?: string
       correlationId?: string
+      details?: Record<string, unknown>
+      error?: {
+        code?: string
+        message?: string
+        correlationId?: string
+        details?: Record<string, unknown>
+      }
     }
     throw new ApiError(
-      body.code ?? 'REQUEST_FAILED',
-      body.message ?? `请求失败（${response.status}）`,
+      body.error?.code ?? body.code ?? 'REQUEST_FAILED',
+      body.error?.message ?? body.message ?? `请求失败（${response.status}）`,
       response.status,
-      body.correlationId,
+      body.error?.correlationId ?? body.correlationId,
+      body.error?.details ?? body.details,
     )
   }
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
+}
+
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return parseResponse<T>(await performRequest(path, init))
+}
+
+export async function requestWithMetadata<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<{ data: T; etag: string | null }> {
+  const response = await performRequest(path, init)
+  return { data: await parseResponse<T>(response), etag: response.headers.get('ETag') }
 }
 
 export const api = {

@@ -5,6 +5,8 @@ import { loadConfig } from './config/env.js'
 import { runMigrations } from './database/migrate.js'
 import { createMySqlPool } from './database/mysql.js'
 import { ValueCipher } from './modules/users/crypto.js'
+import { MySqlMarketplaceStore } from './modules/model-marketplace/mysql-store.js'
+import { MySqlMarketplaceSecretService } from './modules/model-marketplace/secret-service.js'
 import { MemoryUserStore } from './modules/users/memory-store.js'
 import { MySqlUserStore } from './modules/users/mysql-store.js'
 
@@ -16,9 +18,19 @@ if (pool) await runMigrations(pool)
 const store = pool
   ? new MySqlUserStore(pool, new ValueCipher(config.security.encryptionKey))
   : new MemoryUserStore()
+const marketplaceStore = pool ? new MySqlMarketplaceStore(pool) : undefined
+const marketplaceSecrets = pool
+  ? new MySqlMarketplaceSecretService(
+      pool,
+      new ValueCipher(config.security.encryptionKey),
+      config.security.encryptionKey,
+    )
+  : undefined
 const app = buildApp({
   config,
   store,
+  marketplaceStore,
+  marketplaceSecrets,
   logger: true,
   closeInfrastructure: pool ? () => pool.end() : undefined,
 })

@@ -2,6 +2,14 @@ import Fastify, { type FastifyInstance } from 'fastify'
 
 import { type AppConfig, loadConfig } from './config/env.js'
 import { OidcService } from './modules/auth/oidc-service.js'
+import { MemoryMarketplaceStore } from './modules/model-marketplace/memory-store.js'
+import { registerModelMarketplaceRoutes } from './modules/model-marketplace/routes.js'
+import { MemoryMarketplaceSecretService } from './modules/model-marketplace/secret-service.js'
+import { ModelMarketplaceService } from './modules/model-marketplace/service.js'
+import type {
+  MarketplaceSecretService,
+  MarketplaceStore,
+} from './modules/model-marketplace/types.js'
 import {
   type Clock,
   type RandomSource,
@@ -18,6 +26,8 @@ export interface BuildAppOptions {
   logger?: boolean
   config?: AppConfig
   store?: UserStore
+  marketplaceStore?: MarketplaceStore
+  marketplaceSecrets?: MarketplaceSecretService
   clock?: Clock
   random?: RandomSource
   closeInfrastructure?: () => Promise<void>
@@ -65,6 +75,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const random = options.random ?? systemRandom
   const store = options.store ?? new MemoryUserStore()
   const cipher = new ValueCipher(config.security.encryptionKey)
+  const marketplaceStore = options.marketplaceStore ?? new MemoryMarketplaceStore()
+  const marketplaceSecrets =
+    options.marketplaceSecrets ??
+    new MemoryMarketplaceSecretService(cipher, config.security.encryptionKey)
   const app = Fastify({ logger: options.logger ?? false })
 
   const users = new UserService(store, clock)
@@ -74,6 +88,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     config.auth.mode === 'oidc'
       ? new OidcService(config.auth, config.publicUrl, cipher, clock)
       : null
+  const marketplace = new ModelMarketplaceService(
+    marketplaceStore,
+    marketplaceSecrets,
+    store,
+    clock,
+    random,
+    config.security.encryptionKey,
+  )
 
   app.addHook('onReady', async () => {
     await store.bootstrap(createBootstrapInput(config, clock.now()))
@@ -106,6 +128,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   )
 
   registerUserRoutes(app, { config, store, users, sessions, tokens, oidc })
+  registerModelMarketplaceRoutes(app, {
+    marketplace,
+    sessions,
+    users,
+    userStore: store,
+  })
 
   return app
 }

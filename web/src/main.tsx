@@ -13,13 +13,30 @@ import { api, ApiError, type EnvironmentAccess, type IssuedToken, type User } fr
 import { ConsoleLayout, type Section } from './components/ConsoleLayout'
 import { AuditPage } from './pages/AuditPage'
 import { LoginPage } from './pages/LoginPage'
+import { ModelDetailPage } from './pages/ModelDetailPage'
+import { ModelEditorPage } from './pages/ModelEditorPage'
+import { ModelMarketplacePage } from './pages/ModelMarketplacePage'
 import { IssuedTokenModal, TokensPage } from './pages/TokensPage'
 import { UsersPage } from './pages/UsersPage'
 import './styles.css'
 
 function initialSection(): Section {
   const value = window.location.hash.replace('#/', '')
-  return value === 'users' || value === 'audit' ? value : 'tokens'
+  if (value === 'users' || value === 'audit' || value === 'tokens') return value
+  return 'models'
+}
+
+function marketplaceRoute():
+  | { kind: 'list' }
+  | { kind: 'new' }
+  | { kind: 'detail'; modelId: string }
+  | { kind: 'edit'; modelId: string } {
+  const parts = window.location.hash.replace(/^#\/?/u, '').split('/').filter(Boolean)
+  if (parts[0] !== 'models') return { kind: 'list' }
+  if (parts[1] === 'new') return { kind: 'new' }
+  if (parts[1] && parts[2] === 'edit') return { kind: 'edit', modelId: parts[1] }
+  if (parts[1]) return { kind: 'detail', modelId: parts[1] }
+  return { kind: 'list' }
 }
 
 function App() {
@@ -27,6 +44,7 @@ function App() {
   const [user, setUser] = useState<User | null>(null)
   const [environments, setEnvironments] = useState<EnvironmentAccess[]>([])
   const [section, setSection] = useState<Section>(initialSection)
+  const [modelRoute, setModelRoute] = useState(marketplaceRoute)
   const [booting, setBooting] = useState(true)
   const [loginBusy, setLoginBusy] = useState(false)
   const [loginError, setLoginError] = useState<string | null>(null)
@@ -57,7 +75,10 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const update = () => setSection(initialSection())
+    const update = () => {
+      setSection(initialSection())
+      setModelRoute(marketplaceRoute())
+    }
     window.addEventListener('hashchange', update)
     return () => window.removeEventListener('hashchange', update)
   }, [])
@@ -65,6 +86,10 @@ function App() {
   const navigate = (next: Section) => {
     window.location.hash = `/${next}`
     setSection(next)
+  }
+
+  const navigateModel = (path = '') => {
+    window.location.hash = `/models${path ? `/${path}` : ''}`
   }
 
   const login = async (username: string) => {
@@ -112,7 +137,9 @@ function App() {
     )
   }
 
-  const visibleSection = user.systemRole === 'ADMIN' ? section : 'tokens'
+  const visibleSection =
+    user.systemRole === 'ADMIN' ? section : section === 'models' ? 'models' : 'tokens'
+  const environmentId = environments[0]?.environment.id
   return (
     <ConsoleLayout
       user={user}
@@ -128,6 +155,46 @@ function App() {
           onError={setNotice}
         />
       )}
+      {visibleSection === 'models' &&
+        environmentId &&
+        (modelRoute.kind === 'list' ||
+          (user.systemRole !== 'ADMIN' &&
+            (modelRoute.kind === 'new' || modelRoute.kind === 'edit'))) && (
+          <ModelMarketplacePage
+            environmentId={environmentId}
+            admin={user.systemRole === 'ADMIN'}
+            onOpen={(modelId) => navigateModel(modelId)}
+            onCreate={() => navigateModel('new')}
+            onError={setNotice}
+          />
+        )}
+      {visibleSection === 'models' && environmentId && modelRoute.kind === 'detail' && (
+        <ModelDetailPage
+          environmentId={environmentId}
+          modelId={modelRoute.modelId}
+          admin={user.systemRole === 'ADMIN'}
+          onBack={() => navigateModel()}
+          onEdit={() => navigateModel(`${modelRoute.modelId}/edit`)}
+          onArchived={() => navigateModel()}
+          onError={setNotice}
+          onNotice={setNotice}
+        />
+      )}
+      {visibleSection === 'models' &&
+        environmentId &&
+        user.systemRole === 'ADMIN' &&
+        (modelRoute.kind === 'new' || modelRoute.kind === 'edit') && (
+          <ModelEditorPage
+            environmentId={environmentId}
+            modelId={modelRoute.kind === 'edit' ? modelRoute.modelId : undefined}
+            onBack={() =>
+              modelRoute.kind === 'edit' ? navigateModel(modelRoute.modelId) : navigateModel()
+            }
+            onSaved={(modelId) => navigateModel(modelId)}
+            onError={setNotice}
+            onNotice={setNotice}
+          />
+        )}
       {visibleSection === 'users' && (
         <UsersPage
           environments={environments}

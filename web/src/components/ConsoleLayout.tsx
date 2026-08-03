@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  Boxes,
   ChevronDown,
   FileClock,
   KeyRound,
@@ -13,7 +14,7 @@ import { useState, type ReactNode } from 'react'
 
 import type { EnvironmentAccess, User } from '../api/client'
 
-export type Section = 'tokens' | 'users' | 'audit'
+export type Section = 'models' | 'tokens' | 'users' | 'audit'
 
 interface LayoutProps {
   user: User
@@ -70,6 +71,14 @@ export function ConsoleLayout({
           )}
         </div>
         <nav className="console-nav" aria-label="控制台导航">
+          <span className="nav-heading">模型配置</span>
+          <button
+            className={section === 'models' ? 'active' : ''}
+            type="button"
+            onClick={() => navigate('models')}
+          >
+            <Boxes size={18} /> 模型广场
+          </button>
           <span className="nav-heading">个人工作台</span>
           <button
             className={section === 'tokens' ? 'active' : ''}

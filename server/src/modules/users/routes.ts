@@ -121,31 +121,59 @@ export function registerUserRoutes(
 
   app.addHook('onSend', async (request, reply, payload) => {
     reply.header('X-Correlation-ID', request.id)
+    reply.header(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    )
+    reply.header('X-Content-Type-Options', 'nosniff')
+    reply.header('Referrer-Policy', 'no-referrer')
+    reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
     return payload
   })
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof DomainError) {
+      const marketplaceError = {
+        code: error.code,
+        message: error.message,
+        field: typeof error.details?.field === 'string' ? error.details.field : undefined,
+        severity:
+          error.details?.severity === 'WARNING' || error.details?.severity === 'ERROR'
+            ? error.details.severity
+            : 'ERROR',
+        correlationId: request.id,
+        details: error.details ?? {},
+      }
       void reply.status(error.statusCode).send({
         code: error.code,
         message: error.message,
         retryable: error.statusCode >= 500,
         correlationId: request.id,
         details: error.details,
+        error: marketplaceError,
       })
       return
     }
     const issues = validationIssues(error)
     if (issues) {
+      const details = issues.map((issue) => ({
+        field: issue.instancePath || issue.params?.missingProperty || '',
+        message: issue.message,
+      }))
       void reply.status(400).send({
         code: 'VALIDATION_FAILED',
         message: '请求参数不符合接口约束',
         retryable: false,
         correlationId: request.id,
-        details: issues.map((issue) => ({
-          field: issue.instancePath || issue.params?.missingProperty || '',
-          message: issue.message,
-        })),
+        details,
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: '请求参数不符合接口约束',
+          field: details[0]?.field ?? '',
+          severity: 'ERROR',
+          correlationId: request.id,
+          details: { issues: details },
+        },
       })
       return
     }
