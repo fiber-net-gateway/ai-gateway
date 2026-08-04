@@ -64,7 +64,9 @@
 - 不建设通用 rnacos/Nacos 管理控制台，不允许任意 group 或 Data ID。
 - 不提供终端用户聊天、Prompt 管理、对话检索、模型计费或套餐售卖。
 - 不实现 OpenAI 与 Anthropic 协议互转；ai-server 只调用与入站协议相同的 Provider 协议。
-- 不代理或保存用户的在线 LLM 请求与响应；ai-server 自身的审计文件不由本项目首版管理。
+- 不代理用户的在线 LLM 请求，也不保存 prompt、模型回复或 Provider attempts 原文；
+  `docs/llm-call-audit-requirements.md` 定义了 ai-server 审计 HTTP 上报后的最小调用元数据投影，
+  ai-server 审计文件本身仍不由 console 管理。
 - 不编辑 NamingService 实例；`service://` 实例由服务注册与发现系统维护。
 - 不把 `openai-embedding` 宣称为可调用能力。ai-server 能解析该 Provider 协议，但当前
   没有 embedding 入站路由。

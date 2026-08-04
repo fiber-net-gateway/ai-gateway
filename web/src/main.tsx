@@ -18,6 +18,7 @@ import { ModelDetailPage } from './pages/ModelDetailPage'
 import { ModelEditorPage } from './pages/ModelEditorPage'
 import { ModelMarketplacePage } from './pages/ModelMarketplacePage'
 import { MyAccessRequestsPage } from './pages/MyAccessRequestsPage'
+import { MyLlmCallsPage } from './pages/MyLlmCallsPage'
 import { ProvidersPage } from './pages/ProvidersPage'
 import { ReleaseCenterPage } from './pages/ReleaseCenterPage'
 import { IssuedTokenModal, TokensPage } from './pages/TokensPage'
@@ -32,6 +33,7 @@ function initialSection(): Section {
     value === 'users' ||
     value === 'audit' ||
     value === 'tokens' ||
+    value === 'calls' ||
     value === 'my-access' ||
     value === 'access-requests'
   )
@@ -167,7 +169,10 @@ function App() {
   const visibleSection =
     user.systemRole === 'ADMIN'
       ? section
-      : section === 'models' || section === 'tokens' || section === 'my-access'
+      : section === 'models' ||
+          section === 'tokens' ||
+          section === 'calls' ||
+          section === 'my-access'
         ? section
         : 'models'
   const environmentId = environments[0]?.environment.id
@@ -185,6 +190,9 @@ function App() {
           onEnvironmentsChange={setEnvironments}
           onError={showError}
         />
+      )}
+      {visibleSection === 'calls' && environmentId && (
+        <MyLlmCallsPage environmentId={environmentId} onError={showError} />
       )}
       {visibleSection === 'my-access' && environmentId && (
         <MyAccessRequestsPage

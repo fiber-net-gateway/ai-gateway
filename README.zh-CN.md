@@ -135,13 +135,16 @@ MYSQL_DATABASE=ai_server_console
 - `MYSQL_*`：控制台数据库；
 - `RNACOS_*`：rnacos 地址、绑定环境、namespace、tenant、认证信息和固定配置 group；
 - `AI_SERVER_BASE_URL`：目标 `ai-server` 管理地址；
+- `AUDIT_INGEST_TOKEN`、`AUDIT_INGEST_BODY_LIMIT_BYTES`：可选的 ai-server 调用审计内部上报
+  Bearer 凭据与请求体上限；token 为空时关闭入口；
 - `AUTH_MODE`、`OIDC_*`：本地开发认证或企业 OIDC + PKCE；
 - `APP_ENCRYPTION_KEY`：Token 短期交付与本地 secret 封装密钥；
 - `BOOTSTRAP_*`：初始管理员、环境和 BT1 签名 key；
 - `APP_HOST`、`APP_PORT`、`APP_PUBLIC_URL`：控制台监听和浏览器地址。
 
 不要提交 `server/.env`，也不要在日志、API 响应或审计差异中返回 MySQL 密码、rnacos
-密码、Provider token 或 BT1 secret。
+密码、Provider token、BT1 secret 或审计上报 token。每用户调用记录的最小化契约见
+[`docs/llm-call-audit-requirements.md`](docs/llm-call-audit-requirements.md)。
 
 ## 校验与构建
 

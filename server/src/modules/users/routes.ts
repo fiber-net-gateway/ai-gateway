@@ -177,6 +177,20 @@ export function registerUserRoutes(
       })
       return
     }
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'statusCode' in error &&
+      error.statusCode === 413
+    ) {
+      void reply.status(413).send({
+        code: 'PAYLOAD_TOO_LARGE',
+        message: '请求体超过接口允许的大小',
+        retryable: false,
+        correlationId: request.id,
+      })
+      return
+    }
     request.log.error({ err: error }, 'request failed')
     void reply.status(500).send({
       code: 'INTERNAL_ERROR',

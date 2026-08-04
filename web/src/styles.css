@@ -1211,6 +1211,157 @@ td code {
 .audit-meta code {
   display: block;
 }
+
+.call-audit-boundary {
+  padding: 13px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  color: #4d6545;
+  background: #f4f8ef;
+  border: 1px solid #d8e3ce;
+  border-radius: 8px;
+}
+.call-audit-boundary svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.call-audit-boundary p {
+  margin: 0;
+}
+.call-audit-boundary b,
+.call-audit-boundary span {
+  display: block;
+}
+.call-audit-boundary b {
+  font-size: 11px;
+}
+.call-audit-boundary span {
+  margin-top: 3px;
+  color: #74816f;
+  font-size: 9px;
+  line-height: 1.55;
+}
+.call-audit-heading {
+  align-items: flex-start;
+}
+.call-audit-filters {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.call-audit-filters > label:not(.search-field) {
+  position: relative;
+}
+.call-audit-filters > label:not(.search-field) > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+.call-audit-filters select {
+  height: 36px;
+  padding: 0 28px 0 10px;
+  color: #59635d;
+  background: #fff;
+  border: 1px solid #dce0d9;
+  border-radius: 6px;
+  font-size: 10px;
+}
+.call-audit-filters .search-field {
+  width: min(250px, 100%);
+}
+.call-audit-table {
+  min-width: 980px;
+}
+.call-audit-table td {
+  height: 76px;
+}
+.call-time code {
+  max-width: 190px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: #909892;
+  font-size: 9px;
+  text-overflow: ellipsis;
+}
+.call-endpoint {
+  max-width: 260px;
+}
+.call-endpoint b {
+  color: #4f732f;
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+}
+.call-endpoint code {
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.call-protocol,
+.call-protocol + small,
+.call-http-status,
+.call-usage span,
+.call-usage small {
+  display: block;
+}
+.call-protocol {
+  color: #56615a;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+}
+.call-protocol + small,
+.call-http-status,
+.call-usage small {
+  margin-top: 4px;
+  color: #909892;
+  font-size: 9px;
+}
+.call-outcome-succeeded {
+  color: #487b27;
+  background: #eff9e7;
+  border-color: #cfe8bd;
+}
+.call-outcome-failed {
+  color: #a13e35;
+  background: #fff0ee;
+  border-color: #ecc5c0;
+}
+.call-outcome-aborted {
+  color: #9a671d;
+  background: #fff7e7;
+  border-color: #eed9aa;
+}
+.call-usage span {
+  color: #59635d;
+  font-size: 10px;
+}
+.call-audit-footer {
+  padding: 14px 20px;
+  display: flex;
+  justify-content: center;
+  border-top: 1px solid var(--line);
+}
+.call-audit-footer button {
+  min-width: 120px;
+}
+.spin {
+  animation: call-audit-spin 0.8s linear infinite;
+}
+@keyframes call-audit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
 .audit-meta time {
   color: #68716b;
   font-size: 9px;
@@ -3381,6 +3532,19 @@ td code {
   .audit-meta code {
     display: inline;
     margin-right: 8px;
+  }
+  .call-audit-heading,
+  .call-audit-filters {
+    width: 100%;
+  }
+  .call-audit-heading {
+    align-items: stretch;
+  }
+  .call-audit-filters {
+    justify-content: flex-start;
+  }
+  .call-audit-filters .search-field {
+    width: 100%;
   }
   .login-story {
     min-height: auto;

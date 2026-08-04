@@ -77,6 +77,34 @@ export interface AuditEvent {
   occurredAt: string
 }
 
+export type LlmCallOutcome = 'SUCCEEDED' | 'FAILED' | 'ABORTED'
+
+export interface LlmCallAudit {
+  id: string
+  requestId: string
+  occurredAt: string
+  receivedAt: string
+  method: string
+  path: string
+  requestedModel: string
+  clientProtocol: string
+  stream: boolean
+  responseStatus: number
+  outcome: LlmCallOutcome
+  durationMs: number
+  usage: {
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+  }
+  clientAborted: boolean
+  captureComplete: boolean
+  messageCount: number
+  toolCount: number
+  requestBodyBytes: number
+  responseBodyBytes: number
+}
+
 export class ApiError extends Error {
   constructor(
     readonly code: string,
@@ -240,4 +268,22 @@ export const api = {
       },
     ),
   auditEvents: () => request<{ items: AuditEvent[] }>('/api/admin/audit-events'),
+  llmCallAudits: (query: {
+    environmentId: string
+    cursor?: string
+    limit?: number
+    outcome?: LlmCallOutcome
+    protocol?: string
+    search?: string
+  }) => {
+    const parameters = new URLSearchParams({ environmentId: query.environmentId })
+    if (query.cursor) parameters.set('cursor', query.cursor)
+    if (query.limit) parameters.set('limit', String(query.limit))
+    if (query.outcome) parameters.set('outcome', query.outcome)
+    if (query.protocol) parameters.set('protocol', query.protocol)
+    if (query.search) parameters.set('search', query.search)
+    return request<{ items: LlmCallAudit[]; nextCursor: string | null }>(
+      `/api/me/llm-call-audits?${parameters.toString()}`,
+    )
+  },
 }

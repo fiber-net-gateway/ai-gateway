@@ -6,6 +6,7 @@ export interface AppConfig {
   mysql: MySqlConfig
   rnacos: RnacosConfig
   aiServer: AiServerConfig
+  auditIngest: AuditIngestConfig
   auth: AuthConfig
   security: SecurityConfig
   bootstrap: BootstrapConfig
@@ -32,6 +33,11 @@ export interface RnacosConfig {
 
 export interface AiServerConfig {
   baseUrl: string
+}
+
+export interface AuditIngestConfig {
+  token: string
+  bodyLimitBytes: number
 }
 
 export type AuthConfig =
@@ -150,6 +156,15 @@ export function loadConfig(): AppConfig {
   if (production && !process.env.APP_ENCRYPTION_KEY?.trim()) {
     throw new Error('APP_ENCRYPTION_KEY is required when NODE_ENV=production')
   }
+  const auditIngestToken = process.env.AUDIT_INGEST_TOKEN ?? ''
+  if (
+    auditIngestToken &&
+    (Buffer.byteLength(auditIngestToken, 'utf8') < 32 || /\s/u.test(auditIngestToken))
+  ) {
+    throw new Error(
+      'AUDIT_INGEST_TOKEN must contain at least 32 bytes and no whitespace when configured',
+    )
+  }
 
   return {
     host: readString('APP_HOST', '0.0.0.0'),
@@ -178,6 +193,15 @@ export function loadConfig(): AppConfig {
     },
     aiServer: {
       baseUrl: readHttpUrl('AI_SERVER_BASE_URL', 'http://127.0.0.1:8080'),
+    },
+    auditIngest: {
+      token: auditIngestToken,
+      bodyLimitBytes: readInteger(
+        'AUDIT_INGEST_BODY_LIMIT_BYTES',
+        8 * 1024 * 1024,
+        64 * 1024,
+        32 * 1024 * 1024,
+      ),
     },
     auth: loadAuthConfig(),
     security: {

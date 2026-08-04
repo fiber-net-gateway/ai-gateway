@@ -148,13 +148,17 @@ After copying `server/.env.example`, configure these connections and settings as
 - `RNACOS_*`: rnacos address, bound environment, namespace, tenant, credentials, and fixed
   configuration group.
 - `AI_SERVER_BASE_URL`: Address of the target `ai-server` management endpoint.
+- `AUDIT_INGEST_TOKEN` and `AUDIT_INGEST_BODY_LIMIT_BYTES`: Optional Bearer credential and body
+  limit for the internal ai-server call-audit ingest endpoint. An empty token disables ingestion.
 - `AUTH_MODE` and `OIDC_*`: Local development authentication or enterprise OIDC with PKCE.
 - `APP_ENCRYPTION_KEY`: Encryption key for short-lived token delivery and local secret wrapping.
 - `BOOTSTRAP_*`: Initial administrator, environment, and BT1 signing key settings.
 - `APP_HOST`, `APP_PORT`, and `APP_PUBLIC_URL`: Console listener and browser-facing URL settings.
 
-Do not commit `server/.env`. MySQL passwords, rnacos passwords, provider tokens, and BT1 secrets
-must never be exposed in logs, API responses, or audit diffs.
+Do not commit `server/.env`. MySQL passwords, rnacos passwords, provider tokens, BT1 secrets, and
+the audit-ingest token must never be exposed in logs, API responses, or audit diffs. See
+[`docs/llm-call-audit-requirements.md`](docs/llm-call-audit-requirements.md) for the minimized
+per-user call-history contract.
 
 ## Validation and Build
 

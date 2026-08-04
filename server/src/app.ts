@@ -2,6 +2,10 @@ import Fastify, { type FastifyInstance } from 'fastify'
 
 import { type AppConfig, loadConfig } from './config/env.js'
 import { OidcService } from './modules/auth/oidc-service.js'
+import { MemoryLlmCallAuditStore } from './modules/llm-call-audit/memory-store.js'
+import { registerLlmCallAuditRoutes } from './modules/llm-call-audit/routes.js'
+import { LlmCallAuditService } from './modules/llm-call-audit/service.js'
+import type { LlmCallAuditStore } from './modules/llm-call-audit/types.js'
 import { MemoryModelAccessStore } from './modules/model-access/memory-store.js'
 import { registerModelAccessRoutes } from './modules/model-access/routes.js'
 import { ModelAccessService } from './modules/model-access/service.js'
@@ -34,6 +38,7 @@ export interface BuildAppOptions {
   marketplaceStore?: MarketplaceStore
   marketplaceSecrets?: MarketplaceSecretService
   modelAccessStore?: ModelAccessStore
+  llmCallAuditStore?: LlmCallAuditStore
   accessGroupPublisher?: AccessGroupPublisher | null
   marketplacePublisher?: MarketplaceConfigPublisher | null
   clock?: Clock
@@ -88,6 +93,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     options.marketplaceSecrets ??
     new MemoryMarketplaceSecretService(cipher, config.security.encryptionKey)
   const modelAccessStore = options.modelAccessStore ?? new MemoryModelAccessStore()
+  const llmCallAuditStore = options.llmCallAuditStore ?? new MemoryLlmCallAuditStore()
   const app = Fastify({ logger: options.logger ?? false })
 
   const users = new UserService(store, clock)
@@ -114,6 +120,13 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     config.security.encryptionKey,
     modelAccess,
     options.marketplacePublisher ?? null,
+  )
+  const llmCallAudit = new LlmCallAuditService(
+    llmCallAuditStore,
+    store,
+    clock,
+    config.bootstrap.environmentId,
+    config.auditIngest.token,
   )
 
   app.addHook('onReady', async () => {
@@ -160,6 +173,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     sessions,
     users,
     userStore: store,
+  })
+  registerLlmCallAuditRoutes(app, {
+    audit: llmCallAudit,
+    sessions,
+    bodyLimitBytes: config.auditIngest.bodyLimitBytes,
   })
 
   return app

@@ -1,4 +1,5 @@
 import {
+  Activity,
   BookOpen,
   Boxes,
   ClipboardCheck,
@@ -23,6 +24,7 @@ export type Section =
   | 'providers'
   | 'releases'
   | 'tokens'
+  | 'calls'
   | 'my-access'
   | 'access-requests'
   | 'users'
@@ -116,6 +118,13 @@ export function ConsoleLayout({
             onClick={() => navigate('tokens')}
           >
             <KeyRound size={18} /> Token 管理
+          </button>
+          <button
+            className={section === 'calls' ? 'active' : ''}
+            type="button"
+            onClick={() => navigate('calls')}
+          >
+            <Activity size={18} /> 我的调用记录
           </button>
           <button
             className={section === 'my-access' ? 'active' : ''}

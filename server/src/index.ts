@@ -10,6 +10,7 @@ import { MySqlMarketplaceSecretService } from './modules/model-marketplace/secre
 import { MemoryUserStore } from './modules/users/memory-store.js'
 import { MySqlUserStore } from './modules/users/mysql-store.js'
 import { MySqlModelAccessStore } from './modules/model-access/mysql-store.js'
+import { MySqlLlmCallAuditStore } from './modules/llm-call-audit/mysql-store.js'
 import { RnacosAccessGroupPublisher } from './modules/model-access/rnacos-publisher.js'
 import { RnacosConfigClient } from './modules/rnacos/config-client.js'
 
@@ -30,6 +31,7 @@ const marketplaceSecrets = pool
     )
   : undefined
 const modelAccessStore = pool ? new MySqlModelAccessStore(pool) : undefined
+const llmCallAuditStore = pool ? new MySqlLlmCallAuditStore(pool) : undefined
 const rnacosClient = pool ? new RnacosConfigClient(config.rnacos) : undefined
 const accessGroupPublisher =
   pool && rnacosClient ? new RnacosAccessGroupPublisher(config.rnacos, rnacosClient) : undefined
@@ -39,6 +41,7 @@ const app = buildApp({
   marketplaceStore,
   marketplaceSecrets,
   modelAccessStore,
+  llmCallAuditStore,
   accessGroupPublisher,
   marketplacePublisher: rnacosClient,
   logger: true,
