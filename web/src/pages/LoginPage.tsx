@@ -1,4 +1,15 @@
-import { ArrowRight, KeyRound, Layers3, ShieldCheck } from 'lucide-react'
+import {
+  Activity,
+  ArrowRight,
+  Braces,
+  ChartNoAxesCombined,
+  GitBranch,
+  Radio,
+  RefreshCw,
+  Route,
+  ShieldCheck,
+  Waves,
+} from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 
 interface LoginPageProps {
@@ -24,39 +35,105 @@ export function LoginPage({ mode, busy, error, onDevelopmentLogin }: LoginPagePr
             <i />
           </span>
           <span>
-            <strong>FIBER</strong> CONTROL
+            <strong>FIBER</strong> AI SERVER
+          </span>
+          <span className="login-runtime-status">
+            <i /> PRODUCTION LLM GATEWAY
           </span>
         </div>
         <div className="login-copy">
-          <span className="eyebrow lime">AI-SERVER MANAGEMENT CONSOLE</span>
+          <span className="eyebrow lime">C++23 · FIBER RUNTIME</span>
           <h1>
-            让每一次配置变更
+            一个入口，稳定连接
             <br />
-            都可见、可控、可追溯。
+            多种 LLM Provider。
           </h1>
-          <p>管理 ai-server 的用户、BT1 访问凭据与发布状态，同时保留清晰的运行时证据边界。</p>
+          <p>
+            ai-server 是面向生产的高性能 LLM 代理。原生承接 OpenAI 与 Anthropic 请求，在同协议
+            Provider 之间完成鉴权、限流、确定性路由、故障重试与流式透传。
+          </p>
+          <div className="login-protocols" aria-label="支持的原生协议与响应模式">
+            <span>
+              <Braces size={14} /> OPENAI CHAT COMPLETIONS
+            </span>
+            <span>
+              <Radio size={14} /> ANTHROPIC MESSAGES
+            </span>
+            <span>
+              <Waves size={14} /> SYNC + SSE STREAMING
+            </span>
+          </div>
         </div>
-        <div className="login-pillars">
+
+        <section className="login-request-path" aria-label="ai-server 请求执行链路">
+          <header>
+            <span>REQUEST EXECUTION PATH</span>
+            <b>
+              <i /> PINNED IMMUTABLE SNAPSHOT
+            </b>
+          </header>
+          <div className="login-flow">
+            <article>
+              <Braces size={17} />
+              <span>
+                <small>01 · NATIVE INGRESS</small>
+                <b>双协议入口</b>
+                <em>OpenAI / Anthropic</em>
+              </span>
+            </article>
+            <ArrowRight className="login-flow-arrow" size={15} />
+            <article>
+              <ShieldCheck size={17} />
+              <span>
+                <small>02 · POLICY</small>
+                <b>安全决策</b>
+                <em>BT1 · 授权 · 限流</em>
+              </span>
+            </article>
+            <ArrowRight className="login-flow-arrow" size={15} />
+            <article>
+              <Route size={17} />
+              <span>
+                <small>03 · EXECUTION PLAN</small>
+                <b>确定性路由</b>
+                <em>Provider · Token</em>
+              </span>
+            </article>
+            <ArrowRight className="login-flow-arrow" size={15} />
+            <article>
+              <GitBranch size={17} />
+              <span>
+                <small>04 · DELIVERY</small>
+                <b>弹性转发</b>
+                <em>Retry · Fallback · SSE</em>
+              </span>
+            </article>
+          </div>
+        </section>
+
+        <div className="login-capabilities">
           <article>
-            <Layers3 size={19} />
+            <Activity size={18} />
             <span>
-              <b>三态分离</b>草稿、发布、实例生效
+              <b>生产级韧性</b>Token 暂停、Provider 熔断与请求排空
             </span>
           </article>
           <article>
-            <KeyRound size={19} />
+            <RefreshCw size={18} />
             <span>
-              <b>安全交付</b>BT1 Token 仅短暂展示
+              <b>动态配置</b>Nacos 热更新与请求级不可变快照
             </span>
           </article>
           <article>
-            <ShieldCheck size={19} />
+            <ChartNoAxesCombined size={18} />
             <span>
-              <b>完整审计</b>高风险操作留痕
+              <b>全链路观测</b>Prometheus、CAT 与专用对话审计
             </span>
           </article>
         </div>
-        <span className="login-build">CONSOLE PREVIEW · USER MODULE</span>
+        <span className="login-build">
+          C++23 FIBER RUNTIME · NACOS CONFIG + DISCOVERY · HTTP/HTTPS PROVIDERS
+        </span>
       </section>
       <section className="login-action">
         <div className="login-card">
