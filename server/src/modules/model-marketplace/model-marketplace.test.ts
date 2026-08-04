@@ -53,7 +53,7 @@ function mutation(secret: string): ModelMutationInput {
         },
       },
     ],
-    allowUserGroupIds: [],
+    accessMode: 'ALL_AUTHENTICATED',
     loadBalance: {
       prefixMaxBytes: 2_048,
       maxPrimaryAttempts: 0,

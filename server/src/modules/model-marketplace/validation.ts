@@ -207,6 +207,9 @@ export function validateModelMutation(input: ModelMutationInput, creating: boole
   if (!input.providers.length) {
     fail('MODEL_PROVIDER_REQUIRED', '模型至少需要一个供应商接入', '/providers')
   }
+  if (input.accessMode !== 'ALL_AUTHENTICATED' && input.accessMode !== 'APPROVAL_REQUIRED') {
+    fail('MODEL_ACCESS_MODE_INVALID', '模型访问模式不合法', '/accessMode')
+  }
   input.providers.forEach(validateProvider)
   const fallbacks = input.providers.filter((provider) => provider.routeRole === 'FALLBACK')
   if (fallbacks.length > 1) {

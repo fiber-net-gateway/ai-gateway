@@ -129,18 +129,29 @@ export class MemoryMarketplaceStore implements MarketplaceStore {
 }
 
 function releaseResources(version: MarketplaceVersionRecord) {
+  const groupNames = [
+    ...new Set(version.models.flatMap((model) => model.allowUserGroups.map((group) => group.name))),
+  ].sort((left, right) => left.localeCompare(right, 'en'))
   const providerNames = [
     ...new Set(
       version.models.flatMap((model) => model.providers.map((provider) => provider.providerName)),
     ),
   ].sort((left, right) => left.localeCompare(right, 'en'))
   return [
+    ...groupNames.map((groupName, index) => ({
+      id: randomUUID(),
+      kind: 'USER_GROUP' as const,
+      group: 'LLM-SERVER' as const,
+      dataId: `ploto.ai-llm.user-group.${groupName}`,
+      dependencyOrder: index,
+      state: 'PENDING' as const,
+    })),
     ...providerNames.map((providerName, index) => ({
       id: randomUUID(),
       kind: 'PROVIDER' as const,
       group: 'LLM-SERVER' as const,
       dataId: `ploto.ai-llm.provider.${providerName}`,
-      dependencyOrder: index,
+      dependencyOrder: groupNames.length + index,
       state: 'PENDING' as const,
     })),
     {
@@ -148,7 +159,7 @@ function releaseResources(version: MarketplaceVersionRecord) {
       kind: 'MODELS' as const,
       group: 'LLM-SERVER' as const,
       dataId: 'ploto.ai-llm.models',
-      dependencyOrder: providerNames.length,
+      dependencyOrder: groupNames.length + providerNames.length,
       state: 'PENDING' as const,
     },
   ]

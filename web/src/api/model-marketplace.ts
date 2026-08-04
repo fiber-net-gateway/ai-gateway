@@ -5,6 +5,7 @@ export type PublicationState = 'NEVER' | 'PUBLISHED' | 'PARTIAL' | 'FAILED' | 'D
 export type ActivationState = 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'PARTIAL' | 'REJECTED'
 export type ProtocolCoverage = 'SUPPORTED' | 'UNSUPPORTED' | 'INVALID'
 export type ProviderProtocolType = 'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES'
+export type ModelAccessMode = 'ALL_AUTHENTICATED' | 'APPROVAL_REQUIRED'
 
 export interface MarketplaceModelSummary {
   id: string
@@ -17,6 +18,7 @@ export interface MarketplaceModelSummary {
   primaryProviderCount: number
   fallbackConfigured: boolean
   configuredTokenCount: number
+  accessMode: ModelAccessMode
   draftState: DraftState
   publicationState: PublicationState
   activationState: ActivationState
@@ -35,6 +37,8 @@ export interface AvailableModelSummary {
   description: string
   protocols: { openai: ProtocolCoverage; anthropic: ProtocolCoverage }
   accessible: boolean
+  accessMode: ModelAccessMode
+  requestable: boolean
   activationState: ActivationState
   publishedAt: string | null
 }
@@ -111,7 +115,7 @@ export interface ModelMutation {
       confirmUnauthenticated?: boolean
     }
   }>
-  allowUserGroupIds: string[]
+  accessMode: ModelAccessMode
   loadBalance: {
     prefixMaxBytes: number
     maxPrimaryAttempts: number
@@ -203,7 +207,7 @@ export const modelMarketplaceApi = {
         state: 'PENDING'
         resources: Array<{
           id: string
-          kind: 'PROVIDER' | 'MODELS'
+          kind: 'USER_GROUP' | 'PROVIDER' | 'MODELS'
           group: 'LLM-SERVER'
           dataId: string
           dependencyOrder: number

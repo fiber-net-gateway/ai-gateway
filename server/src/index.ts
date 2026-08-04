@@ -9,6 +9,8 @@ import { MySqlMarketplaceStore } from './modules/model-marketplace/mysql-store.j
 import { MySqlMarketplaceSecretService } from './modules/model-marketplace/secret-service.js'
 import { MemoryUserStore } from './modules/users/memory-store.js'
 import { MySqlUserStore } from './modules/users/mysql-store.js'
+import { MySqlModelAccessStore } from './modules/model-access/mysql-store.js'
+import { RnacosAccessGroupPublisher } from './modules/model-access/rnacos-publisher.js'
 
 const config = loadConfig()
 const pool = config.dataMode === 'mysql' ? createMySqlPool(config.mysql) : null
@@ -26,11 +28,15 @@ const marketplaceSecrets = pool
       config.security.encryptionKey,
     )
   : undefined
+const modelAccessStore = pool ? new MySqlModelAccessStore(pool) : undefined
+const accessGroupPublisher = pool ? new RnacosAccessGroupPublisher(config.rnacos) : undefined
 const app = buildApp({
   config,
   store,
   marketplaceStore,
   marketplaceSecrets,
+  modelAccessStore,
+  accessGroupPublisher,
   logger: true,
   closeInfrastructure: pool ? () => pool.end() : undefined,
 })

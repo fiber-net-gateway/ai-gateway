@@ -23,6 +23,8 @@ interface EditorState {
   description: string
   tags: string
   providers: ProviderDraft[]
+  accessMode: 'ALL_AUTHENTICATED' | 'APPROVAL_REQUIRED'
+  accessGroupName: string | null
   prefixMaxBytes: string
   maxPrimaryAttempts: string
   fallbackEnabled: boolean
@@ -41,6 +43,8 @@ function emptyEditor(): EditorState {
     description: '',
     tags: '',
     providers: [newProviderDraft()],
+    accessMode: 'ALL_AUTHENTICATED',
+    accessGroupName: null,
     prefixMaxBytes: '2048',
     maxPrimaryAttempts: '0',
     fallbackEnabled: true,
@@ -75,6 +79,8 @@ function editorFromDetail(detail: MarketplaceModelDetail): EditorState {
       authenticationMode: provider.tokens.length ? 'BEARER_TOKEN_POOL' : 'NO_CREDENTIALS',
       tokens: provider.tokens.map((token) => existingTokenRow(token.id, token.name)),
     })),
+    accessMode: detail.accessMode,
+    accessGroupName: detail.allowUserGroups[0]?.name ?? null,
     prefixMaxBytes: String(detail.prefixMaxBytes),
     maxPrimaryAttempts: String(detail.maxPrimaryAttempts),
     fallbackEnabled: detail.fallbackEnabled,
@@ -95,6 +101,11 @@ function localIssues(editor: EditorState): ValidationIssue[] {
     add('LOGICAL_MODEL_NAME_INVALID', '逻辑模型名只能使用安全 ASCII 字符', '/logicalModelName')
   if (editor.providers.length === 0)
     add('MODEL_PROVIDER_REQUIRED', '至少添加一个供应商', '/providers')
+  if (
+    editor.accessMode === 'APPROVAL_REQUIRED' &&
+    !editor.providers.some((provider) => provider.routeRole === 'PRIMARY')
+  )
+    add('ACCESS_GROUP_PRIMARY_PROVIDER_REQUIRED', '需要审批的模型必须配置主 Provider', '/providers')
   if (editor.providers.filter((provider) => provider.routeRole === 'FALLBACK').length > 1)
     add('MODEL_FALLBACK_DUPLICATE', '最多配置一个 Fallback', '/providers')
   editor.providers.forEach((provider, index) => {
@@ -181,7 +192,7 @@ function mutationFromEditor(editor: EditorState): ModelMutation {
         confirmUnauthenticated: provider.authenticationMode === 'NO_CREDENTIALS' ? true : undefined,
       },
     })),
-    allowUserGroupIds: [],
+    accessMode: editor.accessMode,
     loadBalance: {
       prefixMaxBytes: Number(editor.prefixMaxBytes),
       maxPrimaryAttempts: Number(editor.maxPrimaryAttempts),
@@ -663,13 +674,52 @@ export function ModelEditorPage({
                   </>
                 )}
               </div>
+              <fieldset className="access-mode-fieldset">
+                <legend>访问范围</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="access-mode"
+                    checked={editor.accessMode === 'ALL_AUTHENTICATED'}
+                    onChange={() => {
+                      if (
+                        editor.accessMode === 'APPROVAL_REQUIRED' &&
+                        !window.confirm(
+                          '切换为所有已认证用户会扩大访问范围。确认只修改 MySQL 草稿？',
+                        )
+                      )
+                        return
+                      setEditor({ ...editor, accessMode: 'ALL_AUTHENTICATED' })
+                    }}
+                  />
+                  <span>
+                    <b>所有已认证用户</b>
+                    <small>models 配置输出空 allow-user-groups；这是访问范围扩大。</small>
+                  </span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="access-mode"
+                    checked={editor.accessMode === 'APPROVAL_REQUIRED'}
+                    onChange={() => setEditor({ ...editor, accessMode: 'APPROVAL_REQUIRED' })}
+                  />
+                  <span>
+                    <b>需要管理员审批</b>
+                    <small>
+                      首次启用时由排序最靠前的主 Provider 托管申请授权组；授权仍发生在逻辑模型层。
+                    </small>
+                    {editor.accessGroupName && <code>{editor.accessGroupName}</code>}
+                  </span>
+                </label>
+              </fieldset>
               <div className="boundary-notice compact">
                 <ShieldAlert size={16} />
                 <div>
-                  <b>访问范围</b>
+                  <b>Provider 托管不等于 Provider 级 ACL</b>
                   <span>
-                    用户组模块尚未开放选择器，本次保存保持“所有已认证用户”；不能用控制台 ADMIN/USER
-                    角色替代模型用户组。
+                    获得模型权限后，请求仍可能命中该模型的任意主 Provider 或
+                    Fallback。保存只更新草稿。
                   </span>
                 </div>
               </div>

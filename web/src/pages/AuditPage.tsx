@@ -9,6 +9,12 @@ const eventLabels: Record<string, string> = {
   'user.updated': '更新用户',
   'token.issued': '签发 Token',
   'token.disabled': '停用 Token',
+  'model_access.request.created': '提交模型权限申请',
+  'model_access.request.cancelled': '取消模型权限申请',
+  'model_access.request.approved': '批准模型权限申请',
+  'model_access.request.rejected': '拒绝模型权限申请',
+  'model_access.group.publication_succeeded': '发布模型授权组',
+  'model_access.group.publication_failed': '模型授权组发布失败',
 }
 const dateTime = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric',

@@ -89,7 +89,9 @@ export function AvailableModelCard({
         <span>
           {model.accessible
             ? '使用个人 BT1 Token 和逻辑模型名发起请求。'
-            : '请联系环境管理员申请模型用户组。'}
+            : model.requestable
+              ? '打开详情填写用途说明并申请调用权限。'
+              : '当前模型没有可用的申请授权组。'}
         </span>
       </div>
       <footer>

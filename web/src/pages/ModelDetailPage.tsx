@@ -1,4 +1,4 @@
-import { ArrowLeft, Edit3, Radio, ShieldAlert, Trash2, UploadCloud } from 'lucide-react'
+import { ArrowLeft, Edit3, Radio, Send, ShieldAlert, Trash2, UploadCloud } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import {
@@ -7,6 +7,8 @@ import {
   type MarketplaceModelDetail,
   type ValidationIssue,
 } from '../api/model-marketplace'
+import { modelAccessApi, type ApplicantAccessRequest } from '../api/model-access'
+import { AccessRequestDialog } from '../components/model-access/AccessRequestDialog'
 import { ModelStateStrip } from '../components/model-marketplace/ModelStateStrip'
 import { ProtocolBadge } from '../components/model-marketplace/ProtocolBadge'
 import { ProtocolCoverageMatrix } from '../components/model-marketplace/ProtocolCoverageMatrix'
@@ -35,6 +37,8 @@ export function ModelDetailPage({
   const [etag, setEtag] = useState<string | null>(null)
   const [issues, setIssues] = useState<ValidationIssue[] | null>(null)
   const [busy, setBusy] = useState(false)
+  const [accessRequest, setAccessRequest] = useState<ApplicantAccessRequest | null>(null)
+  const [requestOpen, setRequestOpen] = useState(false)
 
   const load = () => {
     const task = admin
@@ -50,11 +54,30 @@ export function ModelDetailPage({
 
   useEffect(() => {
     void load()
+    if (!admin) {
+      void modelAccessApi
+        .mine({ environmentId })
+        .then((result) =>
+          setAccessRequest(result.items.find((request) => request.modelId === modelId) ?? null),
+        )
+        .catch((error) => onError(error instanceof Error ? error.message : '申请状态加载失败'))
+    }
   }, [admin, environmentId, modelId])
 
   if (!model) return <div className="page-shell marketplace-loading">正在组装模型详情…</div>
   if (!admin) {
     const available = model as AvailableModelSummary
+    const accessTitle = available.accessible
+      ? '当前账号可调用'
+      : accessRequest?.status === 'PENDING'
+        ? '权限申请待审批'
+        : accessRequest?.status === 'APPROVED'
+          ? accessRequest.publicationState === 'PUBLISHED'
+            ? '授权组已发布，实例生效未知'
+            : accessRequest.publicationState === 'FAILED'
+              ? '审批已通过，授权组发布失败'
+              : '审批已通过，等待授权组发布'
+          : '当前账号无访问权限'
     return (
       <div className="page-shell model-detail-page">
         <button className="back-link" type="button" onClick={onBack}>
@@ -72,12 +95,48 @@ export function ModelDetailPage({
         <div
           className={`access-callout detail-access ${available.accessible ? 'allowed' : 'denied'}`}
         >
-          <b>{available.accessible ? '当前账号可调用' : '当前账号无访问权限'}</b>
+          <b>{accessTitle}</b>
           <span>
             {available.accessible
               ? `请求体使用 model: "${available.logicalModelName}"，认证使用你的 BT1 Token。`
-              : '联系环境管理员申请模型用户组；目录不会展示其他组成员。'}
+              : accessRequest?.status === 'PENDING'
+                ? `申请已于 ${new Date(accessRequest.createdAt).toLocaleString('zh-CN')} 提交。`
+                : accessRequest?.status === 'APPROVED'
+                  ? '审批、rnacos 发布和 ai-server 生效是三个独立状态；实例证据齐全前不能宣称已生效。'
+                  : available.requestable
+                    ? '填写用途说明后提交申请；目录不会展示其他组成员。'
+                    : '当前模型没有可用的申请授权组，请联系环境管理员。'}
           </span>
+          {!available.accessible &&
+            available.requestable &&
+            (!accessRequest || ['REJECTED', 'CANCELLED'].includes(accessRequest.status)) && (
+              <button className="primary-button" type="button" onClick={() => setRequestOpen(true)}>
+                <Send size={14} /> 申请调用权限
+              </button>
+            )}
+          {accessRequest?.status === 'PENDING' && (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                if (!window.confirm('取消这条待审批申请？历史记录会保留。')) return
+                setBusy(true)
+                try {
+                  setAccessRequest(
+                    await modelAccessApi.cancel(accessRequest.id, accessRequest.revision),
+                  )
+                  onNotice('权限申请已取消，授权组没有变化。')
+                } catch (error) {
+                  onError(error instanceof Error ? error.message : '取消申请失败')
+                } finally {
+                  setBusy(false)
+                }
+              }}
+            >
+              取消申请
+            </button>
+          )}
         </div>
         <section className="data-card model-help-card">
           <div className="card-heading">
@@ -90,6 +149,17 @@ export function ModelDetailPage({
             <pre>{`curl -H "Authorization: Bearer <YOUR_BT1_TOKEN>" \\\n+  -H "Content-Type: application/json" \\\n+  -d '{"model":"${available.logicalModelName}","messages":[...]}' \\\n+  https://<ai-server>/v1/chat/completions`}</pre>
           </div>
         </section>
+        <AccessRequestDialog
+          open={requestOpen}
+          environmentId={environmentId}
+          model={available}
+          onClose={() => setRequestOpen(false)}
+          onCreated={(request) => {
+            setAccessRequest(request)
+            onNotice('权限申请已提交，正在等待管理员审批。')
+          }}
+          onError={onError}
+        />
       </div>
     )
   }
@@ -201,6 +271,18 @@ export function ModelDetailPage({
                 <dt>重试状态</dt>
                 <dd>{detail.retryableStatuses.join(', ')}</dd>
               </div>
+              <div>
+                <dt>访问模式</dt>
+                <dd>
+                  {detail.accessMode === 'APPROVAL_REQUIRED' ? '需要管理员审批' : '所有已认证用户'}
+                </dd>
+              </div>
+              {detail.allowUserGroups[0] && (
+                <div>
+                  <dt>申请授权组</dt>
+                  <dd>{detail.allowUserGroups[0].name}</dd>
+                </div>
+              )}
             </dl>
           </div>
         </section>

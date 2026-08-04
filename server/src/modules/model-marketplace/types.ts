@@ -7,6 +7,7 @@ export type DraftState = 'NONE' | 'MODIFIED' | 'INVALID' | 'CONFLICTED'
 export type PublicationState = 'NEVER' | 'PUBLISHED' | 'PARTIAL' | 'FAILED' | 'DRIFTED'
 export type ActivationState = 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'PARTIAL' | 'REJECTED'
 export type ProtocolCoverage = 'SUPPORTED' | 'UNSUPPORTED' | 'INVALID'
+export type ModelAccessMode = 'ALL_AUTHENTICATED' | 'APPROVAL_REQUIRED'
 
 export interface MarketplaceTokenRecord {
   id: string
@@ -86,7 +87,7 @@ export interface MarketplaceReleaseRecord {
 
 export interface MarketplaceReleaseResourceRecord {
   id: string
-  kind: 'PROVIDER' | 'MODELS'
+  kind: 'USER_GROUP' | 'PROVIDER' | 'MODELS'
   group: 'LLM-SERVER'
   dataId: string
   dependencyOrder: number
@@ -186,7 +187,7 @@ export interface ModelMutationInput {
   description?: string
   tags?: string[]
   providers: ProviderMutationInput[]
-  allowUserGroupIds?: string[]
+  accessMode: ModelAccessMode
   loadBalance: {
     prefixMaxBytes: number
     maxPrimaryAttempts: number
@@ -237,6 +238,7 @@ export interface AdminModelView {
   primaryProviderCount: number
   fallbackConfigured: boolean
   configuredTokenCount: number
+  accessMode: ModelAccessMode
   draftState: DraftState
   publicationState: PublicationState
   activationState: ActivationState
@@ -255,6 +257,8 @@ export interface AvailableModelView {
   description: string
   protocols: { openai: ProtocolCoverage; anthropic: ProtocolCoverage }
   accessible: boolean
+  accessMode: ModelAccessMode
+  requestable: boolean
   activationState: ActivationState
   publishedAt: string | null
 }

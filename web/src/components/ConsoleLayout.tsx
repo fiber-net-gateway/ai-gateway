@@ -1,6 +1,8 @@
 import {
   BookOpen,
   Boxes,
+  ClipboardCheck,
+  ClipboardList,
   ChevronDown,
   FileClock,
   KeyRound,
@@ -14,7 +16,7 @@ import { useState, type ReactNode } from 'react'
 
 import type { EnvironmentAccess, User } from '../api/client'
 
-export type Section = 'models' | 'tokens' | 'users' | 'audit'
+export type Section = 'models' | 'tokens' | 'my-access' | 'access-requests' | 'users' | 'audit'
 
 interface LayoutProps {
   user: User
@@ -87,9 +89,23 @@ export function ConsoleLayout({
           >
             <KeyRound size={18} /> Token 管理
           </button>
+          <button
+            className={section === 'my-access' ? 'active' : ''}
+            type="button"
+            onClick={() => navigate('my-access')}
+          >
+            <ClipboardList size={18} /> 我的权限申请
+          </button>
           {user.systemRole === 'ADMIN' && (
             <>
               <span className="nav-heading">平台管理</span>
+              <button
+                className={section === 'access-requests' ? 'active' : ''}
+                type="button"
+                onClick={() => navigate('access-requests')}
+              >
+                <ClipboardCheck size={18} /> 权限审批
+              </button>
               <button
                 className={section === 'users' ? 'active' : ''}
                 type="button"

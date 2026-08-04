@@ -510,7 +510,7 @@ POST   /api/environments/:env/drafts/:draftId/models/:modelId/validate
       }
     }
   ],
-  "allowUserGroupIds": [],
+  "accessMode": "ALL_AUTHENTICATED",
   "loadBalance": {
     "prefixMaxBytes": 2048,
     "maxPrimaryAttempts": 0,

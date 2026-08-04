@@ -12,17 +12,26 @@ import { AlertCircle, X } from 'lucide-react'
 import { api, ApiError, type EnvironmentAccess, type IssuedToken, type User } from './api/client'
 import { ConsoleLayout, type Section } from './components/ConsoleLayout'
 import { AuditPage } from './pages/AuditPage'
+import { AccessRequestsPage } from './pages/AccessRequestsPage'
 import { LoginPage } from './pages/LoginPage'
 import { ModelDetailPage } from './pages/ModelDetailPage'
 import { ModelEditorPage } from './pages/ModelEditorPage'
 import { ModelMarketplacePage } from './pages/ModelMarketplacePage'
+import { MyAccessRequestsPage } from './pages/MyAccessRequestsPage'
 import { IssuedTokenModal, TokensPage } from './pages/TokensPage'
 import { UsersPage } from './pages/UsersPage'
 import './styles.css'
 
 function initialSection(): Section {
   const value = window.location.hash.replace('#/', '')
-  if (value === 'users' || value === 'audit' || value === 'tokens') return value
+  if (
+    value === 'users' ||
+    value === 'audit' ||
+    value === 'tokens' ||
+    value === 'my-access' ||
+    value === 'access-requests'
+  )
+    return value
   return 'models'
 }
 
@@ -138,7 +147,11 @@ function App() {
   }
 
   const visibleSection =
-    user.systemRole === 'ADMIN' ? section : section === 'models' ? 'models' : 'tokens'
+    user.systemRole === 'ADMIN'
+      ? section
+      : section === 'models' || section === 'tokens' || section === 'my-access'
+        ? section
+        : 'models'
   const environmentId = environments[0]?.environment.id
   return (
     <ConsoleLayout
@@ -153,6 +166,14 @@ function App() {
           environments={environments}
           onEnvironmentsChange={setEnvironments}
           onError={setNotice}
+        />
+      )}
+      {visibleSection === 'my-access' && environmentId && (
+        <MyAccessRequestsPage
+          environmentId={environmentId}
+          onOpenModel={(modelId) => navigateModel(modelId)}
+          onError={setNotice}
+          onNotice={setNotice}
         />
       )}
       {visibleSection === 'models' &&
@@ -201,6 +222,13 @@ function App() {
           currentUser={user}
           onError={setNotice}
           onIssued={setIssued}
+        />
+      )}
+      {visibleSection === 'access-requests' && environmentId && (
+        <AccessRequestsPage
+          environmentId={environmentId}
+          onError={setNotice}
+          onNotice={setNotice}
         />
       )}
       {visibleSection === 'audit' && <AuditPage onError={setNotice} />}

@@ -2,6 +2,10 @@ import Fastify, { type FastifyInstance } from 'fastify'
 
 import { type AppConfig, loadConfig } from './config/env.js'
 import { OidcService } from './modules/auth/oidc-service.js'
+import { MemoryModelAccessStore } from './modules/model-access/memory-store.js'
+import { registerModelAccessRoutes } from './modules/model-access/routes.js'
+import { ModelAccessService } from './modules/model-access/service.js'
+import type { AccessGroupPublisher, ModelAccessStore } from './modules/model-access/types.js'
 import { MemoryMarketplaceStore } from './modules/model-marketplace/memory-store.js'
 import { registerModelMarketplaceRoutes } from './modules/model-marketplace/routes.js'
 import { MemoryMarketplaceSecretService } from './modules/model-marketplace/secret-service.js'
@@ -28,6 +32,8 @@ export interface BuildAppOptions {
   store?: UserStore
   marketplaceStore?: MarketplaceStore
   marketplaceSecrets?: MarketplaceSecretService
+  modelAccessStore?: ModelAccessStore
+  accessGroupPublisher?: AccessGroupPublisher | null
   clock?: Clock
   random?: RandomSource
   closeInfrastructure?: () => Promise<void>
@@ -79,6 +85,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const marketplaceSecrets =
     options.marketplaceSecrets ??
     new MemoryMarketplaceSecretService(cipher, config.security.encryptionKey)
+  const modelAccessStore = options.modelAccessStore ?? new MemoryModelAccessStore()
   const app = Fastify({ logger: options.logger ?? false })
 
   const users = new UserService(store, clock)
@@ -88,6 +95,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     config.auth.mode === 'oidc'
       ? new OidcService(config.auth, config.publicUrl, cipher, clock)
       : null
+  const modelAccess = new ModelAccessService(
+    modelAccessStore,
+    marketplaceStore,
+    store,
+    clock,
+    config.security.encryptionKey,
+    options.accessGroupPublisher ?? null,
+  )
   const marketplace = new ModelMarketplaceService(
     marketplaceStore,
     marketplaceSecrets,
@@ -95,6 +110,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     clock,
     random,
     config.security.encryptionKey,
+    modelAccess,
   )
 
   app.addHook('onReady', async () => {
@@ -130,6 +146,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   registerUserRoutes(app, { config, store, users, sessions, tokens, oidc })
   registerModelMarketplaceRoutes(app, {
     marketplace,
+    sessions,
+    users,
+    userStore: store,
+  })
+  registerModelAccessRoutes(app, {
+    access: modelAccess,
     sessions,
     users,
     userStore: store,

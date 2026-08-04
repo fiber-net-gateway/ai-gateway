@@ -4,6 +4,7 @@ import type { Clock, RandomSource } from '../users/crypto.js'
 import { DomainError } from '../users/errors.js'
 import type { AuthenticatedActor } from '../users/services.js'
 import type { UserStore } from '../users/types.js'
+import type { ModelAccessDirectory } from '../model-access/types.js'
 import { generateProviderName } from './provider-name.js'
 import type {
   AdminModelDetailView,
@@ -109,6 +110,7 @@ export class ModelMarketplaceService {
     private readonly clock: Clock,
     private readonly random: RandomSource,
     private readonly cursorKey: Buffer,
+    private readonly accessDirectory: ModelAccessDirectory,
   ) {}
 
   parseRevision(etag: string | undefined): number {
@@ -197,15 +199,38 @@ export class ModelMarketplaceService {
       const cursor = this.decodeCursor(query.cursor)
       models = models.filter((model) => beforeCursor(model, cursor))
     }
+    const groupIds = [
+      ...new Set(models.flatMap((model) => model.allowUserGroups.map((group) => group.id))),
+    ]
+    const [managedGroups, publishedMembershipGroupIds] = await Promise.all([
+      this.accessDirectory.getGroupsByIds(groupIds),
+      this.accessDirectory.getPublishedMembershipGroupIds({ groupIds, userId: actorId }),
+    ])
+    const managedGroupById = new Map(managedGroups.map((group) => [group.id, group]))
+    const publishedMemberships = new Set(publishedMembershipGroupIds)
     const available = models.map((model) => {
       const coverage = protocolCoverage(model)
+      const accessMode = model.allowUserGroups.length
+        ? ('APPROVAL_REQUIRED' as const)
+        : ('ALL_AUTHENTICATED' as const)
+      const managedGroup =
+        model.allowUserGroups.length === 1
+          ? managedGroupById.get(model.allowUserGroups[0].id)
+          : undefined
+      const requestable = Boolean(
+        managedGroup && model.providers.some((provider) => provider.id === managedGroup.providerId),
+      )
       return {
         id: model.id,
         displayName: model.displayName,
         logicalModelName: model.logicalModelName,
         description: model.description,
         protocols: coverage,
-        accessible: model.allowUserGroups.length === 0,
+        accessible:
+          accessMode === 'ALL_AUTHENTICATED' ||
+          model.allowUserGroups.some((group) => publishedMemberships.has(group.id)),
+        accessMode,
+        requestable,
         activationState: environment.activationState,
         publishedAt: environment.latestRelease?.createdAt ?? null,
       } satisfies AvailableModelView
@@ -840,9 +865,15 @@ export class ModelMarketplaceService {
         resourceCount:
           new Set(
             result.frozenVersion.models.flatMap((model) =>
+              model.allowUserGroups.map((group) => group.id),
+            ),
+          ).size +
+          new Set(
+            result.frozenVersion.models.flatMap((model) =>
               model.providers.map((provider) => provider.id),
             ),
-          ).size + 1,
+          ).size +
+          1,
       },
     )
     return {
@@ -874,6 +905,7 @@ export class ModelMarketplaceService {
         (sum, provider) => sum + provider.tokens.length,
         0,
       ),
+      accessMode: model.allowUserGroups.length ? 'APPROVAL_REQUIRED' : 'ALL_AUTHENTICATED',
       draftState: issues.some((issue) => issue.severity === 'ERROR') ? 'INVALID' : 'MODIFIED',
       publicationState: environment.publicationState,
       activationState: environment.activationState,
@@ -923,18 +955,11 @@ export class ModelMarketplaceService {
     environment: MarketplaceEnvironmentRecord
     previous: MarketplaceModelRecord | null
   }): Promise<MarketplaceModelRecord> {
-    if (input.input.allowUserGroupIds?.length) {
-      throw new DomainError(
-        'USER_GROUP_MODULE_UNAVAILABLE',
-        503,
-        '用户组模块尚未接入，不能把未解析的用户组 ID 写入 ai-server 配置',
-        { field: '/allowUserGroupIds' },
-      )
-    }
     const providers: MarketplaceProviderRecord[] = []
     for (const [index, provider] of input.input.providers.entries()) {
       providers.push(await this.buildProvider({ ...input, provider, index }))
     }
+    const allowUserGroups = await this.resolveAccessGroups({ ...input, providers })
     return {
       id: input.modelId,
       logicalModelName: input.input.logicalModelName,
@@ -948,7 +973,7 @@ export class ModelMarketplaceService {
         (left, right) => left - right,
       ),
       rateLimit: copy(input.input.rateLimit),
-      allowUserGroups: (input.input.allowUserGroupIds ?? []).map((id) => ({ id, name: id })),
+      allowUserGroups,
       providers,
       createdBy: input.previous?.createdBy ?? input.actorId,
       createdAt: input.previous?.createdAt ?? input.now,
@@ -983,7 +1008,7 @@ export class ModelMarketplaceService {
             }
           : { mode: 'NO_CREDENTIALS', tokens: [], confirmUnauthenticated: true },
       })),
-      allowUserGroupIds: model.allowUserGroups.map((group) => group.id),
+      accessMode: model.allowUserGroups.length ? 'APPROVAL_REQUIRED' : 'ALL_AUTHENTICATED',
       loadBalance: {
         prefixMaxBytes: model.prefixMaxBytes,
         maxPrimaryAttempts: model.maxPrimaryAttempts,
@@ -992,6 +1017,60 @@ export class ModelMarketplaceService {
       },
       rateLimit: copy(model.rateLimit),
     }
+  }
+
+  private async resolveAccessGroups(input: {
+    input: ModelMutationInput
+    modelId: string
+    actorId: string
+    now: string
+    environment: MarketplaceEnvironmentRecord
+    previous: MarketplaceModelRecord | null
+    providers: MarketplaceProviderRecord[]
+  }): Promise<MarketplaceModelRecord['allowUserGroups']> {
+    if (input.input.accessMode === 'ALL_AUTHENTICATED') return []
+    if (input.previous?.allowUserGroups.length) {
+      if (input.previous.allowUserGroups.length !== 1) {
+        throw new DomainError(
+          'MODEL_ACCESS_GROUP_AMBIGUOUS',
+          409,
+          '模型存在多个访问组，不能自动启用权限申请',
+        )
+      }
+      const previousGroup = input.previous.allowUserGroups[0]
+      const group = (await this.accessDirectory.getGroupsByIds([previousGroup.id]))[0]
+      if (!group || !input.providers.some((provider) => provider.id === group.providerId)) {
+        throw new DomainError(
+          'ACCESS_GROUP_PROVIDER_REQUIRED',
+          409,
+          '托管申请授权组的 Provider 必须继续绑定该模型',
+          { field: '/providers' },
+        )
+      }
+      return [{ id: group.id, name: group.groupName }]
+    }
+    const primary = [...input.providers]
+      .filter((provider) => provider.routeRole === 'PRIMARY')
+      .sort(
+        (left, right) =>
+          left.sortOrder - right.sortOrder ||
+          left.providerName.localeCompare(right.providerName, 'en'),
+      )[0]
+    if (!primary) {
+      throw new DomainError(
+        'ACCESS_GROUP_PRIMARY_PROVIDER_REQUIRED',
+        422,
+        '需要审批的模型必须配置主 Provider',
+        { field: '/providers' },
+      )
+    }
+    const group = await this.accessDirectory.ensureGroupForProvider({
+      environmentId: input.environment.draft.environmentId,
+      providerId: primary.id,
+      providerName: primary.providerName,
+      actorId: input.actorId,
+    })
+    return [{ id: group.id, name: group.groupName }]
   }
 
   private async buildProvider(input: {

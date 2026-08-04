@@ -91,7 +91,14 @@ export const providerSchema = {
 export const modelMutationSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['displayName', 'logicalModelName', 'providers', 'loadBalance', 'rateLimit'],
+  required: [
+    'displayName',
+    'logicalModelName',
+    'providers',
+    'accessMode',
+    'loadBalance',
+    'rateLimit',
+  ],
   properties: {
     displayName: { type: 'string', minLength: 1, maxLength: 100 },
     logicalModelName: { type: 'string', minLength: 1, maxLength: 128 },
@@ -102,10 +109,9 @@ export const modelMutationSchema = {
       items: { type: 'string', minLength: 1, maxLength: 32 },
     },
     providers: { type: 'array', minItems: 1, maxItems: 100, items: providerSchema },
-    allowUserGroupIds: {
-      type: 'array',
-      maxItems: 100,
-      items: { type: 'string', format: 'uuid' },
+    accessMode: {
+      type: 'string',
+      enum: ['ALL_AUTHENTICATED', 'APPROVAL_REQUIRED'],
     },
     loadBalance: {
       type: 'object',

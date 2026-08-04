@@ -161,7 +161,7 @@ export function loadConfig(): AppConfig {
       user: readString('MYSQL_USER', 'ai_server_console'),
       password: process.env.MYSQL_PASSWORD ?? '',
       database: readString('MYSQL_DATABASE', 'ai_server_console'),
-      connectionLimit: readInteger('MYSQL_CONNECTION_LIMIT', 10, 1, 100),
+      connectionLimit: readInteger('MYSQL_CONNECTION_LIMIT', 10, 2, 100),
     },
     rnacos: {
       baseUrl: readHttpUrl('RNACOS_BASE_URL', 'http://127.0.0.1:8848'),
