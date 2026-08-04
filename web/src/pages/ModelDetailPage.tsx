@@ -1,4 +1,4 @@
-import { ArrowLeft, Edit3, Radio, Send, ShieldAlert, Trash2, UploadCloud } from 'lucide-react'
+import { ArrowLeft, CloudUpload, Edit3, Radio, Send, ShieldAlert, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import {
@@ -20,6 +20,7 @@ export function ModelDetailPage({
   admin,
   onBack,
   onEdit,
+  onOpenReleases,
   onArchived,
   onError,
   onNotice,
@@ -29,6 +30,7 @@ export function ModelDetailPage({
   admin: boolean
   onBack: () => void
   onEdit: () => void
+  onOpenReleases: () => void
   onArchived: () => void
   onError: (message: string) => void
   onNotice: (message: string) => void
@@ -170,23 +172,10 @@ export function ModelDetailPage({
     try {
       const response = await modelMarketplaceApi.validate(environmentId, detail.draft.versionId)
       setIssues(response.data.issues)
-      onNotice(response.data.valid ? '静态校验通过' : '草稿存在阻塞错误')
+      if (response.data.valid) onNotice('静态校验通过')
+      else onError('草稿存在阻塞错误')
     } catch (error) {
       onError(error instanceof Error ? error.message : '校验失败')
-    } finally {
-      setBusy(false)
-    }
-  }
-  const submit = async () => {
-    if (!etag) return
-    setBusy(true)
-    try {
-      const response = await modelMarketplaceApi.submit(environmentId, detail.draft.versionId, etag)
-      setEtag(response.etag)
-      onNotice(response.data.message)
-      await load()
-    } catch (error) {
-      onError(error instanceof Error ? error.message : '提交 release 失败')
     } finally {
       setBusy(false)
     }
@@ -219,13 +208,8 @@ export function ModelDetailPage({
           <button className="secondary-button" type="button" onClick={onEdit}>
             <Edit3 size={15} /> 编辑草稿
           </button>
-          <button
-            className="primary-button"
-            type="button"
-            disabled={busy}
-            onClick={() => void submit()}
-          >
-            <UploadCloud size={15} /> 创建待发布 release
+          <button className="primary-button" type="button" onClick={onOpenReleases}>
+            <CloudUpload size={15} /> 前往发布中心
           </button>
         </div>
       </header>

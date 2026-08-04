@@ -8,6 +8,8 @@ export type PublicationState = 'NEVER' | 'PUBLISHED' | 'PARTIAL' | 'FAILED' | 'D
 export type ActivationState = 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'PARTIAL' | 'REJECTED'
 export type ProtocolCoverage = 'SUPPORTED' | 'UNSUPPORTED' | 'INVALID'
 export type ModelAccessMode = 'ALL_AUTHENTICATED' | 'APPROVAL_REQUIRED'
+export type ReleaseWorkflowState = 'PENDING' | 'PUBLISHING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+export type ReleaseResourceState = 'PENDING' | 'WRITING' | 'PUBLISHED' | 'FAILED' | 'SKIPPED'
 
 export interface MarketplaceTokenRecord {
   id: string
@@ -79,24 +81,41 @@ export interface MarketplaceReleaseRecord {
   environmentId: string
   versionId: string
   releaseNumber: number
-  state: 'PENDING'
+  state: ReleaseWorkflowState
+  publicationState: PublicationState
+  activationState: ActivationState
+  revision: number
   createdBy: string
   createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  updatedAt: string
   resources: MarketplaceReleaseResourceRecord[]
 }
 
 export interface MarketplaceReleaseResourceRecord {
   id: string
-  kind: 'USER_GROUP' | 'PROVIDER' | 'MODELS'
+  kind: 'PROVIDER' | 'MODELS'
   group: 'LLM-SERVER'
   dataId: string
   dependencyOrder: number
-  state: 'PENDING'
+  state: ReleaseResourceState
+  oldSafeDigest: string | null
+  newSafeDigest: string | null
+  oldMd5: string | null
+  newMd5: string | null
+  contentBytes: number | null
+  errorCode: string | null
+  safeErrorMessage: string | null
+  retryCount: number
+  startedAt: string | null
+  finishedAt: string | null
 }
 
 export interface MarketplaceEnvironmentRecord {
   draft: MarketplaceVersionRecord
   publishedVersion: MarketplaceVersionRecord | null
+  publishedRelease: MarketplaceReleaseRecord | null
   latestRelease: MarketplaceReleaseRecord | null
   publicationState: PublicationState
   activationState: ActivationState
@@ -126,6 +145,32 @@ export interface MarketplaceStore {
     frozenVersion: MarketplaceVersionRecord
     release: MarketplaceReleaseRecord
   }>
+  getVersion(versionId: string): Promise<MarketplaceVersionRecord>
+  getRelease(environmentId: string, releaseId: string): Promise<MarketplaceReleaseRecord | null>
+  listReleases(environmentId: string, limit: number): Promise<MarketplaceReleaseRecord[]>
+  listPublishingReleases(): Promise<MarketplaceReleaseRecord[]>
+  acquireReleaseLock(environmentId: string): Promise<() => Promise<void>>
+  startRelease(input: { releaseId: string; now: string }): Promise<MarketplaceReleaseRecord>
+  updateReleaseResource(input: {
+    releaseId: string
+    resourceId: string
+    state: ReleaseResourceState
+    oldSafeDigest?: string | null
+    newSafeDigest?: string | null
+    oldMd5?: string | null
+    newMd5?: string | null
+    contentBytes?: number | null
+    errorCode?: string | null
+    safeErrorMessage?: string | null
+    incrementRetry?: boolean
+    now: string
+  }): Promise<void>
+  finishRelease(input: {
+    releaseId: string
+    workflowState: 'COMPLETED' | 'FAILED'
+    publicationState: PublicationState
+    now: string
+  }): Promise<MarketplaceReleaseRecord>
 }
 
 export interface SecretMetadata {

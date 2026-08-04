@@ -4,6 +4,7 @@ import {
   ClipboardCheck,
   ClipboardList,
   ChevronDown,
+  CloudUpload,
   FileClock,
   KeyRound,
   LogOut,
@@ -16,7 +17,8 @@ import { useState, type ReactNode } from 'react'
 
 import type { EnvironmentAccess, User } from '../api/client'
 
-export type Section = 'models' | 'tokens' | 'my-access' | 'access-requests' | 'users' | 'audit'
+export type Section =
+  'models' | 'releases' | 'tokens' | 'my-access' | 'access-requests' | 'users' | 'audit'
 
 interface LayoutProps {
   user: User
@@ -81,6 +83,15 @@ export function ConsoleLayout({
           >
             <Boxes size={18} /> 模型广场
           </button>
+          {user.systemRole === 'ADMIN' && (
+            <button
+              className={section === 'releases' ? 'active' : ''}
+              type="button"
+              onClick={() => navigate('releases')}
+            >
+              <CloudUpload size={18} /> 发布中心
+            </button>
+          )}
           <span className="nav-heading">个人工作台</span>
           <button
             className={section === 'tokens' ? 'active' : ''}

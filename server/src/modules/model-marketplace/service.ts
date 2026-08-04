@@ -5,7 +5,13 @@ import { DomainError } from '../users/errors.js'
 import type { AuthenticatedActor } from '../users/services.js'
 import type { UserStore } from '../users/types.js'
 import type { ModelAccessDirectory } from '../model-access/types.js'
+import {
+  RnacosConfigError,
+  type MarketplaceConfigPublisher,
+  type RnacosConfigRead,
+} from '../rnacos/config-client.js'
 import { generateProviderName } from './provider-name.js'
+import { renderModelsResource, renderProviderResource } from './renderer.js'
 import type {
   AdminModelDetailView,
   AdminModelView,
@@ -13,11 +19,14 @@ import type {
   MarketplaceEnvironmentRecord,
   MarketplaceModelRecord,
   MarketplaceProviderRecord,
+  MarketplaceReleaseRecord,
+  MarketplaceReleaseResourceRecord,
   MarketplaceSecretService,
   MarketplaceStore,
   ModelMutationInput,
   ProviderAdminView,
   ProviderMutationInput,
+  RenderedResource,
   TokenMutationInput,
   ValidationIssue,
 } from './types.js'
@@ -102,6 +111,7 @@ export class ModelMarketplaceService {
   private readonly idempotency = new Map<string, IdempotencyResult>()
   private readonly tokenIdempotency = new Map<string, TokenIdempotencyResult>()
   private readonly providerIdempotency = new Map<string, ProviderIdempotencyResult>()
+  private readonly releaseJobs = new Map<string, Promise<void>>()
 
   constructor(
     private readonly store: MarketplaceStore,
@@ -111,6 +121,7 @@ export class ModelMarketplaceService {
     private readonly random: RandomSource,
     private readonly cursorKey: Buffer,
     private readonly accessDirectory: ModelAccessDirectory,
+    private readonly publisher: MarketplaceConfigPublisher | null,
   ) {}
 
   parseRevision(etag: string | undefined): number {
@@ -231,8 +242,8 @@ export class ModelMarketplaceService {
           model.allowUserGroups.some((group) => publishedMemberships.has(group.id)),
         accessMode,
         requestable,
-        activationState: environment.activationState,
-        publishedAt: environment.latestRelease?.createdAt ?? null,
+        activationState: environment.publishedRelease?.activationState ?? 'UNKNOWN',
+        publishedAt: environment.publishedRelease?.finishedAt ?? null,
       } satisfies AvailableModelView
     })
     const filtered = available
@@ -865,15 +876,9 @@ export class ModelMarketplaceService {
         resourceCount:
           new Set(
             result.frozenVersion.models.flatMap((model) =>
-              model.allowUserGroups.map((group) => group.id),
-            ),
-          ).size +
-          new Set(
-            result.frozenVersion.models.flatMap((model) =>
               model.providers.map((provider) => provider.id),
             ),
-          ).size +
-          1,
+          ).size + 1,
       },
     )
     return {
@@ -881,7 +886,488 @@ export class ModelMarketplaceService {
       draftRevision: result.draft.revision,
       publicationState: 'NEVER' as const,
       activationState: 'UNKNOWN' as const,
-      message: '冻结版本和待发布 release 已创建；rnacos 写入与实例生效仍需发布编排器提供证据',
+      message: '冻结版本和待发布 Release 已创建，请前往发布中心执行 rnacos 发布',
+    }
+  }
+
+  async listReleases(environmentId: string, actorId: string) {
+    await this.ensureEnvironment(environmentId, actorId)
+    return this.store.listReleases(environmentId, 50)
+  }
+
+  async getRelease(environmentId: string, actorId: string, releaseId: string) {
+    await this.ensureEnvironment(environmentId, actorId)
+    const release = await this.store.getRelease(environmentId, releaseId)
+    if (!release) throw new DomainError('RELEASE_NOT_FOUND', 404, 'Release 不存在')
+    return this.releaseView(release)
+  }
+
+  async executeRelease(input: {
+    environmentId: string
+    releaseId: string
+    actor: AuthenticatedActor
+    correlationId: string
+  }) {
+    this.assertPublisherTarget(input.environmentId)
+    const release = await this.store.getRelease(input.environmentId, input.releaseId)
+    if (!release) throw new DomainError('RELEASE_NOT_FOUND', 404, 'Release 不存在')
+    if (release.state !== 'PENDING' && release.state !== 'FAILED') {
+      throw new DomainError('RELEASE_EXECUTION_NOT_ALLOWED', 409, '当前 Release 状态不能执行')
+    }
+    const started = await this.store.startRelease({
+      releaseId: release.id,
+      now: this.clock.now().toISOString(),
+    })
+    await this.audit(
+      input.actor,
+      input.correlationId,
+      release.state === 'FAILED' ? 'marketplace.release.retried' : 'marketplace.release.started',
+      release.id,
+      input.environmentId,
+      { releaseNumber: release.releaseNumber, revision: started.revision },
+    )
+    this.scheduleRelease(started, input.actor, input.correlationId)
+    return this.releaseView(started)
+  }
+
+  async resumePublishingReleases(): Promise<void> {
+    if (!this.publisher) return
+    for (const release of await this.store.listPublishingReleases()) {
+      if (this.publisher.target().environmentId !== release.environmentId) continue
+      this.scheduleRelease(release, null, `release-recovery:${release.id}`)
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    await Promise.allSettled(this.releaseJobs.values())
+  }
+
+  private assertPublisherTarget(environmentId: string): void {
+    if (!this.publisher) {
+      throw new DomainError('RNACOS_PUBLISHER_UNAVAILABLE', 503, '当前进程未配置 rnacos 发布能力')
+    }
+    if (this.publisher.target().environmentId !== environmentId) {
+      throw new DomainError(
+        'RNACOS_ENVIRONMENT_UNBOUND',
+        409,
+        '当前环境未绑定到本进程的 rnacos 目标',
+      )
+    }
+  }
+
+  private scheduleRelease(
+    release: MarketplaceReleaseRecord,
+    actor: AuthenticatedActor | null,
+    correlationId: string,
+  ): void {
+    if (this.releaseJobs.has(release.id)) return
+    const job = this.runRelease(release, actor, correlationId)
+      .catch(() => undefined)
+      .finally(() => {
+        this.releaseJobs.delete(release.id)
+      })
+    this.releaseJobs.set(release.id, job)
+  }
+
+  private async runRelease(
+    scheduled: MarketplaceReleaseRecord,
+    actor: AuthenticatedActor | null,
+    correlationId: string,
+  ): Promise<void> {
+    let unlock: (() => Promise<void>) | null = null
+    try {
+      unlock = await this.store.acquireReleaseLock(scheduled.environmentId)
+      const release = await this.store.getRelease(scheduled.environmentId, scheduled.id)
+      if (!release || release.state !== 'PUBLISHING') return
+      const version = await this.store.getVersion(release.versionId)
+      const environment = await this.store.getEnvironment(release.environmentId)
+      const previousByDataId = new Map(
+        (environment?.publishedRelease?.resources ?? []).map((resource) => [
+          resource.dataId,
+          resource,
+        ]),
+      )
+      const targetMd5ByDataId = await this.prepareTargetEvidence(release, version)
+      await this.preflightResources(release, previousByDataId, targetMd5ByDataId)
+      await this.assertGroupDependencies(version)
+      for (const resource of [...release.resources].sort(
+        (left, right) => left.dependencyOrder - right.dependencyOrder,
+      )) {
+        let rendered = await this.renderReleaseResource(version, resource)
+        try {
+          await this.publishResource(
+            release,
+            resource,
+            rendered,
+            previousByDataId.get(resource.dataId) ?? null,
+          )
+        } finally {
+          rendered = { ...rendered, content: '' }
+        }
+      }
+      const finished = await this.store.finishRelease({
+        releaseId: release.id,
+        workflowState: 'COMPLETED',
+        publicationState: 'PUBLISHED',
+        now: this.clock.now().toISOString(),
+      })
+      await this.audit(
+        actor,
+        correlationId,
+        'marketplace.release.published',
+        release.id,
+        release.environmentId,
+        {
+          releaseNumber: release.releaseNumber,
+          resourceCount: release.resources.length,
+          revision: finished.revision,
+          activationState: 'UNKNOWN',
+        },
+      )
+    } catch (error) {
+      await this.failRelease(scheduled, actor, correlationId, error)
+    } finally {
+      await unlock?.()
+    }
+  }
+
+  private async assertGroupDependencies(
+    version: Awaited<ReturnType<MarketplaceStore['getVersion']>>,
+  ): Promise<void> {
+    const groupRefs = new Map(
+      version.models.flatMap((model) => model.allowUserGroups.map((group) => [group.id, group])),
+    )
+    if (groupRefs.size === 0) return
+    const groups = await this.accessDirectory.getGroupsByIds([...groupRefs.keys()])
+    const byId = new Map(groups.map((group) => [group.id, group]))
+    for (const [groupId, reference] of groupRefs) {
+      let group = byId.get(groupId)
+      if (!group) {
+        throw new ReleaseExecutionError(
+          'ACCESS_GROUP_NOT_PUBLISHED',
+          `用户组 ${reference.name} 尚未发布到 rnacos`,
+        )
+      }
+      let readback = await this.publisher!.read({
+        environmentId: version.environmentId,
+        group: 'LLM-SERVER',
+        dataId: `ploto.ai-llm.user-group.${reference.name}`,
+      })
+      if (
+        (group.revision === 0 && readback.state !== 'PRESENT') ||
+        group.publishedRevision < group.revision
+      ) {
+        try {
+          group = await this.accessDirectory.ensureGroupPublished({
+            environmentId: version.environmentId,
+            groupId,
+          })
+        } catch {
+          throw new ReleaseExecutionError(
+            'ACCESS_GROUP_PUBLICATION_FAILED',
+            `用户组 ${reference.name} 发布失败`,
+          )
+        }
+        readback = await this.publisher!.read({
+          environmentId: version.environmentId,
+          group: 'LLM-SERVER',
+          dataId: `ploto.ai-llm.user-group.${reference.name}`,
+        })
+      }
+      if (group.publishedRevision < group.revision) {
+        throw new ReleaseExecutionError(
+          'ACCESS_GROUP_NOT_PUBLISHED',
+          `用户组 ${reference.name} 尚未发布到 rnacos`,
+        )
+      }
+      if (readback.state !== 'PRESENT') {
+        throw new ReleaseExecutionError(
+          'ACCESS_GROUP_NOT_FOUND_IN_RNACOS',
+          `rnacos 中不存在用户组 ${reference.name}`,
+        )
+      }
+    }
+  }
+
+  private async prepareTargetEvidence(
+    release: MarketplaceReleaseRecord,
+    version: Awaited<ReturnType<MarketplaceStore['getVersion']>>,
+  ): Promise<Map<string, string>> {
+    const targetMd5ByDataId = new Map<string, string>()
+    for (const resource of release.resources) {
+      let rendered: RenderedResource | undefined
+      try {
+        rendered = await this.renderReleaseResource(version, resource)
+        const targetMd5 = createHash('md5').update(rendered.content, 'utf8').digest('hex')
+        targetMd5ByDataId.set(resource.dataId, targetMd5)
+        await this.store.updateReleaseResource({
+          releaseId: release.id,
+          resourceId: resource.id,
+          state: resource.state,
+          newSafeDigest: this.safeContentDigest(rendered.content),
+          newMd5: targetMd5,
+          contentBytes: Buffer.byteLength(rendered.content, 'utf8'),
+          now: this.clock.now().toISOString(),
+        })
+      } catch (error) {
+        await this.markResourceFailed(release, resource, error)
+        throw error
+      } finally {
+        if (rendered) rendered = { ...rendered, content: '' }
+      }
+    }
+    return targetMd5ByDataId
+  }
+
+  private async preflightResources(
+    release: MarketplaceReleaseRecord,
+    previousByDataId: Map<string, MarketplaceReleaseResourceRecord>,
+    targetMd5ByDataId: Map<string, string>,
+  ): Promise<void> {
+    for (const resource of release.resources) {
+      let current: RnacosConfigRead
+      try {
+        current = await this.publisher!.read({
+          environmentId: release.environmentId,
+          group: resource.group,
+          dataId: resource.dataId,
+        })
+      } catch (error) {
+        await this.markResourceFailed(release, resource, error)
+        throw error
+      }
+      const targetMd5 = targetMd5ByDataId.get(resource.dataId)
+      const previous = previousByDataId.get(resource.dataId)
+      const expectedOldMd5 = previous?.newMd5 ?? null
+      const matchesTarget = Boolean(targetMd5 && current.md5 === targetMd5)
+      const drifted =
+        !matchesTarget &&
+        (current.state === 'PRESENT' ? current.md5 !== expectedOldMd5 : Boolean(previous))
+      if (drifted) {
+        const error = new ReleaseExecutionError(
+          'RELEASE_DRIFTED',
+          previous
+            ? `${resource.dataId} 与上一成功 Release 的证据不一致`
+            : `${resource.dataId} 已存在未纳管内容，不能直接覆盖`,
+        )
+        await this.markResourceFailed(release, resource, error, {
+          oldSafeDigest: current.content ? this.safeContentDigest(current.content) : null,
+          oldMd5: current.md5,
+          newMd5: targetMd5 ?? null,
+        })
+        throw error
+      }
+      await this.store.updateReleaseResource({
+        releaseId: release.id,
+        resourceId: resource.id,
+        state: resource.state,
+        oldSafeDigest: current.content ? this.safeContentDigest(current.content) : null,
+        oldMd5: current.md5,
+        now: this.clock.now().toISOString(),
+      })
+    }
+  }
+
+  private renderReleaseResource(
+    version: Awaited<ReturnType<MarketplaceStore['getVersion']>>,
+    resource: MarketplaceReleaseResourceRecord,
+  ): Promise<RenderedResource> {
+    return resource.kind === 'PROVIDER'
+      ? renderProviderResource(
+          version,
+          resource.dataId.slice('ploto.ai-llm.provider.'.length),
+          this.secrets,
+        )
+      : Promise.resolve(renderModelsResource(version))
+  }
+
+  private async publishResource(
+    release: MarketplaceReleaseRecord,
+    resource: MarketplaceReleaseResourceRecord,
+    rendered: { group: 'LLM-SERVER'; dataId: string; content: string },
+    previous: MarketplaceReleaseResourceRecord | null,
+  ): Promise<void> {
+    const targetMd5 = createHash('md5').update(rendered.content, 'utf8').digest('hex')
+    const targetSafeDigest = this.safeContentDigest(rendered.content)
+    let current: RnacosConfigRead
+    try {
+      current = await this.publisher!.read({
+        environmentId: release.environmentId,
+        group: rendered.group,
+        dataId: rendered.dataId,
+      })
+    } catch (error) {
+      await this.markResourceFailed(release, resource, error)
+      throw error
+    }
+    const oldSafeDigest = current.content ? this.safeContentDigest(current.content) : null
+    const common = {
+      oldSafeDigest,
+      newSafeDigest: targetSafeDigest,
+      oldMd5: current.md5,
+      newMd5: targetMd5,
+      contentBytes: Buffer.byteLength(rendered.content, 'utf8'),
+    }
+    if (current.md5 === targetMd5) {
+      await this.store.updateReleaseResource({
+        releaseId: release.id,
+        resourceId: resource.id,
+        state: resource.state === 'PUBLISHED' ? 'PUBLISHED' : 'SKIPPED',
+        ...common,
+        errorCode: null,
+        safeErrorMessage: null,
+        now: this.clock.now().toISOString(),
+      })
+      return
+    }
+    const expectedOldMd5 = previous?.newMd5 ?? null
+    const drifted = current.state === 'PRESENT' ? current.md5 !== expectedOldMd5 : Boolean(previous)
+    if (drifted) {
+      const error = new ReleaseExecutionError(
+        'RELEASE_DRIFTED',
+        previous
+          ? `${resource.dataId} 与上一成功 Release 的证据不一致`
+          : `${resource.dataId} 已存在未纳管内容，不能直接覆盖`,
+      )
+      await this.markResourceFailed(release, resource, error, common)
+      throw error
+    }
+    await this.store.updateReleaseResource({
+      releaseId: release.id,
+      resourceId: resource.id,
+      state: 'WRITING',
+      ...common,
+      errorCode: null,
+      safeErrorMessage: null,
+      incrementRetry: true,
+      now: this.clock.now().toISOString(),
+    })
+    try {
+      const published = await this.publisher!.publish({
+        environmentId: release.environmentId,
+        group: rendered.group,
+        dataId: rendered.dataId,
+        content: rendered.content,
+        expectedMd5: targetMd5,
+        expectedOldMd5,
+      })
+      await this.store.updateReleaseResource({
+        releaseId: release.id,
+        resourceId: resource.id,
+        state: 'PUBLISHED',
+        ...common,
+        newMd5: published.readbackMd5,
+        errorCode: null,
+        safeErrorMessage: null,
+        now: this.clock.now().toISOString(),
+      })
+    } catch (error) {
+      await this.markResourceFailed(release, resource, error, common)
+      throw error
+    }
+  }
+
+  private async markResourceFailed(
+    release: MarketplaceReleaseRecord,
+    resource: MarketplaceReleaseResourceRecord,
+    error: unknown,
+    metadata: Partial<
+      Pick<
+        MarketplaceReleaseResourceRecord,
+        'oldSafeDigest' | 'newSafeDigest' | 'oldMd5' | 'newMd5' | 'contentBytes'
+      >
+    > = {},
+  ): Promise<void> {
+    const safe = releaseError(error)
+    await this.store.updateReleaseResource({
+      releaseId: release.id,
+      resourceId: resource.id,
+      state: 'FAILED',
+      ...metadata,
+      errorCode: safe.code,
+      safeErrorMessage: safe.message,
+      now: this.clock.now().toISOString(),
+    })
+  }
+
+  private async failRelease(
+    scheduled: MarketplaceReleaseRecord,
+    actor: AuthenticatedActor | null,
+    correlationId: string,
+    error: unknown,
+  ): Promise<void> {
+    const release = await this.store.getRelease(scheduled.environmentId, scheduled.id)
+    if (!release || release.state !== 'PUBLISHING') return
+    const safe = releaseError(error)
+    if (!release.resources.some((resource) => resource.state === 'FAILED')) {
+      const resource =
+        release.resources.find((candidate) => candidate.kind === 'MODELS') ?? release.resources[0]
+      if (resource) await this.markResourceFailed(release, resource, error)
+    }
+    const current = await this.store.getRelease(scheduled.environmentId, scheduled.id)
+    const hasProgress = current?.resources.some(
+      (resource) => resource.state === 'PUBLISHED' || resource.state === 'SKIPPED',
+    )
+    const publicationState =
+      safe.code === 'RELEASE_DRIFTED' || safe.code === 'RNACOS_CAS_CONFLICT'
+        ? 'DRIFTED'
+        : hasProgress
+          ? 'PARTIAL'
+          : 'FAILED'
+    const finished = await this.store.finishRelease({
+      releaseId: scheduled.id,
+      workflowState: 'FAILED',
+      publicationState,
+      now: this.clock.now().toISOString(),
+    })
+    await this.audit(
+      actor,
+      correlationId,
+      'marketplace.release.failed',
+      scheduled.id,
+      scheduled.environmentId,
+      {
+        releaseNumber: scheduled.releaseNumber,
+        errorCode: safe.code,
+        safeErrorMessage: safe.message,
+        publicationState,
+        revision: finished.revision,
+      },
+    )
+  }
+
+  private safeContentDigest(content: string): string {
+    return createHmac('sha256', this.cursorKey)
+      .update('marketplace-release-content\u0000')
+      .update(content, 'utf8')
+      .digest('hex')
+  }
+
+  private async releaseView(release: MarketplaceReleaseRecord) {
+    const version = await this.store.getVersion(release.versionId)
+    const references = new Map(
+      version.models.flatMap((model) => model.allowUserGroups.map((group) => [group.id, group])),
+    )
+    const groups = await this.accessDirectory.getGroupsByIds([...references.keys()])
+    const byId = new Map(groups.map((group) => [group.id, group]))
+    return {
+      ...release,
+      target: this.publisher?.target() ?? null,
+      groupDependencies: [...references].map(([id, reference]) => {
+        const group = byId.get(id)
+        return {
+          id,
+          name: reference.name,
+          revision: group?.revision ?? null,
+          publishedRevision: group?.publishedRevision ?? null,
+          state:
+            group &&
+            group.publishedRevision >= group.revision &&
+            (group.revision > 0 || release.state === 'COMPLETED')
+              ? ('READY' as const)
+              : ('NOT_PUBLISHED' as const),
+        }
+      }),
     }
   }
 
@@ -907,12 +1393,12 @@ export class ModelMarketplaceService {
       ),
       accessMode: model.allowUserGroups.length ? 'APPROVAL_REQUIRED' : 'ALL_AUTHENTICATED',
       draftState: issues.some((issue) => issue.severity === 'ERROR') ? 'INVALID' : 'MODIFIED',
-      publicationState: environment.publicationState,
-      activationState: environment.activationState,
+      publicationState: environment.publishedRelease?.publicationState ?? 'NEVER',
+      activationState: environment.publishedRelease?.activationState ?? 'UNKNOWN',
       validationErrorCount: issues.filter((issue) => issue.severity === 'ERROR').length,
       validationWarningCount: issues.filter((issue) => issue.severity === 'WARNING').length,
-      latestReleaseId: environment.latestRelease?.id ?? null,
-      latestReleaseNumber: environment.latestRelease?.releaseNumber ?? null,
+      latestReleaseId: environment.publishedRelease?.id ?? null,
+      latestReleaseNumber: environment.publishedRelease?.releaseNumber ?? null,
       updatedBy: model.updatedBy,
       updatedAt: model.updatedAt,
     }
@@ -938,12 +1424,15 @@ export class ModelMarketplaceService {
       },
       published: {
         versionId: environment.publishedVersion?.id ?? null,
-        releaseId: environment.latestRelease?.id ?? null,
-        releaseNumber: environment.latestRelease?.releaseNumber ?? null,
-        state: environment.publicationState,
+        releaseId: environment.publishedRelease?.id ?? null,
+        releaseNumber: environment.publishedRelease?.releaseNumber ?? null,
+        state: environment.publishedRelease?.publicationState ?? 'NEVER',
         publishedAt: environment.publishedVersion?.frozenAt ?? null,
       },
-      activation: { state: environment.activationState, evidence: 'NONE' },
+      activation: {
+        state: environment.publishedRelease?.activationState ?? 'UNKNOWN',
+        evidence: 'NONE',
+      },
     }
   }
 
@@ -1280,7 +1769,7 @@ export class ModelMarketplaceService {
   }
 
   private async audit(
-    actor: AuthenticatedActor,
+    actor: AuthenticatedActor | null,
     correlationId: string,
     eventType: string,
     targetId: string,
@@ -1288,7 +1777,7 @@ export class ModelMarketplaceService {
     payload: Record<string, unknown>,
   ) {
     await this.userStore.appendAudit({
-      actor: actor.user,
+      actor: actor?.user ?? null,
       eventType,
       targetType: eventType.includes('release') ? 'release' : 'model',
       targetId,
@@ -1298,4 +1787,28 @@ export class ModelMarketplaceService {
       occurredAt: this.clock.now().toISOString(),
     })
   }
+}
+
+class ReleaseExecutionError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+function releaseError(error: unknown): { code: string; message: string } {
+  if (
+    error instanceof ReleaseExecutionError ||
+    error instanceof RnacosConfigError ||
+    error instanceof DomainError
+  ) {
+    return { code: error.code, message: safeReleaseMessage(error.message) }
+  }
+  return { code: 'RELEASE_EXECUTION_FAILED', message: '发布编排执行失败' }
+}
+
+function safeReleaseMessage(message: string): string {
+  return message.replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 500)
 }

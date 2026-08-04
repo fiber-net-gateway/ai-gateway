@@ -86,6 +86,32 @@ export class MemoryModelAccessStore implements ModelAccessStore {
     })
   }
 
+  async getGroupSnapshot(
+    groupId: string,
+  ): Promise<{ group: ProviderAccessGroupRecord; usernames: string[] } | null> {
+    const group = this.groups.get(groupId)
+    if (!group) return null
+    const usernames = [...this.members.values()]
+      .filter((member) => member.groupId === groupId)
+      .map((member) => member.username)
+    return { group: copy(group), usernames }
+  }
+
+  async markGroupPublished(input: {
+    groupId: string
+    revision: number
+    now: string
+  }): Promise<ProviderAccessGroupRecord> {
+    const group = this.groups.get(input.groupId)
+    if (!group) throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
+    if (group.revision !== input.revision) {
+      throw new DomainError('ACCESS_GROUP_REVISION_CHANGED', 409, '申请授权组已发生变化')
+    }
+    group.publishedRevision = Math.max(group.publishedRevision, input.revision)
+    group.updatedAt = input.now
+    return copy(group)
+  }
+
   async isPublishedMember(input: { groupIds: string[]; userId: string }): Promise<boolean> {
     return (await this.getPublishedMembershipGroupIds(input)).length > 0
   }

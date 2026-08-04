@@ -16,11 +16,10 @@ The console is intended to provide:
 - Bootstrap configuration templates, instance health, service discovery, and configuration
   snapshot status.
 
-The first user-management phase is implemented, including standard and administrator roles,
-development and OIDC authentication boundaries, server-side sessions, environment authorization,
-`ai-server`-compatible BT1 token issuance with short-lived encrypted delivery, user management,
-and audit pages. Configuration releases, rnacos writes, and evidence of activation on `ai-server`
-instances remain part of the upcoming configuration and release modules.
+The console currently implements user and token management, the model marketplace, Provider access
+groups, immutable model releases, and recoverable Provider-to-models publication to rnacos. Release
+details retain per-Data-ID write and readback evidence. Instance-level activation evidence and
+rollback execution remain future work and are therefore reported as unknown or unavailable.
 
 ## Architecture
 
@@ -52,8 +51,8 @@ Dynamic configuration always uses the rnacos group `LLM-SERVER`. Its primary Dat
 - `ploto.ai-llm.user-group.<group-name>`
 
 A successful rnacos write proves only that content was published. It does not prove that every
-`ai-server` instance activated the configuration. The release center must report draft state,
-rnacos write results, and per-instance activation results separately.
+`ai-server` instance activated the configuration. The release center reports draft state and
+rnacos write results separately and keeps activation `UNKNOWN` until instance evidence exists.
 
 ## Project Structure
 
@@ -145,7 +144,8 @@ explicit, randomly generated `APP_ENCRYPTION_KEY`.
 After copying `server/.env.example`, configure these connections and settings as needed:
 
 - `MYSQL_*`: Console database settings.
-- `RNACOS_*`: rnacos address, namespace, tenant, credentials, and configuration group.
+- `RNACOS_*`: rnacos address, bound environment, namespace, tenant, credentials, and fixed
+  configuration group.
 - `AI_SERVER_BASE_URL`: Address of the target `ai-server` management endpoint.
 - `AUTH_MODE` and `OIDC_*`: Local development authentication or enterprise OIDC with PKCE.
 - `APP_ENCRYPTION_KEY`: Encryption key for short-lived token delivery and local secret wrapping.

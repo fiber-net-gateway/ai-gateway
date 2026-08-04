@@ -16,6 +16,7 @@ test('rnacos publisher uses the fixed config target and verifies exact readback 
 
   try {
     const publisher = new RnacosAccessGroupPublisher({
+      environmentId: '00000000-0000-4000-8000-000000000001',
       baseUrl: 'http://127.0.0.1:8848',
       namespaceId: 'namespace-a',
       tenant: 'tenant-a',
@@ -24,6 +25,7 @@ test('rnacos publisher uses the fixed config target and verifies exact readback 
       configGroup: 'LLM-SERVER',
     })
     const result = await publisher.publish({
+      environmentId: '00000000-0000-4000-8000-000000000001',
       group: 'LLM-SERVER',
       dataId: 'ploto.ai-llm.user-group.pa_provider_a',
       content,

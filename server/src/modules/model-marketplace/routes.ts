@@ -37,6 +37,10 @@ interface ModelParams extends EnvironmentParams {
   modelId: string
 }
 
+interface ReleaseParams extends EnvironmentParams {
+  releaseId: string
+}
+
 interface DraftParams extends EnvironmentParams {
   draftId: string
 }
@@ -132,7 +136,7 @@ function needsFreshMfa(environment: EnvironmentRecord, actor: AuthenticatedActor
     throw new DomainError(
       'REAUTHENTICATION_REQUIRED',
       403,
-      '生产环境供应商凭据变更需要五分钟内完成二次认证',
+      '生产环境敏感配置变更或发布需要五分钟内完成二次认证',
     )
   }
 }
@@ -522,4 +526,55 @@ export function registerModelMarketplaceRoutes(
       return reply.status(202).send(result)
     },
   )
+
+  const releaseParamsSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['env', 'releaseId'],
+    properties: {
+      env: { type: 'string', format: 'uuid' },
+      releaseId: { type: 'string', format: 'uuid' },
+    },
+  } as const
+
+  app.get(
+    '/api/environments/:env/releases',
+    { schema: { params: environmentParamsSchema } },
+    async (request) => {
+      const { env } = request.params as EnvironmentParams
+      const { actor } = await requireAdmin(request, env, dependencies)
+      return { items: await dependencies.marketplace.listReleases(env, actor.user.id) }
+    },
+  )
+
+  app.get(
+    '/api/environments/:env/releases/:releaseId',
+    { schema: { params: releaseParamsSchema } },
+    async (request, reply) => {
+      const { env, releaseId } = request.params as ReleaseParams
+      const { actor } = await requireAdmin(request, env, dependencies)
+      secretResponse(reply)
+      return dependencies.marketplace.getRelease(env, actor.user.id, releaseId)
+    },
+  )
+
+  for (const action of ['execute', 'retry'] as const) {
+    app.post(
+      `/api/environments/:env/releases/:releaseId/${action}`,
+      { schema: { params: releaseParamsSchema } },
+      async (request, reply) => {
+        const { env, releaseId } = request.params as ReleaseParams
+        const { actor, environment } = await requireAdmin(request, env, dependencies, true)
+        needsFreshMfa(environment, actor)
+        secretResponse(reply)
+        const release = await dependencies.marketplace.executeRelease({
+          environmentId: env,
+          releaseId,
+          actor,
+          correlationId: request.id,
+        })
+        return reply.status(202).send(release)
+      },
+    )
+  }
 }

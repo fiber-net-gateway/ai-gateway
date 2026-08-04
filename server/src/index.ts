@@ -11,6 +11,7 @@ import { MemoryUserStore } from './modules/users/memory-store.js'
 import { MySqlUserStore } from './modules/users/mysql-store.js'
 import { MySqlModelAccessStore } from './modules/model-access/mysql-store.js'
 import { RnacosAccessGroupPublisher } from './modules/model-access/rnacos-publisher.js'
+import { RnacosConfigClient } from './modules/rnacos/config-client.js'
 
 const config = loadConfig()
 const pool = config.dataMode === 'mysql' ? createMySqlPool(config.mysql) : null
@@ -29,7 +30,9 @@ const marketplaceSecrets = pool
     )
   : undefined
 const modelAccessStore = pool ? new MySqlModelAccessStore(pool) : undefined
-const accessGroupPublisher = pool ? new RnacosAccessGroupPublisher(config.rnacos) : undefined
+const rnacosClient = pool ? new RnacosConfigClient(config.rnacos) : undefined
+const accessGroupPublisher =
+  pool && rnacosClient ? new RnacosAccessGroupPublisher(config.rnacos, rnacosClient) : undefined
 const app = buildApp({
   config,
   store,
@@ -37,6 +40,7 @@ const app = buildApp({
   marketplaceSecrets,
   modelAccessStore,
   accessGroupPublisher,
+  marketplacePublisher: rnacosClient,
   logger: true,
   closeInfrastructure: pool ? () => pool.end() : undefined,
 })

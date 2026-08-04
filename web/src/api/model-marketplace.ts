@@ -6,6 +6,60 @@ export type ActivationState = 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'PARTIAL' | 
 export type ProtocolCoverage = 'SUPPORTED' | 'UNSUPPORTED' | 'INVALID'
 export type ProviderProtocolType = 'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES'
 export type ModelAccessMode = 'ALL_AUTHENTICATED' | 'APPROVAL_REQUIRED'
+export type ReleaseWorkflowState = 'PENDING' | 'PUBLISHING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+export type ReleaseResourceState = 'PENDING' | 'WRITING' | 'PUBLISHED' | 'FAILED' | 'SKIPPED'
+
+export interface MarketplaceReleaseResource {
+  id: string
+  kind: 'PROVIDER' | 'MODELS'
+  group: 'LLM-SERVER'
+  dataId: string
+  dependencyOrder: number
+  state: ReleaseResourceState
+  oldSafeDigest: string | null
+  newSafeDigest: string | null
+  oldMd5: string | null
+  newMd5: string | null
+  contentBytes: number | null
+  errorCode: string | null
+  safeErrorMessage: string | null
+  retryCount: number
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+export interface MarketplaceRelease {
+  id: string
+  environmentId: string
+  versionId: string
+  releaseNumber: number
+  state: ReleaseWorkflowState
+  publicationState: PublicationState
+  activationState: ActivationState
+  revision: number
+  createdBy: string
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  updatedAt: string
+  resources: MarketplaceReleaseResource[]
+}
+
+export interface MarketplaceReleaseDetail extends MarketplaceRelease {
+  target: null | {
+    environmentId: string
+    namespaceId: string
+    tenant: string
+    group: 'LLM-SERVER'
+  }
+  groupDependencies: Array<{
+    id: string
+    name: string
+    revision: number | null
+    publishedRevision: number | null
+    state: 'READY' | 'NOT_PUBLISHED'
+  }>
+}
 
 export interface MarketplaceModelSummary {
   id: string
@@ -207,7 +261,7 @@ export const modelMarketplaceApi = {
         state: 'PENDING'
         resources: Array<{
           id: string
-          kind: 'USER_GROUP' | 'PROVIDER' | 'MODELS'
+          kind: 'PROVIDER' | 'MODELS'
           group: 'LLM-SERVER'
           dataId: string
           dependencyOrder: number
@@ -222,4 +276,18 @@ export const modelMarketplaceApi = {
       method: 'POST',
       headers: { 'If-Match': etag },
     }),
+  listReleases: (environmentId: string) =>
+    request<{ items: MarketplaceRelease[] }>(`/api/environments/${environmentId}/releases`),
+  release: (environmentId: string, releaseId: string) =>
+    request<MarketplaceReleaseDetail>(`/api/environments/${environmentId}/releases/${releaseId}`),
+  executeRelease: (environmentId: string, releaseId: string) =>
+    request<MarketplaceReleaseDetail>(
+      `/api/environments/${environmentId}/releases/${releaseId}/execute`,
+      { method: 'POST' },
+    ),
+  retryRelease: (environmentId: string, releaseId: string) =>
+    request<MarketplaceReleaseDetail>(
+      `/api/environments/${environmentId}/releases/${releaseId}/retry`,
+      { method: 'POST' },
+    ),
 }

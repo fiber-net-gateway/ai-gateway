@@ -3,8 +3,14 @@ import type { Pool, RowDataPacket } from 'mysql2/promise'
 import { userModuleMigration } from './migrations/001-user-module.js'
 import { modelMarketplaceMigration } from './migrations/002-model-marketplace.js'
 import { modelAccessMigration } from './migrations/003-model-access.js'
+import { marketplaceReleaseOrchestrationMigration } from './migrations/004-marketplace-release-orchestration.js'
 
-const migrations = [userModuleMigration, modelMarketplaceMigration, modelAccessMigration]
+const migrations = [
+  userModuleMigration,
+  modelMarketplaceMigration,
+  modelAccessMigration,
+  marketplaceReleaseOrchestrationMigration,
+]
 
 export async function runMigrations(pool: Pool): Promise<void> {
   const connection = await pool.getConnection()

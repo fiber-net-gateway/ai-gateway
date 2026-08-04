@@ -55,12 +55,45 @@ class PublishedMarketplaceStore implements MarketplaceStore {
     this.published.set(input.environmentId, structuredClone(result.frozenVersion))
     return result
   }
+
+  getVersion(input: Parameters<MarketplaceStore['getVersion']>[0]) {
+    return this.delegate.getVersion(input)
+  }
+
+  getRelease(...input: Parameters<MarketplaceStore['getRelease']>) {
+    return this.delegate.getRelease(...input)
+  }
+
+  listReleases(...input: Parameters<MarketplaceStore['listReleases']>) {
+    return this.delegate.listReleases(...input)
+  }
+
+  listPublishingReleases() {
+    return this.delegate.listPublishingReleases()
+  }
+
+  acquireReleaseLock(input: Parameters<MarketplaceStore['acquireReleaseLock']>[0]) {
+    return this.delegate.acquireReleaseLock(input)
+  }
+
+  startRelease(input: Parameters<MarketplaceStore['startRelease']>[0]) {
+    return this.delegate.startRelease(input)
+  }
+
+  updateReleaseResource(input: Parameters<MarketplaceStore['updateReleaseResource']>[0]) {
+    return this.delegate.updateReleaseResource(input)
+  }
+
+  finishRelease(input: Parameters<MarketplaceStore['finishRelease']>[0]) {
+    return this.delegate.finishRelease(input)
+  }
 }
 
 class FailOncePublisher implements AccessGroupPublisher {
   calls: Array<{ dataId: string; content: string; expectedMd5: string }> = []
 
   async publish(input: {
+    environmentId: string
     group: 'LLM-SERVER'
     dataId: string
     content: string

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import '@fontsource/manrope/latin-400.css'
 import '@fontsource/manrope/latin-500.css'
@@ -7,7 +7,7 @@ import '@fontsource/manrope/latin-700.css'
 import '@fontsource/manrope/latin-800.css'
 import '@fontsource/dm-mono/latin-400.css'
 import '@fontsource/dm-mono/latin-500.css'
-import { AlertCircle, X } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from 'lucide-react'
 
 import { api, ApiError, type EnvironmentAccess, type IssuedToken, type User } from './api/client'
 import { ConsoleLayout, type Section } from './components/ConsoleLayout'
@@ -18,12 +18,14 @@ import { ModelDetailPage } from './pages/ModelDetailPage'
 import { ModelEditorPage } from './pages/ModelEditorPage'
 import { ModelMarketplacePage } from './pages/ModelMarketplacePage'
 import { MyAccessRequestsPage } from './pages/MyAccessRequestsPage'
+import { ReleaseCenterPage } from './pages/ReleaseCenterPage'
 import { IssuedTokenModal, TokensPage } from './pages/TokensPage'
 import { UsersPage } from './pages/UsersPage'
 import './styles.css'
 
 function initialSection(): Section {
   const value = window.location.hash.replace('#/', '')
+  if (value === 'releases' || value.startsWith('releases/')) return 'releases'
   if (
     value === 'users' ||
     value === 'audit' ||
@@ -33,6 +35,11 @@ function initialSection(): Section {
   )
     return value
   return 'models'
+}
+
+function releaseRoute(): string | null {
+  const parts = window.location.hash.replace(/^#\/?/u, '').split('/').filter(Boolean)
+  return parts[0] === 'releases' ? (parts[1] ?? null) : null
 }
 
 function marketplaceRoute():
@@ -54,10 +61,14 @@ function App() {
   const [environments, setEnvironments] = useState<EnvironmentAccess[]>([])
   const [section, setSection] = useState<Section>(initialSection)
   const [modelRoute, setModelRoute] = useState(marketplaceRoute)
+  const [releaseId, setReleaseId] = useState<string | null>(releaseRoute)
   const [booting, setBooting] = useState(true)
   const [loginBusy, setLoginBusy] = useState(false)
   const [loginError, setLoginError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{
+    message: string
+    kind: 'success' | 'error' | 'info' | 'warning'
+  } | null>(null)
   const [issued, setIssued] = useState<IssuedToken | null>(null)
 
   const loadSession = async () => {
@@ -87,6 +98,7 @@ function App() {
     const update = () => {
       setSection(initialSection())
       setModelRoute(marketplaceRoute())
+      setReleaseId(releaseRoute())
     }
     window.addEventListener('hashchange', update)
     return () => window.removeEventListener('hashchange', update)
@@ -100,6 +112,10 @@ function App() {
   const navigateModel = (path = '') => {
     window.location.hash = `/models${path ? `/${path}` : ''}`
   }
+
+  const showError = useCallback((message: string) => setNotice({ message, kind: 'error' }), [])
+  const showSuccess = useCallback((message: string) => setNotice({ message, kind: 'success' }), [])
+  const showInfo = useCallback((message: string) => setNotice({ message, kind: 'info' }), [])
 
   const login = async (username: string) => {
     setLoginBusy(true)
@@ -165,15 +181,15 @@ function App() {
         <TokensPage
           environments={environments}
           onEnvironmentsChange={setEnvironments}
-          onError={setNotice}
+          onError={showError}
         />
       )}
       {visibleSection === 'my-access' && environmentId && (
         <MyAccessRequestsPage
           environmentId={environmentId}
           onOpenModel={(modelId) => navigateModel(modelId)}
-          onError={setNotice}
-          onNotice={setNotice}
+          onError={showError}
+          onNotice={showSuccess}
         />
       )}
       {visibleSection === 'models' &&
@@ -186,7 +202,8 @@ function App() {
             admin={user.systemRole === 'ADMIN'}
             onOpen={(modelId) => navigateModel(modelId)}
             onCreate={() => navigateModel('new')}
-            onError={setNotice}
+            onOpenReleases={() => navigate('releases')}
+            onError={showError}
           />
         )}
       {visibleSection === 'models' && environmentId && modelRoute.kind === 'detail' && (
@@ -196,9 +213,10 @@ function App() {
           admin={user.systemRole === 'ADMIN'}
           onBack={() => navigateModel()}
           onEdit={() => navigateModel(`${modelRoute.modelId}/edit`)}
+          onOpenReleases={() => navigate('releases')}
           onArchived={() => navigateModel()}
-          onError={setNotice}
-          onNotice={setNotice}
+          onError={showError}
+          onNotice={showSuccess}
         />
       )}
       {visibleSection === 'models' &&
@@ -212,30 +230,53 @@ function App() {
               modelRoute.kind === 'edit' ? navigateModel(modelRoute.modelId) : navigateModel()
             }
             onSaved={(modelId) => navigateModel(modelId)}
-            onError={setNotice}
-            onNotice={setNotice}
+            onError={showError}
+            onNotice={showSuccess}
           />
         )}
       {visibleSection === 'users' && (
         <UsersPage
           environments={environments}
           currentUser={user}
-          onError={setNotice}
+          onError={showError}
           onIssued={setIssued}
         />
       )}
       {visibleSection === 'access-requests' && environmentId && (
         <AccessRequestsPage
           environmentId={environmentId}
-          onError={setNotice}
-          onNotice={setNotice}
+          onError={showError}
+          onNotice={showSuccess}
         />
       )}
-      {visibleSection === 'audit' && <AuditPage onError={setNotice} />}
+      {visibleSection === 'releases' && environmentId && user.systemRole === 'ADMIN' && (
+        <ReleaseCenterPage
+          environmentId={environmentId}
+          releaseId={releaseId}
+          onOpenRelease={(id) => {
+            window.location.hash = `/releases/${id}`
+          }}
+          onError={showError}
+          onNotice={showSuccess}
+          onInfo={showInfo}
+        />
+      )}
+      {visibleSection === 'audit' && <AuditPage onError={showError} />}
       {notice && (
-        <div className="toast" role="alert">
-          <AlertCircle size={18} />
-          <span>{notice}</span>
+        <div
+          className={`toast toast-${notice.kind}`}
+          role={notice.kind === 'error' ? 'alert' : 'status'}
+        >
+          {notice.kind === 'error' ? (
+            <AlertCircle size={18} />
+          ) : notice.kind === 'warning' ? (
+            <AlertTriangle size={18} />
+          ) : notice.kind === 'success' ? (
+            <CheckCircle2 size={18} />
+          ) : (
+            <Info size={18} />
+          )}
+          <span>{notice.message}</span>
           <button type="button" aria-label="关闭消息" onClick={() => setNotice(null)}>
             <X size={16} />
           </button>

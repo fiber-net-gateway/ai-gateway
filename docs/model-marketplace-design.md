@@ -268,6 +268,16 @@ web/src/
 
 ### 6.2 路由
 
+管理员新增环境级发布路由：
+
+```text
+#/releases
+#/releases/<release-id>
+```
+
+模型详情不再直接创建 release。模型广场页头提供“查看发布差异”，创建成功后导航到
+release 详情。存在活动 release 时入口替换为“查看 Release #N”，避免重复冻结同一草稿。
+
 | 前端路由                                             | 页面     |
 | ---------------------------------------------------- | -------- |
 | `/environments/:env/models`                          | 广场列表 |
@@ -577,6 +587,10 @@ PATCH /api/environments/:env/drafts/:draftId/providers/:providerId/tokens/:token
 POST /api/environments/:env/drafts/:draftId/validate
 GET  /api/environments/:env/drafts/:draftId/diff
 POST /api/environments/:env/drafts/:draftId/submit
+GET  /api/environments/:env/releases
+GET  /api/environments/:env/releases/:releaseId
+POST /api/environments/:env/releases/:releaseId/execute
+POST /api/environments/:env/releases/:releaseId/retry
 ```
 
 沿用全局 release API。模型模块向发布模块提供冻结版本 ID、资源依赖图、规范渲染器和脱敏
@@ -1309,6 +1323,8 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
+    G[Published user-group dependencies] --> P1
+    G --> P2
     P1[Provider create/update A] --> M[ploto.ai-llm.models]
     P2[Provider create/update B] --> M
     M --> A[Instance activation observation]
@@ -1323,6 +1339,10 @@ Provider 更新可能在 models 更新前影响已有引用，编排器不能提
 - models 聚合资源；
 - 推迟到清理 release 的 Provider 删除。
 
+用户组仍由模型访问模块拥有。release 只验证引用组的 `revision = published_revision` 和
+Data ID 存在性；需要创建空组时调用模型访问模块的专用发布能力，Marketplace 不读取或
+重建成员名单。任一用户组依赖未满足时，在写 Provider 前失败。
+
 ### 14.3 逐资源状态
 
 每个 release resource 至少保存：
@@ -1336,7 +1356,27 @@ Provider 更新可能在 models 更新前影响已有引用，编排器不能提
 Provider 内容明文不落 release 表。恢复 worker 根据冻结 spec 和 secret 引用重新渲染；若
 secret 已不可用则该资源失败并要求人工处理。
 
-### 14.4 实例生效
+每次执行先读取 rnacos 当前 MD5。当前值必须等于上一个成功 release 的目标 MD5、目标
+Data ID 不存在且基线也不存在，或已经等于本 release 目标 MD5；其他情况均为漂移。写入时
+携带服务端支持的 CAS MD5，写后立即回读。部署所用 rnacos 版本必须通过真实 CAS 冲突集成
+测试；未验证前不能把“已发送 CAS 参数”描述为严格并发保证。
+
+### 14.4 编排状态与恢复
+
+release workflow 使用 `PENDING | PUBLISHING | COMPLETED | FAILED | CANCELLED`。workflow
+表示任务进度，`publicationState` 表示 rnacos 证据，`activationState` 表示实例证据，三者
+不能合并。相同环境只能有一个活动 release。
+
+执行器按 Provider 名顺序串行写入，降低含 secret 内容同时驻留内存和部分成功范围。首个
+失败会停止后续步骤；models 只有在全部 Provider 已发布或已处于目标 MD5 时才执行。worker
+接管 `PUBLISHING` 步骤时先回读：目标 MD5 已存在则完成该步骤，仍为旧 MD5 才重试，否则
+标记漂移。重试复用同一 release、冻结版本和资源行。
+
+只有 Provider 与 models 全部回读一致后，Repository 才推进当前成功发布 release 和草稿
+`base_release_version_id`。最新执行尝试和当前成功发布版本必须分别查询；新 release 失败
+不能让普通用户目录丢失旧的成功版本。
+
+### 14.5 实例生效
 
 - 发布开始时冻结目标实例集合。
 - 只有实例明确报告接受目标 generation/release 或各 Data ID 身份时才写 `EFFECTIVE`。
@@ -1344,7 +1384,17 @@ secret 已不可用则该资源失败并要求人工处理。
 - `/health`、`/ready`、进程存活或请求成功不能单独证明接受本 release。
 - 部分实例接受时保留实例矩阵和 `PARTIAL`，不自动回滚。
 
-### 14.5 回滚
+### 14.6 发布中心
+
+发布中心列表展示 release 编号、workflow、rnacos 发布状态、实例状态、创建者和时间。详情
+按依赖顺序展示 Data ID、旧/目标/回读 MD5、字节数、状态、重试次数和脱敏错误；Provider
+内容及 Token 永不显示。执行期间页面轮询详情，刷新后从持久化步骤恢复。
+
+创建 Release 和执行发布是两个按钮。创建成功使用 success Toast 并导航到详情；依赖风险
+使用 warning；HTTP 或资源失败使用 error。模型详情的状态条只表示该模型最近成功发布的
+来源，环境级活动 release 使用单独横幅，避免把环境最新尝试复制成每个模型的事实。
+
+### 14.7 回滚
 
 回滚服务加载历史冻结版本的各单表 spec，检查所有 secret ID。可用时复制为新的冻结版本并
 生成新 release；secret 已销毁时返回 `ROLLBACK_SECRET_UNAVAILABLE`，列出 Token 名和

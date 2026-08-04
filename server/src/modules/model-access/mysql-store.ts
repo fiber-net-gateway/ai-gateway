@@ -292,6 +292,41 @@ export class MySqlModelAccessStore implements ModelAccessStore {
     return rows.map(groupFromRow)
   }
 
+  async getGroupSnapshot(
+    groupId: string,
+  ): Promise<{ group: ProviderAccessGroupRecord; usernames: string[] } | null> {
+    const groups = await this.getGroupsByIds([groupId])
+    if (!groups[0]) return null
+    const [members] = await this.pool.query<MemberRow[]>(
+      `SELECT BIN_TO_UUID(group_id) AS group_id, BIN_TO_UUID(user_id) AS user_id,
+              username, added_revision
+         FROM provider_access_group_members
+        WHERE group_id = UUID_TO_BIN(?) ORDER BY username`,
+      [groupId],
+    )
+    return { group: groups[0], usernames: members.map((member) => member.username) }
+  }
+
+  async markGroupPublished(input: {
+    groupId: string
+    revision: number
+    now: string
+  }): Promise<ProviderAccessGroupRecord> {
+    await this.pool.query(
+      `UPDATE provider_access_groups
+          SET published_revision = ?, updated_at = ?
+        WHERE id = UUID_TO_BIN(?) AND revision = ?`,
+      [input.revision, input.now, input.groupId, input.revision],
+    )
+    const groups = await this.getGroupsByIds([input.groupId])
+    const group = groups[0]
+    if (!group) throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
+    if (group.revision !== input.revision || group.publishedRevision < input.revision) {
+      throw new DomainError('ACCESS_GROUP_REVISION_CHANGED', 409, '申请授权组已发生变化')
+    }
+    return group
+  }
+
   async isPublishedMember(input: { groupIds: string[]; userId: string }): Promise<boolean> {
     return (await this.getPublishedMembershipGroupIds(input)).length > 0
   }

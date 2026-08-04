@@ -6,6 +6,7 @@ import type { AuthenticatedActor } from '../users/services.js'
 import type { UserStore } from '../users/types.js'
 import type { MarketplaceEnvironmentRecord, MarketplaceStore } from '../model-marketplace/types.js'
 import { generateAccessGroupName, validAccessGroupName } from './group-name.js'
+import { renderAccessGroup } from './renderer.js'
 import { AccessGroupPublisherError } from './rnacos-publisher.js'
 import type {
   AccessGroupPublicationRecord,
@@ -86,6 +87,44 @@ export class ModelAccessService implements ModelAccessDirectory {
 
   getGroupsByIds(ids: string[]): Promise<ProviderAccessGroupRecord[]> {
     return this.store.getGroupsByIds(ids)
+  }
+
+  async ensureGroupPublished(input: {
+    environmentId: string
+    groupId: string
+  }): Promise<ProviderAccessGroupRecord> {
+    return this.withGroupLock(input.groupId, async () => {
+      const snapshot = await this.store.getGroupSnapshot(input.groupId)
+      if (!snapshot || snapshot.group.environmentId !== input.environmentId) {
+        throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
+      }
+      if (
+        snapshot.group.revision > 0 &&
+        snapshot.group.publishedRevision >= snapshot.group.revision
+      ) {
+        return snapshot.group
+      }
+      if (!this.publisher) {
+        throw new DomainError(
+          'ACCESS_GROUP_PUBLISHER_UNAVAILABLE',
+          503,
+          '当前进程未配置用户组发布能力',
+        )
+      }
+      const rendered = renderAccessGroup(snapshot.group, snapshot.usernames)
+      await this.publisher.publish({
+        environmentId: snapshot.group.environmentId,
+        group: 'LLM-SERVER',
+        dataId: rendered.dataId,
+        content: rendered.content,
+        expectedMd5: rendered.md5,
+      })
+      return this.store.markGroupPublished({
+        groupId: snapshot.group.id,
+        revision: snapshot.group.revision,
+        now: this.clock.now().toISOString(),
+      })
+    })
   }
 
   getPublishedMembershipGroupIds(input: { groupIds: string[]; userId: string }): Promise<string[]> {
@@ -418,6 +457,7 @@ export class ModelAccessService implements ModelAccessDirectory {
     let auditPayload: Record<string, unknown>
     try {
       const result = await this.publisher.publish({
+        environmentId: publication.environmentId,
         group: 'LLM-SERVER',
         dataId: publication.dataId,
         content: publication.targetContent,

@@ -1,4 +1,4 @@
-import { Box, Filter, Plus, Search } from 'lucide-react'
+import { Box, CloudUpload, Filter, Plus, Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import {
@@ -13,12 +13,14 @@ export function ModelMarketplacePage({
   admin,
   onOpen,
   onCreate,
+  onOpenReleases,
   onError,
 }: {
   environmentId: string
   admin: boolean
   onOpen: (modelId: string) => void
   onCreate: () => void
+  onOpenReleases: () => void
   onError: (message: string) => void
 }) {
   const [models, setModels] = useState<Array<MarketplaceModelSummary | AvailableModelSummary>>([])
@@ -64,9 +66,14 @@ export function ModelMarketplacePage({
           </p>
         </div>
         {admin && (
-          <button className="primary-button" type="button" onClick={onCreate}>
-            <Plus size={16} /> 新增模型
-          </button>
+          <div className="page-header-actions">
+            <button className="secondary-button" type="button" onClick={onOpenReleases}>
+              <CloudUpload size={16} /> 查看发布差异
+            </button>
+            <button className="primary-button" type="button" onClick={onCreate}>
+              <Plus size={16} /> 新增模型
+            </button>
+          </div>
         )}
       </header>
       <section className="marketplace-boundary" aria-label="状态边界说明">

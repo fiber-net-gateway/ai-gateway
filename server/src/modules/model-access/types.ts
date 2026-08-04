@@ -92,6 +92,14 @@ export interface ModelAccessStore {
     now: string
   }): Promise<ProviderAccessGroupRecord>
   getGroupsByIds(ids: string[]): Promise<ProviderAccessGroupRecord[]>
+  getGroupSnapshot(
+    groupId: string,
+  ): Promise<{ group: ProviderAccessGroupRecord; usernames: string[] } | null>
+  markGroupPublished(input: {
+    groupId: string
+    revision: number
+    now: string
+  }): Promise<ProviderAccessGroupRecord>
   getPublishedMembershipGroupIds(input: { groupIds: string[]; userId: string }): Promise<string[]>
   isPublishedMember(input: { groupIds: string[]; userId: string }): Promise<boolean>
   createRequest(input: {
@@ -157,6 +165,7 @@ export interface ModelAccessStore {
 
 export interface AccessGroupPublisher {
   publish(input: {
+    environmentId: string
     group: 'LLM-SERVER'
     dataId: string
     content: string
@@ -172,6 +181,10 @@ export interface ModelAccessDirectory {
     actorId: string
   }): Promise<ProviderAccessGroupRecord>
   getGroupsByIds(ids: string[]): Promise<ProviderAccessGroupRecord[]>
+  ensureGroupPublished(input: {
+    environmentId: string
+    groupId: string
+  }): Promise<ProviderAccessGroupRecord>
   getPublishedMembershipGroupIds(input: { groupIds: string[]; userId: string }): Promise<string[]>
   isPublishedMember(input: { groupIds: string[]; userId: string }): Promise<boolean>
 }

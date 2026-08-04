@@ -15,9 +15,9 @@
 - rnacos 写入状态与 `ai-server` 实例实际生效状态的分开展示；
 - 启动配置模板、实例健康、服务发现和配置快照状态。
 
-当前已实现第一阶段用户模块：普通用户与管理员角色、开发/OIDC 登录边界、服务端 Session、
-环境授权、ai-server 兼容的 BT1 Token 签发与短期加密交付、用户管理和审计页面。配置发布、
-rnacos 写入和 ai-server 实例生效证据仍属于后续配置与发布模块。
+当前已实现用户与 Token 管理、模型广场、Provider 访问组、不可变模型 Release，以及按
+Provider → models 顺序向 rnacos 发布并恢复的编排。Release 详情保留逐 Data ID 写入与回读
+证据；实例级生效证据和回滚执行仍是后续能力，因此当前明确显示为未知或不可用。
 
 ## 技术架构
 
@@ -43,8 +43,8 @@ flowchart LR
 - `ploto.ai-llm.provider.<provider-name>`
 - `ploto.ai-llm.user-group.<group-name>`
 
-rnacos 的写入成功只表示“已发布”，不能直接表示所有 `ai-server` 实例“已生效”。后续
-发布中心必须分别展示草稿、rnacos 写入和实例接受配置的状态。
+rnacos 的写入成功只表示“已发布”，不能直接表示所有 `ai-server` 实例“已生效”。发布中心
+分别展示草稿和 rnacos 写入状态，并在缺少实例证据时保持 `UNKNOWN`。
 
 ## 项目结构
 
@@ -132,7 +132,7 @@ MYSQL_DATABASE=ai_server_console
 复制 `server/.env.example` 后可配置以下连接：
 
 - `MYSQL_*`：控制台数据库；
-- `RNACOS_*`：rnacos 地址、namespace、tenant、认证信息和配置 group；
+- `RNACOS_*`：rnacos 地址、绑定环境、namespace、tenant、认证信息和固定配置 group；
 - `AI_SERVER_BASE_URL`：目标 `ai-server` 管理地址；
 - `AUTH_MODE`、`OIDC_*`：本地开发认证或企业 OIDC + PKCE；
 - `APP_ENCRYPTION_KEY`：Token 短期交付与本地 secret 封装密钥；

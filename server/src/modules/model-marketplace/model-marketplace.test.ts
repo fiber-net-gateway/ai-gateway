@@ -1,12 +1,64 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import { buildApp } from '../../app.js'
 import { ValueCipher } from '../users/crypto.js'
+import type { MarketplaceConfigPublisher, RnacosConfigRead } from '../rnacos/config-client.js'
 import { MemoryMarketplaceSecretService } from './secret-service.js'
 import { renderModelsResource, renderProviderResources } from './renderer.js'
 import type { MarketplaceVersionRecord, ModelMutationInput } from './types.js'
+
+class FakeMarketplacePublisher implements MarketplaceConfigPublisher {
+  readonly writes: Array<{ dataId: string; md5: string }> = []
+  private readonly configs = new Map<string, string>()
+
+  target() {
+    return {
+      environmentId: '00000000-0000-4000-8000-000000000001',
+      namespaceId: 'public',
+      tenant: '',
+      group: 'LLM-SERVER' as const,
+    }
+  }
+
+  seed(dataId: string, content: string): void {
+    this.configs.set(dataId, content)
+  }
+
+  async read(input: {
+    environmentId: string
+    group: 'LLM-SERVER'
+    dataId: string
+  }): Promise<RnacosConfigRead> {
+    assert.equal(input.environmentId, this.target().environmentId)
+    const content = this.configs.get(input.dataId)
+    return content === undefined
+      ? { state: 'NOT_FOUND', content: null, md5: null }
+      : { state: 'PRESENT', content, md5: md5(content) }
+  }
+
+  async publish(input: {
+    environmentId: string
+    group: 'LLM-SERVER'
+    dataId: string
+    content: string
+    expectedMd5: string
+    expectedOldMd5: string | null
+  }): Promise<{ readbackMd5: string }> {
+    const current = await this.read(input)
+    assert.equal(current.md5, input.expectedOldMd5)
+    assert.equal(md5(input.content), input.expectedMd5)
+    this.configs.set(input.dataId, input.content)
+    this.writes.push({ dataId: input.dataId, md5: input.expectedMd5 })
+    return { readbackMd5: input.expectedMd5 }
+  }
+}
+
+function md5(content: string): string {
+  return createHash('md5').update(content, 'utf8').digest('hex')
+}
 
 function cookieHeader(value: string | string[] | undefined): string {
   const values = Array.isArray(value) ? value : value ? [value] : []
@@ -65,7 +117,8 @@ function mutation(secret: string): ModelMutationInput {
 }
 
 test('model marketplace keeps draft, publication, activation and secrets separate', async (context) => {
-  const app = buildApp()
+  const publisher = new FakeMarketplacePublisher()
+  const app = buildApp({ marketplacePublisher: publisher })
   context.after(() => app.close())
 
   const login = await app.inject({
@@ -273,6 +326,62 @@ test('model marketplace keeps draft, publication, activation and secrets separat
       { dataId: 'ploto.ai-llm.models', state: 'PENDING' },
     ],
   )
+  const releaseId = submitted.json().release.id as string
+  const releases = await app.inject({
+    method: 'GET',
+    url: `/api/environments/${environmentId}/releases`,
+    headers: { cookie },
+  })
+  assert.equal(releases.statusCode, 200, releases.body)
+  assert.equal(releases.json().items[0].id, releaseId)
+
+  const executed = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/releases/${releaseId}/execute`,
+    headers: { cookie, 'x-csrf-token': csrf },
+  })
+  assert.equal(executed.statusCode, 202, executed.body)
+  assert.equal(executed.json().state, 'PUBLISHING')
+  assert.equal(executed.body.includes(marker), false)
+  assert.equal(executed.body.includes('REPLACEMENT_SECRET_MUST_NOT_LEAK_12'), false)
+
+  let releaseDetail
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    releaseDetail = await app.inject({
+      method: 'GET',
+      url: `/api/environments/${environmentId}/releases/${releaseId}`,
+      headers: { cookie },
+    })
+    if (releaseDetail.json().state !== 'PUBLISHING') break
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  assert.ok(releaseDetail)
+  assert.equal(releaseDetail.statusCode, 200, releaseDetail.body)
+  assert.equal(releaseDetail.json().state, 'COMPLETED')
+  assert.equal(releaseDetail.json().publicationState, 'PUBLISHED')
+  assert.equal(releaseDetail.json().activationState, 'UNKNOWN')
+  assert.deepEqual(
+    publisher.writes.map((write) => write.dataId),
+    [`ploto.ai-llm.provider.${providerName}`, 'ploto.ai-llm.models'],
+  )
+  assert.ok(
+    releaseDetail
+      .json()
+      .resources.every(
+        (resource: { state: string; newMd5: string | null }) =>
+          resource.state === 'PUBLISHED' && Boolean(resource.newMd5),
+      ),
+  )
+
+  const available = await app.inject({
+    method: 'GET',
+    url: `/api/environments/${environmentId}/models?view=available`,
+    headers: { cookie },
+  })
+  assert.equal(available.statusCode, 200)
+  assert.equal(available.json().items[0].logicalModelName, 'chat-pro')
+  assert.equal(available.json().items[0].activationState, 'UNKNOWN')
+  assert.equal(available.body.includes(marker), false)
 
   const audit = await app.inject({
     method: 'GET',
@@ -287,6 +396,13 @@ test('model marketplace keeps draft, publication, activation and secrets separat
       .json()
       .items.some(
         (event: { eventType: string }) => event.eventType === 'marketplace.model.created',
+      ),
+  )
+  assert.ok(
+    audit
+      .json()
+      .items.some(
+        (event: { eventType: string }) => event.eventType === 'marketplace.release.published',
       ),
   )
 })
@@ -314,6 +430,152 @@ test('available view never exposes administrator provider metadata', async (cont
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.json(), { items: [], nextCursor: null })
   assert.equal(response.body.includes('provider'), false)
+})
+
+test('release preflight stops every write when a later Data ID has drifted', async (context) => {
+  const publisher = new FakeMarketplacePublisher()
+  publisher.seed('ploto.ai-llm.models', '{"version":1,"data":["external-change"]}')
+  const app = buildApp({ marketplacePublisher: publisher })
+  context.after(() => app.close())
+  const login = await app.inject({
+    method: 'POST',
+    url: '/api/auth/development-login',
+    payload: { username: 'admin' },
+  })
+  const cookie = cookieHeader(login.headers['set-cookie'])
+  const csrf = cookieValue(cookie, 'fg_csrf')
+  const environments = await app.inject({
+    method: 'GET',
+    url: '/api/me/environments',
+    headers: { cookie },
+  })
+  const environmentId = environments.json().items[0].environment.id as string
+  const list = await app.inject({
+    method: 'GET',
+    url: `/api/environments/${environmentId}/models?view=admin`,
+    headers: { cookie },
+  })
+  const draftId = list.json().draft.id as string
+  const created = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/drafts/${draftId}/models`,
+    headers: {
+      cookie,
+      'x-csrf-token': csrf,
+      'idempotency-key': 'release-drift-model-create',
+      'if-match': '"1"',
+    },
+    payload: mutation('DRIFT_TEST_SECRET_MUST_NOT_LEAK'),
+  })
+  assert.equal(created.statusCode, 201, created.body)
+  const submitted = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/drafts/${draftId}/submit`,
+    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"2"' },
+  })
+  const releaseId = submitted.json().release.id as string
+  const executed = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/releases/${releaseId}/execute`,
+    headers: { cookie, 'x-csrf-token': csrf },
+  })
+  assert.equal(executed.statusCode, 202, executed.body)
+
+  let detail
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    detail = await app.inject({
+      method: 'GET',
+      url: `/api/environments/${environmentId}/releases/${releaseId}`,
+      headers: { cookie },
+    })
+    if (detail.json().state !== 'PUBLISHING') break
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  assert.equal(detail?.json().state, 'FAILED')
+  assert.equal(detail?.json().publicationState, 'DRIFTED')
+  assert.equal(publisher.writes.length, 0)
+  assert.equal(
+    detail?.json().resources.find((resource: { kind: string }) => resource.kind === 'MODELS')
+      .errorCode,
+    'RELEASE_DRIFTED',
+  )
+  assert.equal(detail?.body.includes('DRIFT_TEST_SECRET_MUST_NOT_LEAK'), false)
+})
+
+test('approval-required model publishes its empty access group before Provider resources', async (context) => {
+  const publisher = new FakeMarketplacePublisher()
+  const app = buildApp({
+    marketplacePublisher: publisher,
+    accessGroupPublisher: {
+      publish: (input) => publisher.publish({ ...input, expectedOldMd5: null }),
+    },
+  })
+  context.after(() => app.close())
+  const login = await app.inject({
+    method: 'POST',
+    url: '/api/auth/development-login',
+    payload: { username: 'admin' },
+  })
+  const cookie = cookieHeader(login.headers['set-cookie'])
+  const csrf = cookieValue(cookie, 'fg_csrf')
+  const environments = await app.inject({
+    method: 'GET',
+    url: '/api/me/environments',
+    headers: { cookie },
+  })
+  const environmentId = environments.json().items[0].environment.id as string
+  const list = await app.inject({
+    method: 'GET',
+    url: `/api/environments/${environmentId}/models?view=admin`,
+    headers: { cookie },
+  })
+  const draftId = list.json().draft.id as string
+  const model = mutation('ACCESS_GROUP_SECRET_MUST_NOT_LEAK')
+  model.accessMode = 'APPROVAL_REQUIRED'
+  const created = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/drafts/${draftId}/models`,
+    headers: {
+      cookie,
+      'x-csrf-token': csrf,
+      'idempotency-key': 'approval-model-create-0001',
+      'if-match': '"1"',
+    },
+    payload: model,
+  })
+  assert.equal(created.statusCode, 201, created.body)
+  const providerName = created.json().providers[0].providerName as string
+  const submitted = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/drafts/${draftId}/submit`,
+    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"2"' },
+  })
+  const releaseId = submitted.json().release.id as string
+  const executed = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/releases/${releaseId}/execute`,
+    headers: { cookie, 'x-csrf-token': csrf },
+  })
+  assert.equal(executed.statusCode, 202, executed.body)
+
+  let detail
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    detail = await app.inject({
+      method: 'GET',
+      url: `/api/environments/${environmentId}/releases/${releaseId}`,
+      headers: { cookie },
+    })
+    if (detail.json().state !== 'PUBLISHING') break
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  assert.equal(detail?.json().state, 'COMPLETED')
+  assert.equal(detail?.json().groupDependencies[0].state, 'READY')
+  assert.equal(publisher.writes[0].dataId.startsWith('ploto.ai-llm.user-group.'), true)
+  assert.deepEqual(
+    publisher.writes.slice(1).map((write) => write.dataId),
+    [`ploto.ai-llm.provider.${providerName}`, 'ploto.ai-llm.models'],
+  )
+  assert.equal(detail?.body.includes('ACCESS_GROUP_SECRET_MUST_NOT_LEAK'), false)
 })
 
 test('renderer uses fixed Data IDs, deterministic ordering and exact uint64 JSON integers', async () => {

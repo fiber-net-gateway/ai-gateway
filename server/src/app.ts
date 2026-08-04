@@ -14,6 +14,7 @@ import type {
   MarketplaceSecretService,
   MarketplaceStore,
 } from './modules/model-marketplace/types.js'
+import type { MarketplaceConfigPublisher } from './modules/rnacos/config-client.js'
 import {
   type Clock,
   type RandomSource,
@@ -34,6 +35,7 @@ export interface BuildAppOptions {
   marketplaceSecrets?: MarketplaceSecretService
   modelAccessStore?: ModelAccessStore
   accessGroupPublisher?: AccessGroupPublisher | null
+  marketplacePublisher?: MarketplaceConfigPublisher | null
   clock?: Clock
   random?: RandomSource
   closeInfrastructure?: () => Promise<void>
@@ -111,15 +113,18 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     random,
     config.security.encryptionKey,
     modelAccess,
+    options.marketplacePublisher ?? null,
   )
 
   app.addHook('onReady', async () => {
     await store.bootstrap(createBootstrapInput(config, clock.now()))
+    await marketplace.resumePublishingReleases()
   })
 
-  if (options.closeInfrastructure) {
-    app.addHook('onClose', options.closeInfrastructure)
-  }
+  app.addHook('onClose', async () => {
+    await marketplace.shutdown()
+    await options.closeInfrastructure?.()
+  })
 
   app.get(
     '/api/hello',

@@ -14,6 +14,8 @@ import type {
   MarketplaceVersionRecord,
   ProtocolCoverage,
   PublicationState,
+  ReleaseResourceState,
+  ReleaseWorkflowState,
 } from './types.js'
 import { protocolCoverage, validateModelGraph } from './validation.js'
 
@@ -38,11 +40,15 @@ interface ReleaseRow extends RowDataPacket {
   environment_id: string
   version_id: string
   release_number: string | number
-  workflow_state: 'PENDING'
+  workflow_state: ReleaseWorkflowState
   publication_state: PublicationState
   activation_state: ActivationState
+  revision: string | number
   created_by: string
   created_at: Date
+  started_at: Date | null
+  finished_at: Date | null
+  updated_at: Date
 }
 
 interface ReleaseResourceRow extends RowDataPacket {
@@ -51,7 +57,17 @@ interface ReleaseResourceRow extends RowDataPacket {
   group_name: 'LLM-SERVER'
   data_id: string
   dependency_order: number
-  resource_state: 'PENDING'
+  resource_state: ReleaseResourceState
+  old_safe_digest: string | null
+  new_safe_digest: string | null
+  old_md5: string | null
+  new_md5: string | null
+  content_bytes: string | number | null
+  error_code: string | null
+  safe_error_message: string | null
+  retry_count: string | number
+  started_at: Date | null
+  finished_at: Date | null
 }
 
 interface ModelIdentityRow extends RowDataPacket {
@@ -220,13 +236,26 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
           resources: await this.loadReleaseResources(releaseRows[0].id),
         }
       : null
-    const publishedVersion =
-      releaseRows[0] && releaseRows[0].publication_state === 'PUBLISHED'
-        ? await this.loadVersion(releaseRows[0].version_id)
-        : null
+    const [publishedRows] = await this.pool.query<ReleaseRow[]>(
+      `${releaseSelect}
+       WHERE environment_id = UUID_TO_BIN(?) AND publication_state = 'PUBLISHED'
+       ORDER BY finished_at DESC, created_at DESC, id DESC
+       LIMIT 1`,
+      [environmentId],
+    )
+    const publishedRelease = publishedRows[0]
+      ? {
+          ...releaseFromRow(publishedRows[0]),
+          resources: await this.loadReleaseResources(publishedRows[0].id),
+        }
+      : null
+    const publishedVersion = publishedRows[0]
+      ? await this.loadVersion(publishedRows[0].version_id)
+      : null
     return {
       draft: await this.loadVersionRow(draftRows[0]),
       publishedVersion,
+      publishedRelease,
       latestRelease,
       publicationState: releaseRows[0]?.publication_state ?? 'NEVER',
       activationState: releaseRows[0]?.activation_state ?? 'UNKNOWN',
@@ -294,12 +323,36 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
     if (!environment) throw new DomainError('DRAFT_NOT_FOUND', 404, '环境草稿不存在')
     const frozenId = randomUUID()
     const releaseId = randomUUID()
-    const releaseNumber = (environment.latestRelease?.releaseNumber ?? 0) + 1
+    let releaseNumber = 1
     const releaseResources = resourcesForVersion(environment.draft)
     const connection = await this.pool.getConnection()
     try {
       await connection.beginTransaction()
       await this.lockDraft(connection, environment.draft.id, input.expectedRevision)
+      const [activeRows] = await connection.query<ReleaseRow[]>(
+        `${releaseSelect}
+         WHERE environment_id = UUID_TO_BIN(?) AND workflow_state IN ('PENDING', 'PUBLISHING')
+         ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`,
+        [input.environmentId],
+      )
+      if (activeRows[0]) {
+        throw new DomainError(
+          'ACTIVE_RELEASE_EXISTS',
+          409,
+          '当前环境已有待执行或执行中的 Release',
+          {
+            releaseId: activeRows[0].id,
+            releaseNumber: integer(activeRows[0].release_number),
+          },
+        )
+      }
+      const [latestRows] = await connection.query<ReleaseRow[]>(
+        `${releaseSelect}
+         WHERE environment_id = UUID_TO_BIN(?)
+         ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`,
+        [input.environmentId],
+      )
+      releaseNumber = (latestRows[0] ? integer(latestRows[0].release_number) : 0) + 1
       await connection.query(
         `INSERT INTO configuration_versions
           (id, environment_id, version_kind, version_state, base_release_version_id,
@@ -329,10 +382,19 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
       await connection.query(
         `INSERT INTO marketplace_releases
           (id, environment_id, version_id, release_number, workflow_state,
-           publication_state, activation_state, created_by, created_at)
+           publication_state, activation_state, revision, created_by, created_at,
+           started_at, finished_at, updated_at)
          VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), UUID_TO_BIN(?), ?, 'PENDING',
-                 'NEVER', 'UNKNOWN', UUID_TO_BIN(?), ?)`,
-        [releaseId, input.environmentId, frozenId, releaseNumber, input.actorId, input.now],
+                 'NEVER', 'UNKNOWN', 1, UUID_TO_BIN(?), ?, NULL, NULL, ?)`,
+        [
+          releaseId,
+          input.environmentId,
+          frozenId,
+          releaseNumber,
+          input.actorId,
+          input.now,
+          input.now,
+        ],
       )
       for (const resource of releaseResources) {
         await connection.query(
@@ -352,12 +414,13 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
           ],
         )
       }
-      await connection.query(
+      const [draftUpdate] = await connection.query<ResultSetHeader>(
         `UPDATE configuration_versions
-         SET base_release_version_id = UUID_TO_BIN(?), revision = revision + 1, updated_at = ?
+         SET revision = revision + 1, updated_at = ?
          WHERE id = UUID_TO_BIN(?) AND revision = ? AND version_state = 'OPEN'`,
-        [frozenId, input.now, environment.draft.id, input.expectedRevision],
+        [input.now, environment.draft.id, input.expectedRevision],
       )
+      if (draftUpdate.affectedRows !== 1) throw revisionConflict(input.expectedRevision)
       await connection.commit()
     } catch (error) {
       await connection.rollback()
@@ -376,10 +439,204 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
         versionId: frozenId,
         releaseNumber,
         state: 'PENDING',
+        publicationState: 'NEVER',
+        activationState: 'UNKNOWN',
+        revision: 1,
         createdBy: input.actorId,
         createdAt: input.now,
+        startedAt: null,
+        finishedAt: null,
+        updatedAt: input.now,
         resources: releaseResources,
       },
+    }
+  }
+
+  async getVersion(versionId: string): Promise<MarketplaceVersionRecord> {
+    return this.loadVersion(versionId)
+  }
+
+  async getRelease(
+    environmentId: string,
+    releaseId: string,
+  ): Promise<MarketplaceReleaseRecord | null> {
+    const [rows] = await this.pool.query<ReleaseRow[]>(
+      `${releaseSelect}
+       WHERE id = UUID_TO_BIN(?) AND environment_id = UUID_TO_BIN(?) LIMIT 1`,
+      [releaseId, environmentId],
+    )
+    if (!rows[0]) return null
+    return {
+      ...releaseFromRow(rows[0]),
+      resources: await this.loadReleaseResources(releaseId),
+    }
+  }
+
+  async listReleases(environmentId: string, limit: number): Promise<MarketplaceReleaseRecord[]> {
+    const [rows] = await this.pool.query<ReleaseRow[]>(
+      `${releaseSelect}
+       WHERE environment_id = UUID_TO_BIN(?)
+       ORDER BY created_at DESC, id DESC LIMIT ?`,
+      [environmentId, limit],
+    )
+    const releases: MarketplaceReleaseRecord[] = []
+    for (const row of rows) {
+      releases.push({ ...releaseFromRow(row), resources: await this.loadReleaseResources(row.id) })
+    }
+    return releases
+  }
+
+  async listPublishingReleases(): Promise<MarketplaceReleaseRecord[]> {
+    const [rows] = await this.pool.query<ReleaseRow[]>(
+      `${releaseSelect} WHERE workflow_state = 'PUBLISHING' ORDER BY created_at, id`,
+    )
+    const releases: MarketplaceReleaseRecord[] = []
+    for (const row of rows) {
+      releases.push({ ...releaseFromRow(row), resources: await this.loadReleaseResources(row.id) })
+    }
+    return releases
+  }
+
+  async acquireReleaseLock(environmentId: string): Promise<() => Promise<void>> {
+    const connection = await this.pool.getConnection()
+    const lockName = `ai-console:release:${environmentId}`
+    try {
+      const [rows] = await connection.query<Array<RowDataPacket & { acquired: number }>>(
+        'SELECT GET_LOCK(?, 15) AS acquired',
+        [lockName],
+      )
+      if (Number(rows[0]?.acquired) !== 1) {
+        throw new DomainError('RELEASE_LOCK_TIMEOUT', 503, '等待环境发布锁超时')
+      }
+    } catch (error) {
+      connection.release()
+      throw error
+    }
+    return async () => {
+      try {
+        await connection.query('SELECT RELEASE_LOCK(?) AS released', [lockName])
+      } finally {
+        connection.release()
+      }
+    }
+  }
+
+  async startRelease(input: { releaseId: string; now: string }): Promise<MarketplaceReleaseRecord> {
+    const [result] = await this.pool.query<ResultSetHeader>(
+      `UPDATE marketplace_releases
+          SET workflow_state = 'PUBLISHING', started_at = COALESCE(started_at, ?),
+              finished_at = NULL, revision = revision + 1, updated_at = ?
+        WHERE id = UUID_TO_BIN(?) AND workflow_state IN ('PENDING', 'FAILED')`,
+      [input.now, input.now, input.releaseId],
+    )
+    if (result.affectedRows !== 1) {
+      throw new DomainError('RELEASE_EXECUTION_NOT_ALLOWED', 409, '当前 Release 状态不能执行')
+    }
+    return this.requireReleaseById(input.releaseId)
+  }
+
+  async updateReleaseResource(input: {
+    releaseId: string
+    resourceId: string
+    state: ReleaseResourceState
+    oldSafeDigest?: string | null
+    newSafeDigest?: string | null
+    oldMd5?: string | null
+    newMd5?: string | null
+    contentBytes?: number | null
+    errorCode?: string | null
+    safeErrorMessage?: string | null
+    incrementRetry?: boolean
+    now: string
+  }): Promise<void> {
+    const [rows] = await this.pool.query<ReleaseResourceRow[]>(
+      `${releaseResourceSelect}
+       WHERE id = UUID_TO_BIN(?) AND release_id = UUID_TO_BIN(?) LIMIT 1`,
+      [input.resourceId, input.releaseId],
+    )
+    if (!rows[0]) throw new DomainError('RELEASE_RESOURCE_NOT_FOUND', 404, '发布资源不存在')
+    const current = resourceFromRow(rows[0])
+    const terminal =
+      input.state === 'PUBLISHED' || input.state === 'FAILED' || input.state === 'SKIPPED'
+    await this.pool.query(
+      `UPDATE marketplace_release_resources
+          SET resource_state = ?, old_safe_digest = ?, new_safe_digest = ?, old_md5 = ?,
+              new_md5 = ?, content_bytes = ?, error_code = ?, safe_error_message = ?,
+              retry_count = ?, started_at = ?, finished_at = ?
+        WHERE id = UUID_TO_BIN(?) AND release_id = UUID_TO_BIN(?)`,
+      [
+        input.state,
+        input.oldSafeDigest === undefined ? current.oldSafeDigest : input.oldSafeDigest,
+        input.newSafeDigest === undefined ? current.newSafeDigest : input.newSafeDigest,
+        input.oldMd5 === undefined ? current.oldMd5 : input.oldMd5,
+        input.newMd5 === undefined ? current.newMd5 : input.newMd5,
+        input.contentBytes === undefined ? current.contentBytes : input.contentBytes,
+        input.errorCode === undefined ? current.errorCode : input.errorCode,
+        input.safeErrorMessage === undefined ? current.safeErrorMessage : input.safeErrorMessage,
+        current.retryCount + (input.incrementRetry ? 1 : 0),
+        input.state === 'WRITING' ? (current.startedAt ?? input.now) : current.startedAt,
+        input.state === 'WRITING' ? null : terminal ? input.now : current.finishedAt,
+        input.resourceId,
+        input.releaseId,
+      ],
+    )
+    await this.pool.query(
+      `UPDATE marketplace_releases SET revision = revision + 1, updated_at = ?
+        WHERE id = UUID_TO_BIN(?)`,
+      [input.now, input.releaseId],
+    )
+  }
+
+  async finishRelease(input: {
+    releaseId: string
+    workflowState: 'COMPLETED' | 'FAILED'
+    publicationState: PublicationState
+    now: string
+  }): Promise<MarketplaceReleaseRecord> {
+    const connection = await this.pool.getConnection()
+    try {
+      await connection.beginTransaction()
+      const [rows] = await connection.query<ReleaseRow[]>(
+        `${releaseSelect} WHERE id = UUID_TO_BIN(?) LIMIT 1 FOR UPDATE`,
+        [input.releaseId],
+      )
+      const release = rows[0]
+      if (!release) throw new DomainError('RELEASE_NOT_FOUND', 404, 'Release 不存在')
+      await connection.query(
+        `UPDATE marketplace_releases
+            SET workflow_state = ?, publication_state = ?, finished_at = ?,
+                revision = revision + 1, updated_at = ?
+          WHERE id = UUID_TO_BIN(?)`,
+        [input.workflowState, input.publicationState, input.now, input.now, input.releaseId],
+      )
+      if (input.workflowState === 'COMPLETED' && input.publicationState === 'PUBLISHED') {
+        await connection.query(
+          `UPDATE configuration_versions
+              SET base_release_version_id = UUID_TO_BIN(?), revision = revision + 1, updated_at = ?
+            WHERE environment_id = UUID_TO_BIN(?) AND version_kind = 'DRAFT'
+              AND version_state = 'OPEN'`,
+          [release.version_id, input.now, release.environment_id],
+        )
+      }
+      await connection.commit()
+    } catch (error) {
+      await connection.rollback()
+      throw error
+    } finally {
+      connection.release()
+    }
+    return this.requireReleaseById(input.releaseId)
+  }
+
+  private async requireReleaseById(releaseId: string): Promise<MarketplaceReleaseRecord> {
+    const [rows] = await this.pool.query<ReleaseRow[]>(
+      `${releaseSelect} WHERE id = UUID_TO_BIN(?) LIMIT 1`,
+      [releaseId],
+    )
+    if (!rows[0]) throw new DomainError('RELEASE_NOT_FOUND', 404, 'Release 不存在')
+    return {
+      ...releaseFromRow(rows[0]),
+      resources: await this.loadReleaseResources(releaseId),
     }
   }
 
@@ -407,21 +664,12 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
     releaseId: string,
   ): Promise<MarketplaceReleaseResourceRecord[]> {
     const [rows] = await this.pool.query<ReleaseResourceRow[]>(
-      `SELECT BIN_TO_UUID(id) AS id, resource_kind, group_name, data_id,
-              dependency_order, resource_state
-       FROM marketplace_release_resources
+      `${releaseResourceSelect}
        WHERE release_id = UUID_TO_BIN(?)
        ORDER BY dependency_order, id`,
       [releaseId],
     )
-    return rows.map((row) => ({
-      id: row.id,
-      kind: row.resource_kind,
-      group: row.group_name,
-      dataId: row.data_id,
-      dependencyOrder: row.dependency_order,
-      state: row.resource_state,
-    }))
+    return rows.map(resourceFromRow)
   }
 
   private async loadVersion(versionId: string): Promise<MarketplaceVersionRecord> {
@@ -541,8 +789,14 @@ const versionSelect = `SELECT BIN_TO_UUID(id) AS id, BIN_TO_UUID(environment_id)
 
 const releaseSelect = `SELECT BIN_TO_UUID(id) AS id, BIN_TO_UUID(environment_id) AS environment_id,
   BIN_TO_UUID(version_id) AS version_id, release_number, workflow_state,
-  publication_state, activation_state, BIN_TO_UUID(created_by) AS created_by, created_at
+  publication_state, activation_state, revision, BIN_TO_UUID(created_by) AS created_by,
+  created_at, started_at, finished_at, updated_at
   FROM marketplace_releases`
+
+const releaseResourceSelect = `SELECT BIN_TO_UUID(id) AS id, resource_kind, group_name, data_id,
+  dependency_order, resource_state, old_safe_digest, new_safe_digest, old_md5, new_md5,
+  content_bytes, error_code, safe_error_message, retry_count, started_at, finished_at
+  FROM marketplace_release_resources`
 
 function releaseFromRow(row: ReleaseRow): MarketplaceReleaseRecord {
   return {
@@ -551,49 +805,82 @@ function releaseFromRow(row: ReleaseRow): MarketplaceReleaseRecord {
     versionId: row.version_id,
     releaseNumber: integer(row.release_number),
     state: row.workflow_state,
+    publicationState: row.publication_state,
+    activationState: row.activation_state,
+    revision: integer(row.revision),
     createdBy: row.created_by,
     createdAt: row.created_at.toISOString(),
+    startedAt: iso(row.started_at),
+    finishedAt: iso(row.finished_at),
+    updatedAt: row.updated_at.toISOString(),
     resources: [],
+  }
+}
+
+function resourceFromRow(row: ReleaseResourceRow): MarketplaceReleaseResourceRecord {
+  return {
+    id: row.id,
+    kind: row.resource_kind,
+    group: row.group_name,
+    dataId: row.data_id,
+    dependencyOrder: row.dependency_order,
+    state: row.resource_state,
+    oldSafeDigest: row.old_safe_digest,
+    newSafeDigest: row.new_safe_digest,
+    oldMd5: row.old_md5,
+    newMd5: row.new_md5,
+    contentBytes: row.content_bytes === null ? null : integer(row.content_bytes),
+    errorCode: row.error_code,
+    safeErrorMessage: row.safe_error_message,
+    retryCount: integer(row.retry_count),
+    startedAt: iso(row.started_at),
+    finishedAt: iso(row.finished_at),
   }
 }
 
 function resourcesForVersion(
   version: MarketplaceVersionRecord,
 ): MarketplaceReleaseResourceRecord[] {
-  const groupNames = [
-    ...new Set(version.models.flatMap((model) => model.allowUserGroups.map((group) => group.name))),
-  ].sort((left, right) => left.localeCompare(right, 'en'))
   const providerNames = [
     ...new Set(
       version.models.flatMap((model) => model.providers.map((provider) => provider.providerName)),
     ),
   ].sort((left, right) => left.localeCompare(right, 'en'))
   return [
-    ...groupNames.map((groupName, index) => ({
-      id: randomUUID(),
-      kind: 'USER_GROUP' as const,
-      group: 'LLM-SERVER' as const,
-      dataId: `ploto.ai-llm.user-group.${groupName}`,
-      dependencyOrder: index,
-      state: 'PENDING' as const,
-    })),
     ...providerNames.map((providerName, index) => ({
       id: randomUUID(),
       kind: 'PROVIDER' as const,
       group: 'LLM-SERVER' as const,
       dataId: `ploto.ai-llm.provider.${providerName}`,
-      dependencyOrder: groupNames.length + index,
+      dependencyOrder: index,
       state: 'PENDING' as const,
+      ...emptyResourceResult(),
     })),
     {
       id: randomUUID(),
       kind: 'MODELS',
       group: 'LLM-SERVER',
       dataId: 'ploto.ai-llm.models',
-      dependencyOrder: groupNames.length + providerNames.length,
+      dependencyOrder: providerNames.length,
       state: 'PENDING',
+      ...emptyResourceResult(),
     },
   ]
+}
+
+function emptyResourceResult() {
+  return {
+    oldSafeDigest: null,
+    newSafeDigest: null,
+    oldMd5: null,
+    newMd5: null,
+    contentBytes: null,
+    errorCode: null,
+    safeErrorMessage: null,
+    retryCount: 0,
+    startedAt: null,
+    finishedAt: null,
+  }
 }
 
 function assembleVersion(
@@ -964,4 +1251,4 @@ function revisionConflict(expectedRevision: number): DomainError {
   })
 }
 
-export const marketplaceRuntimeSql = [versionSelect, releaseSelect] as const
+export const marketplaceRuntimeSql = [versionSelect, releaseSelect, releaseResourceSelect] as const

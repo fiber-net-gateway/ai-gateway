@@ -130,6 +130,13 @@ model-name”在产品中统一显示为“供应商上游模型名”。
 
 ### 5.1 导航
 
+管理员导航在“模型配置”下包含“模型广场”和“发布中心”。模型广场编辑环境草稿；发布中心
+负责环境级 release 的冻结、风险确认、执行、失败恢复和历史查看。普通用户不显示发布中心。
+
+`ploto.ai-llm.models` 是环境级聚合资源，Provider 也可能被多个模型共享，因此不能从单个
+模型详情页制造“只发布当前模型”的认知。模型详情页只提供编辑和查看本模型变更的入口；
+环境级提交入口位于模型广场页头。
+
 ```text
 环境选择器
 └── 模型广场
@@ -372,11 +379,31 @@ Token 池不是简单轮询列表。ai-server 会基于 route key、Provider 名
 3. 等待目标 ai-server 实例报告接受结果。
 4. 在后续独立清理 release 中处理已无引用 Provider。
 
+用户组成员配置仍由模型访问模块拥有。模型 release 不自行拼接或覆盖用户组成员，只把当前
+冻结版本引用的用户组作为发布前依赖：组的数据库 revision 必须已经发布，且目标 Data ID
+必须存在。新建的空组由模型访问模块先发布空快照；依赖未满足时阻止 Provider 和 models
+写入，返回稳定错误码，不把缺失用户组留给 ai-server 被动发现。
+
 多个 Data ID 不构成事务。更新一个已被线上模型引用的 Provider 时，它可能在模型总表写入
 前就影响运行请求；发布确认页必须明确展示此风险。失败时逐项保留 `pending`、`writing`、
 `published`、`failed`、`skipped`，不能把部分成功压缩成一个布尔值。
 
-### 7.5 回滚
+发布执行是可恢复的后台任务。相同环境最多存在一个 `PENDING` 或 `PUBLISHING` release；
+刷新页面、API 超时或 worker 重启不得创建新 release。资源已经等于目标 MD5 时标记为
+`SKIPPED` 并继续；发生基线漂移时在任何写入前终止，状态为 `DRIFTED`。
+
+### 7.5 发布中心交互
+
+1. 管理员从模型广场点击“查看发布差异”，查看完整环境差异，而不是单模型差异。
+2. 确认页展示目标环境与 rnacos namespace、Provider/Models 资源顺序、用户组依赖、secret
+   可用性和已在线引用 Provider 的提前生效风险。
+3. “创建 Release”只冻结版本并创建资源步骤；成功后跳转 Release 详情页。
+4. “执行发布”单独触发后台编排，生产环境继续要求五分钟内的二次认证。
+5. 详情页刷新逐资源状态，失败后只允许“重试同一 Release”，不能用重复提交代替重试。
+6. rnacos 全部回读一致后显示“已发布 / 实例生效未知”；成功、提示、警告和错误使用不同
+   Toast 语义与视觉样式。
+
+### 7.6 回滚
 
 - 回滚从历史 release 的不可变内容创建新 release，不覆盖历史。
 - 回滚前重新验证当前环境、secret 可用性、rnacos MD5 和目标实例集合。
@@ -437,6 +464,9 @@ API 详细结构见设计文档，需求层约束如下：
 | `SHARED_PROVIDER_IMPACT_REQUIRED` | 共享 Provider 变更未确认影响范围     |
 | `REVISION_CONFLICT`               | ETag 与当前草稿 revision 不一致      |
 | `RELEASE_DRIFTED`                 | rnacos 当前 MD5 与发布基线不一致     |
+| `RNACOS_CAS_CONFLICT`             | 预检后到写入前 rnacos 再次发生漂移   |
+| `RNACOS_ENVIRONMENT_UNBOUND`      | 当前进程未绑定 Release 所属环境      |
+| `ACCESS_GROUP_PUBLICATION_FAILED` | 引用的 Provider 用户组空快照发布失败 |
 
 ## 10. 安全、隐私与审计
 

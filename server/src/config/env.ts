@@ -21,6 +21,7 @@ export interface MySqlConfig {
 }
 
 export interface RnacosConfig {
+  environmentId: string
   baseUrl: string
   namespaceId: string
   tenant: string
@@ -164,6 +165,10 @@ export function loadConfig(): AppConfig {
       connectionLimit: readInteger('MYSQL_CONNECTION_LIMIT', 10, 2, 100),
     },
     rnacos: {
+      environmentId: readString(
+        'RNACOS_ENVIRONMENT_ID',
+        readString('BOOTSTRAP_ENVIRONMENT_ID', '00000000-0000-4000-8000-000000000001'),
+      ),
       baseUrl: readHttpUrl('RNACOS_BASE_URL', 'http://127.0.0.1:8848'),
       namespaceId: readString('RNACOS_NAMESPACE_ID', 'public'),
       tenant: process.env.RNACOS_TENANT?.trim() ?? '',

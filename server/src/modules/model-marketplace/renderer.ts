@@ -34,50 +34,70 @@ export async function renderProviderResources(
   for (const provider of [...providers.values()].sort((left, right) =>
     left.providerName.localeCompare(right.providerName, 'en'),
   )) {
-    const tokens: Array<{ name: string; token: string }> = []
-    try {
-      for (const token of [...provider.tokens].sort((left, right) =>
-        left.name.localeCompare(right.name, 'en'),
-      )) {
-        const secret = await secrets.decryptForPublication({
-          environmentId: version.environmentId,
-          providerId: provider.id,
-          tokenId: token.id,
-          secretId: token.secretId,
-        })
-        try {
-          tokens.push({ name: token.name, token: Buffer.from(secret.bytes).toString('utf8') })
-        } finally {
-          secret.dispose()
-        }
-      }
-      const content = stringifyConfig({
-        version: version.schemaVersion,
-        data: {
-          provider: provider.providerName,
-          baseurl: provider.baseUrl.replace(/\/+$/u, ''),
-          'api-tokens': tokens,
-          protocol: [...provider.protocols]
-            .sort((left, right) => protocolOrder[left.type] - protocolOrder[right.type])
-            .map((protocol) => ({
-              type: protocolType[protocol.type],
-              path: protocol.path,
-              model: protocol.upstreamModelName,
-            })),
-        },
-      })
-      resources.push({
-        group: 'LLM-SERVER',
-        dataId: `ploto.ai-llm.provider.${provider.providerName}`,
-        content,
-        containsSecret: tokens.length > 0,
-      })
-    } finally {
-      for (const token of tokens) token.token = ''
-      tokens.length = 0
-    }
+    resources.push(await renderProvider(version, provider, secrets))
   }
   return resources
+}
+
+export async function renderProviderResource(
+  version: MarketplaceVersionRecord,
+  providerName: string,
+  secrets: MarketplaceSecretService,
+): Promise<RenderedResource> {
+  const provider = version.models
+    .flatMap((model) => model.providers)
+    .find((candidate) => candidate.providerName === providerName)
+  if (!provider) throw new Error(`frozen Provider is missing: ${providerName}`)
+  return renderProvider(version, provider, secrets)
+}
+
+async function renderProvider(
+  version: MarketplaceVersionRecord,
+  provider: MarketplaceModelRecord['providers'][number],
+  secrets: MarketplaceSecretService,
+): Promise<RenderedResource> {
+  const tokens: Array<{ name: string; token: string }> = []
+  try {
+    for (const token of [...provider.tokens].sort((left, right) =>
+      left.name.localeCompare(right.name, 'en'),
+    )) {
+      const secret = await secrets.decryptForPublication({
+        environmentId: version.environmentId,
+        providerId: provider.id,
+        tokenId: token.id,
+        secretId: token.secretId,
+      })
+      try {
+        tokens.push({ name: token.name, token: Buffer.from(secret.bytes).toString('utf8') })
+      } finally {
+        secret.dispose()
+      }
+    }
+    const content = stringifyConfig({
+      version: version.schemaVersion,
+      data: {
+        provider: provider.providerName,
+        baseurl: provider.baseUrl.replace(/\/+$/u, ''),
+        'api-tokens': tokens,
+        protocol: [...provider.protocols]
+          .sort((left, right) => protocolOrder[left.type] - protocolOrder[right.type])
+          .map((protocol) => ({
+            type: protocolType[protocol.type],
+            path: protocol.path,
+            model: protocol.upstreamModelName,
+          })),
+      },
+    })
+    return {
+      group: 'LLM-SERVER',
+      dataId: `ploto.ai-llm.provider.${provider.providerName}`,
+      content,
+      containsSecret: tokens.length > 0,
+    }
+  } finally {
+    for (const token of tokens) token.token = ''
+    tokens.length = 0
+  }
 }
 
 function renderModel(model: MarketplaceModelRecord) {
