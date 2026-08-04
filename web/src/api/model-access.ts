@@ -24,8 +24,6 @@ export interface AdminAccessRequest extends ApplicantAccessRequest {
   applicantUserId: string
   applicantUsername: string
   applicantDisplayName: string
-  providerId: string
-  providerName: string
   groupId: string
   groupName: string
   decidedBy: string | null

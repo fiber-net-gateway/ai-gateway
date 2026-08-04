@@ -12,9 +12,9 @@
 | 编写日期       | 2026-08-02                                                            |
 | ai-server 基线 | `fiber-gateway-cpp` commit `fdd8f122394757231713416e3d9a281dd1e14def` |
 
-本文细化“模型广场”功能。模型广场是控制台内的模型目录和配置入口，不是公开模型市场，也
-不是聊天页面。管理员在这里维护逻辑模型、供应商接入、协议映射和供应商凭据，通过既有草稿、
-审批、发布和实例生效确认流程交付给 ai-server；普通用户只查看自己可用的模型目录。
+本文细化“模型广场”和“Provider 管理”功能。两者共享环境草稿和 Release，但分别维护逻辑
+模型与供应商接入；它们不是公开模型市场或聊天页面。管理员通过既有草稿、审批、发布和实例
+生效确认流程把两类配置交付给 ai-server；普通用户只查看自己可用的模型目录。
 
 ## 2. 背景与目标
 
@@ -32,7 +32,8 @@
 ### 2.1 目标
 
 - 以卡片和详情页集中展示一个环境内可调用的模型。
-- 支持为模型配置一个或多个供应商接入，至少一个主供应商，可选 Fallback。
+- 独立维护 Provider 的 Base URL、协议映射、供应商上游模型名和 API Token 池。
+- 支持模型关联一个或多个已有 Provider，至少一个主供应商，可选 Fallback。
 - 每个供应商接入可同时支持 OpenAI Chat Completions 和 Anthropic Messages。
 - 每种协议独立配置供应商上游的 `model` 和请求路径。
 - 每个供应商接入维护一组 API Token，支持安全新增、轮换和删除。
@@ -130,8 +131,9 @@ model-name”在产品中统一显示为“供应商上游模型名”。
 
 ### 5.1 导航
 
-管理员导航在“模型配置”下包含“模型广场”和“发布中心”。模型广场编辑环境草稿；发布中心
-负责环境级 release 的冻结、风险确认、执行、失败恢复和历史查看。普通用户不显示发布中心。
+管理员导航在“模型配置”下包含“模型广场”“Provider 管理”和“发布中心”。前两者编辑同一
+环境草稿；发布中心负责环境级 release 的冻结、风险确认、执行、失败恢复和历史查看。普通
+用户不显示 Provider 管理和发布中心。
 
 `ploto.ai-llm.models` 是环境级聚合资源，Provider 也可能被多个模型共享，因此不能从单个
 模型详情页制造“只发布当前模型”的认知。模型详情页只提供编辑和查看本模型变更的入口；
@@ -149,18 +151,20 @@ model-name”在产品中统一显示为“供应商上游模型名”。
     │   ├── 草稿/发布/生效
     │   └── 审计
     └── 新增/编辑模型
+└── Provider 管理
+    ├── Provider 列表与引用模型
+    └── 新增/编辑 Provider、协议映射和 API Token
 ```
 
 ### 5.2 广场模型聚合边界
 
-首版支持以下两种供应商接入方式：
+Provider 是环境级独立主体，不归属于任何单个模型。Provider 管理页负责创建、编辑和归档；
+模型编辑器只能从当前环境的未归档 Provider 中建立 PRIMARY/FALLBACK 关联。修改 Provider
+时必须展示全部引用模型；仍被模型引用的 Provider 不允许归档。
 
-1. **新建专属接入**：在模型编辑器内创建，只被当前模型引用；这是默认方式。
-2. **绑定已有接入**：从当前环境已有 Provider 中选择；这是管理员高级功能。修改共享接入时
-   必须展示所有受影响模型。
-
-专属或共享只是控制台所有权语义。发布到 rnacos 后都表现为标准 Provider Data ID，ai-server
-不感知该差别。
+两类信息虽然分开维护，但保存在同一个 MySQL 环境草稿中，并在同一个不可变 Release 内按
+“用户组 → Provider → models”依赖顺序发布。界面不得制造“只发布当前 Provider”或“只发布
+当前模型”的认知。
 
 ## 6. 页面与交互需求
 
@@ -186,15 +190,16 @@ model-name”在产品中统一显示为“供应商上游模型名”。
 - cursor 分页；服务端使用白名单字段，不接受任意 SQL 排序片段。
 - 空状态区分“尚未配置模型”“筛选无结果”“无权访问任何模型”。
 
-### 6.2 新增模型向导
+### 6.2 新增模型编辑器
 
-向导分为五步，允许随时保存草稿：
+模型编辑器包含三组信息并允许保存草稿：
 
 1. **基本信息**：展示名称、逻辑模型名、说明和标签。
-2. **供应商接入**：供应商显示名称、Base URL、专属/共享方式、主/Fallback 角色。
-3. **协议映射**：选择 OpenAI、Anthropic 或两者，填写每项路径和供应商上游模型名。
-4. **API Token**：维护 Token 名和值，或明确选择无凭据调用。
-5. **访问与流量策略**：用户组、主 Provider 顺序、Fallback、负载均衡和可选限流。
+2. **Provider 关联**：从 Provider 管理中已有的接入选择主 Provider 和 Fallback，并维护顺序。
+3. **访问与流量策略**：访问模式、负载均衡和可选限流；需要审批时关联模型自己的授权组。
+
+模型编辑器不编辑 Base URL、协议映射或 Token。没有可选 Provider 时提供进入 Provider 管理
+的入口；创建 Provider 后再回到模型编辑器建立关联。
 
 完成页显示静态协议矩阵、生成的 Data ID、脱敏变更、风险和下一步。点击“保存草稿”只写
 MySQL，不得写 rnacos，也不得显示“已发布”。
@@ -211,21 +216,22 @@ MySQL，不得写 rnacos，也不得显示“已发布”。
 逻辑模型名重命名使用“复制为新模型 → 迁移调用方 → 发布 → 归档旧模型”，不得直接修改已发布
 模型身份。
 
-### 6.4 供应商接入
+### 6.4 Provider 管理与模型关联
 
-| 字段           | 必填 | 规则                                                          |
-| -------------- | ---- | ------------------------------------------------------------- |
-| 供应商显示名称 | 是   | 1..100 字符，仅用于控制台                                     |
-| Provider 标识  | 自动 | 1..128 字节，`[A-Za-z0-9_-]`，环境内唯一，与 Data ID 后缀一致 |
-| Base URL       | 是   | `http://`、`https://` 或 `service://`，保存时移除尾部 `/`     |
-| 路由角色       | 是   | `PRIMARY` 或 `FALLBACK`                                       |
-| 主供应商顺序   | 条件 | PRIMARY 内唯一非负整数；提供上移/下移按钮，不只支持拖拽       |
+| 字段           | 必填   | 规则                                                          |
+| -------------- | ------ | ------------------------------------------------------------- |
+| 供应商显示名称 | 是     | 1..100 字符，仅用于控制台                                     |
+| Provider 标识  | 自动   | 1..128 字节，`[A-Za-z0-9_-]`，环境内唯一，与 Data ID 后缀一致 |
+| Base URL       | 是     | `http://`、`https://` 或 `service://`，保存时移除尾部 `/`     |
+| 路由角色       | 关联时 | `PRIMARY` 或 `FALLBACK`                                       |
+| 主供应商顺序   | 关联时 | PRIMARY 内唯一非负整数；提供上移/下移按钮，不只支持拖拽       |
 
 一个模型必须至少有一个主供应商或一个 Fallback，推荐至少一个主供应商。最多一个 Fallback，
 Fallback 不能同时出现在主供应商列表。
 
-Provider 标识创建后不可原地修改。专属 Provider 默认使用稳定后端生成值，不能由展示名称
-实时派生，以免改名造成 Data ID 变化。
+Provider 标识创建后不可原地修改，由后端生成稳定值，不能由展示名称实时派生，以免改名造成
+Data ID 变化。Provider 列表显示引用模型数量和名称；被多个模型引用时，Base URL、协议或
+Token 的任何变更都要求确认完整影响范围。
 
 Base URL 规则与 ai-server 保持一致：
 
@@ -250,7 +256,7 @@ Base URL 规则与 ai-server 保持一致：
 - `path` 必须以 `/` 开头，不能为空，不允许控制字符；控制台上限 2,048 字节。
 - `upstreamModelName` 去除首尾空白后非空，控制台上限 512 字节。
 - 同时启用两种协议时，用户可以复制另一协议的上游模型名，但系统不假设两者一定相同。
-- 关闭协议会改变模型静态协议覆盖。若导致某种入口没有任何主或 Fallback 候选，必须警告；
+- 关闭协议会改变所有引用模型的静态协议覆盖。若导致某种入口没有任何主或 Fallback 候选，必须警告；
   两种入口均无候选时允许保存草稿但禁止发布。
 - 不显示 `openai-embedding` 选项；导入含该项的外部配置时仅以“不受模型广场管理”的只读
   兼容项展示，不能误报为可调用协议。
@@ -324,18 +330,17 @@ Token 池不是简单轮询列表。ai-server 会基于 route key、Provider 名
 - 草稿相对基线 release 的脱敏差异。
 - 生成的固定 group 与 Data ID。
 - 最近发布的逐资源结果和逐实例结果。
-- 共享 Provider 的反向引用模型。
+- Provider 的全部反向引用模型。
 
 差异中供应商 Token 只允许出现：新增名称、删除名称、同名替换、指纹后缀变化。任何序列化
 异常都必须 fail closed，不能退回展示原始请求或 rnacos 内容。
 
 ### 6.10 复制、归档和删除
 
-- 复制模型必须生成新的逻辑模型名和新的专属 Provider 标识；不得复制 Token 明文到浏览器。
-- 管理员可在后端明确选择“复用现有 secret 引用”，该动作要审计且只允许同环境。
+- 复制模型必须生成新的逻辑模型名并复用原模型的 Provider 关联；不得复制或读取 Token 明文。
 - 归档只是控制台目录状态，不等于从 rnacos 删除模型。
 - 删除已发布模型必须先创建从 `ploto.ai-llm.models` 移除该项的发布。
-- 不再被引用的 Provider 必须在后续独立清理发布中删除，避免多 Data ID 非事务变更扩大风险。
+- Provider 只有在没有模型引用时才能归档；归档后的 Data ID 清理由后续统一 Release 表达。
 - 历史 release、发布结果和审计记录不能随模型归档而删除。
 
 ## 7. 草稿、发布与生效需求
@@ -363,7 +368,7 @@ Token 池不是简单轮询列表。ai-server 会基于 route key、Provider 名
 
 1. **字段层**：名称、Base URL、协议路径、上游模型名、Token 动作和数值范围合法。
 2. **关系层**：Provider 引用存在，主/Fallback 不重复，Token 名唯一，协议类型唯一，用户组
-   存在，共享 Provider 环境一致。
+   存在，模型与 Provider 环境一致。
 3. **环境图层**：模型至少存在一个路由候选，两种协议覆盖符合发布策略，所有所需 secret
    可解析，Data ID 固定且无冲突，基线 revision/MD5 无漂移。
 
@@ -448,25 +453,27 @@ API 详细结构见设计文档，需求层约束如下：
 
 建议稳定错误码：
 
-| 错误码                            | 场景                                 |
-| --------------------------------- | ------------------------------------ |
-| `MODEL_NAME_INVALID`              | 逻辑模型名不符合 ai-server 规则      |
-| `MODEL_NAME_CONFLICT`             | 环境内逻辑模型名重复                 |
-| `PROVIDER_NAME_CONFLICT`          | Provider 标识或 Data ID 冲突         |
-| `PROVIDER_BASE_URL_INVALID`       | Base URL 不符合上游解析规则          |
-| `PROTOCOL_REQUIRED`               | 供应商没有任何受支持协议             |
-| `PROTOCOL_DUPLICATED`             | 同一 Provider 重复协议类型           |
-| `PROTOCOL_COVERAGE_EMPTY`         | 模型无 OpenAI 或 Anthropic 静态候选  |
-| `UPSTREAM_MODEL_REQUIRED`         | 协议缺少供应商上游模型名             |
-| `API_TOKEN_NAME_CONFLICT`         | Provider 内 Token 名重复             |
-| `API_TOKEN_SECRET_REQUIRED`       | 新增或替换没有提供 Token             |
-| `SECRET_ACTION_INVALID`           | keep/replace/delete 与字段组合不合法 |
-| `SHARED_PROVIDER_IMPACT_REQUIRED` | 共享 Provider 变更未确认影响范围     |
-| `REVISION_CONFLICT`               | ETag 与当前草稿 revision 不一致      |
-| `RELEASE_DRIFTED`                 | rnacos 当前 MD5 与发布基线不一致     |
-| `RNACOS_CAS_CONFLICT`             | 预检后到写入前 rnacos 再次发生漂移   |
-| `RNACOS_ENVIRONMENT_UNBOUND`      | 当前进程未绑定 Release 所属环境      |
-| `ACCESS_GROUP_PUBLICATION_FAILED` | 引用的 Provider 用户组空快照发布失败 |
+| 错误码                                  | 场景                                 |
+| --------------------------------------- | ------------------------------------ |
+| `MODEL_NAME_INVALID`                    | 逻辑模型名不符合 ai-server 规则      |
+| `MODEL_NAME_CONFLICT`                   | 环境内逻辑模型名重复                 |
+| `PROVIDER_NAME_CONFLICT`                | Provider 标识或 Data ID 冲突         |
+| `PROVIDER_NOT_FOUND`                    | 模型关联的 Provider 不存在           |
+| `PROVIDER_IN_USE`                       | Provider 仍被一个或多个模型引用      |
+| `PROVIDER_BASE_URL_INVALID`             | Base URL 不符合上游解析规则          |
+| `PROTOCOL_REQUIRED`                     | 供应商没有任何受支持协议             |
+| `PROTOCOL_DUPLICATED`                   | 同一 Provider 重复协议类型           |
+| `PROTOCOL_COVERAGE_EMPTY`               | 模型无 OpenAI 或 Anthropic 静态候选  |
+| `UPSTREAM_MODEL_REQUIRED`               | 协议缺少供应商上游模型名             |
+| `API_TOKEN_NAME_CONFLICT`               | Provider 内 Token 名重复             |
+| `API_TOKEN_SECRET_REQUIRED`             | 新增或替换没有提供 Token             |
+| `SECRET_ACTION_INVALID`                 | keep/replace/delete 与字段组合不合法 |
+| `PROVIDER_IMPACT_CONFIRMATION_REQUIRED` | Provider 变更未确认全部引用模型影响  |
+| `REVISION_CONFLICT`                     | ETag 与当前草稿 revision 不一致      |
+| `RELEASE_DRIFTED`                       | rnacos 当前 MD5 与发布基线不一致     |
+| `RNACOS_CAS_CONFLICT`                   | 预检后到写入前 rnacos 再次发生漂移   |
+| `RNACOS_ENVIRONMENT_UNBOUND`            | 当前进程未绑定 Release 所属环境      |
+| `ACCESS_GROUP_PUBLICATION_FAILED`       | 模型授权组空快照发布失败             |
 
 ## 10. 安全、隐私与审计
 
@@ -531,10 +538,10 @@ UTC 时间。Token 事件只能记录名称、动作和前后指纹后缀。
 ### 12.1 新增双协议模型
 
 1. 管理员在开发环境创建逻辑模型 `chat-pro`。
-2. 新建一个主供应商接入，同时启用 OpenAI 和 Anthropic。
+2. 先在 Provider 管理中新建一个接入，同时启用 OpenAI 和 Anthropic。
 3. 两种协议分别保存路径和供应商上游模型名。
 4. 新增两个不同名称的 API Token，保存后页面和网络响应均不出现明文。
-5. 草稿详情显示两个 Provider 协议项、一个模型引用和 `FULL` 静态覆盖。
+5. 回到模型编辑器关联该 Provider；草稿详情显示两个协议项、一个模型引用和 `FULL` 静态覆盖。
 6. 保存不访问 rnacos；提交发布后先写 Provider Data ID，再写 models Data ID。
 7. rnacos 写入和实例生效使用独立状态展示。
 
@@ -577,8 +584,8 @@ UTC 时间。Token 事件只能记录名称、动作和前后指纹后缀。
 
 ### 13.1 MVP
 
-- 管理员模型列表、详情和五步编辑器。
-- 专属供应商接入，OpenAI/Anthropic 双协议配置。
+- 管理员模型列表、详情和独立的模型编辑器。
+- 独立 Provider 管理，包含 OpenAI/Anthropic 双协议配置和模型引用影响分析。
 - 多 Token 的新增、保持、替换、删除和脱敏差异。
 - 主 Provider、单个 Fallback、用户组和基础流量策略。
 - 三层校验，接入既有草稿、审批、发布、回滚和审计。
@@ -586,7 +593,7 @@ UTC 时间。Token 事件只能记录名称、动作和前后指纹后缀。
 
 ### 13.2 增强版
 
-- 共享 Provider 绑定与完整影响分析。
+- Provider 连接探测与更丰富的运行状态聚合。
 - 运行时协议/Token/服务实例可用性汇总。
 - 外部 rnacos Provider 和 models 配置导入接管。
 - 模型复制时安全复用已有 secret 引用。

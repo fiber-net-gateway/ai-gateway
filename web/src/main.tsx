@@ -18,6 +18,7 @@ import { ModelDetailPage } from './pages/ModelDetailPage'
 import { ModelEditorPage } from './pages/ModelEditorPage'
 import { ModelMarketplacePage } from './pages/ModelMarketplacePage'
 import { MyAccessRequestsPage } from './pages/MyAccessRequestsPage'
+import { ProvidersPage } from './pages/ProvidersPage'
 import { ReleaseCenterPage } from './pages/ReleaseCenterPage'
 import { IssuedTokenModal, TokensPage } from './pages/TokensPage'
 import { UsersPage } from './pages/UsersPage'
@@ -26,6 +27,7 @@ import './styles.css'
 function initialSection(): Section {
   const value = window.location.hash.replace('#/', '')
   if (value === 'releases' || value.startsWith('releases/')) return 'releases'
+  if (value === 'providers') return 'providers'
   if (
     value === 'users' ||
     value === 'audit' ||
@@ -230,10 +232,14 @@ function App() {
               modelRoute.kind === 'edit' ? navigateModel(modelRoute.modelId) : navigateModel()
             }
             onSaved={(modelId) => navigateModel(modelId)}
+            onOpenProviders={() => navigate('providers')}
             onError={showError}
             onNotice={showSuccess}
           />
         )}
+      {visibleSection === 'providers' && environmentId && user.systemRole === 'ADMIN' && (
+        <ProvidersPage environmentId={environmentId} onError={showError} onNotice={showSuccess} />
+      )}
       {visibleSection === 'users' && (
         <UsersPage
           environments={environments}

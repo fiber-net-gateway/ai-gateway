@@ -15,9 +15,10 @@
 - rnacos 写入状态与 `ai-server` 实例实际生效状态的分开展示；
 - 启动配置模板、实例健康、服务发现和配置快照状态。
 
-当前已实现用户与 Token 管理、模型广场、Provider 访问组、不可变模型 Release，以及按
-Provider → models 顺序向 rnacos 发布并恢复的编排。Release 详情保留逐 Data ID 写入与回读
-证据；实例级生效证据和回滚执行仍是后续能力，因此当前明确显示为未知或不可用。
+当前已实现用户与 Token 管理、独立的 Provider 与模型维护、模型专属授权组、不可变环境级
+Release，以及按 Provider → models 顺序向 rnacos 发布并恢复的编排。Release 详情保留逐
+Data ID 写入与回读证据；实例级生效证据和回滚执行仍是后续能力，因此当前明确显示为未知或
+不可用。
 
 ## 技术架构
 

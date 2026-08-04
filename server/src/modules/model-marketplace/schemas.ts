@@ -61,18 +61,10 @@ const tokenSchema = {
 export const providerSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['mode', 'routeRole', 'sortOrder'],
+  required: ['displayName', 'baseUrl', 'protocols', 'authentication'],
   properties: {
-    id: { type: 'string', format: 'uuid' },
-    mode: {
-      type: 'string',
-      enum: ['CREATE_DEDICATED', 'UPDATE_EXISTING', 'BIND_EXISTING'],
-    },
-    providerId: { type: 'string', format: 'uuid' },
     displayName: { type: 'string', minLength: 1, maxLength: 100 },
     baseUrl: { type: 'string', minLength: 1, maxLength: 2_048 },
-    routeRole: { type: 'string', enum: ['PRIMARY', 'FALLBACK'] },
-    sortOrder: { type: 'integer', minimum: 0, maximum: 65_535 },
     protocols: { type: 'array', minItems: 1, maxItems: 2, items: protocolSchema },
     authentication: {
       type: 'object',
@@ -84,7 +76,18 @@ export const providerSchema = {
         confirmUnauthenticated: { type: 'boolean' },
       },
     },
-    confirmSharedImpact: { type: 'boolean' },
+    confirmProviderImpact: { type: 'boolean' },
+  },
+} as const
+
+const modelProviderBindingSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['providerId', 'routeRole', 'sortOrder'],
+  properties: {
+    providerId: { type: 'string', format: 'uuid' },
+    routeRole: { type: 'string', enum: ['PRIMARY', 'FALLBACK'] },
+    sortOrder: { type: 'integer', minimum: 0, maximum: 65_535 },
   },
 } as const
 
@@ -108,7 +111,12 @@ export const modelMutationSchema = {
       maxItems: 20,
       items: { type: 'string', minLength: 1, maxLength: 32 },
     },
-    providers: { type: 'array', minItems: 1, maxItems: 100, items: providerSchema },
+    providers: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      items: modelProviderBindingSchema,
+    },
     accessMode: {
       type: 'string',
       enum: ['ALL_AUTHENTICATED', 'APPROVAL_REQUIRED'],
@@ -159,6 +167,16 @@ export const modelParamsSchema = {
   properties: {
     env: { type: 'string', format: 'uuid' },
     modelId: { type: 'string', format: 'uuid' },
+  },
+} as const
+
+export const providerParamsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['env', 'providerId'],
+  properties: {
+    env: { type: 'string', format: 'uuid' },
+    providerId: { type: 'string', format: 'uuid' },
   },
 } as const
 
@@ -220,7 +238,7 @@ export const createProviderTokenSchema = {
     secretAction: { const: 'replace' },
     value: { type: 'string', minLength: 1, maxLength: 8_192 },
     reason: { type: 'string', minLength: 1, maxLength: 500 },
-    confirmSharedImpact: { type: 'boolean' },
+    confirmProviderImpact: { type: 'boolean' },
   },
 } as const
 
@@ -233,7 +251,7 @@ export const updateProviderTokenSchema = {
     value: { type: 'string', minLength: 1, maxLength: 8_192 },
     reason: { type: 'string', minLength: 1, maxLength: 500 },
     confirmUnauthenticated: { type: 'boolean' },
-    confirmSharedImpact: { type: 'boolean' },
+    confirmProviderImpact: { type: 'boolean' },
   },
   allOf: [
     {

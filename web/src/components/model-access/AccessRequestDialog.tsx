@@ -58,8 +58,8 @@ export function AccessRequestDialog({
           </span>
         </div>
         <p id={helpId} className="field-help">
-          管理员批准后会把你的精确 username 加入模型申请授权组。Provider 只托管该组；实际请求仍可能
-          路由到模型配置的其他主 Provider 或 Fallback。
+          管理员批准后会把你的精确 username 加入该模型的专属申请授权组；审批不会改变 Provider
+          配置，请求仍会按模型的主 Provider 和 Fallback 策略路由。
         </p>
         <label className="stacked-field">
           <span>用途说明</span>

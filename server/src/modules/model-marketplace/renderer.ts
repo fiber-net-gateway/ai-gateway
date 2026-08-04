@@ -27,11 +27,14 @@ export async function renderProviderResources(
   version: MarketplaceVersionRecord,
   secrets: MarketplaceSecretService,
 ): Promise<RenderedResource[]> {
-  const providers = new Map(
-    version.models.flatMap((model) => model.providers.map((provider) => [provider.id, provider])),
+  const referencedProviderIds = new Set(
+    version.models.flatMap((model) => model.providerBindings.map((binding) => binding.providerId)),
+  )
+  const providers = version.providers.filter(
+    (provider) => referencedProviderIds.has(provider.id) && !provider.archivedAt,
   )
   const resources: RenderedResource[] = []
-  for (const provider of [...providers.values()].sort((left, right) =>
+  for (const provider of providers.sort((left, right) =>
     left.providerName.localeCompare(right.providerName, 'en'),
   )) {
     resources.push(await renderProvider(version, provider, secrets))
@@ -44,16 +47,16 @@ export async function renderProviderResource(
   providerName: string,
   secrets: MarketplaceSecretService,
 ): Promise<RenderedResource> {
-  const provider = version.models
-    .flatMap((model) => model.providers)
-    .find((candidate) => candidate.providerName === providerName)
+  const provider = version.providers.find(
+    (candidate) => candidate.providerName === providerName && !candidate.archivedAt,
+  )
   if (!provider) throw new Error(`frozen Provider is missing: ${providerName}`)
   return renderProvider(version, provider, secrets)
 }
 
 async function renderProvider(
   version: MarketplaceVersionRecord,
-  provider: MarketplaceModelRecord['providers'][number],
+  provider: MarketplaceVersionRecord['providers'][number],
   secrets: MarketplaceSecretService,
 ): Promise<RenderedResource> {
   const tokens: Array<{ name: string; token: string }> = []
@@ -100,20 +103,25 @@ async function renderProvider(
   }
 }
 
-function renderModel(model: MarketplaceModelRecord) {
-  const primaryProviders = model.providers
-    .filter((provider) => provider.routeRole === 'PRIMARY')
+function renderModel(
+  model: MarketplaceModelRecord,
+  providerById: Map<string, MarketplaceVersionRecord['providers'][number]>,
+) {
+  const primaryProviders = model.providerBindings
+    .filter((binding) => binding.routeRole === 'PRIMARY')
     .sort(
       (left, right) =>
-        left.sortOrder - right.sortOrder ||
-        left.providerName.localeCompare(right.providerName, 'en'),
+        left.sortOrder - right.sortOrder || left.providerId.localeCompare(right.providerId, 'en'),
     )
-    .map((provider) => provider.providerName)
-  const fallback = model.providers.find((provider) => provider.routeRole === 'FALLBACK')
+    .map((binding) => providerById.get(binding.providerId)?.providerName)
+    .filter((name): name is string => Boolean(name))
+  const fallback = model.providerBindings.find((binding) => binding.routeRole === 'FALLBACK')
   const result: Record<string, unknown> = {
     'model-name': model.logicalModelName,
     providers: primaryProviders,
-    'fallback-provider': fallback?.providerName ?? '',
+    'fallback-provider': fallback
+      ? (providerById.get(fallback.providerId)?.providerName ?? '')
+      : '',
     'allow-user-groups': model.allowUserGroups
       .map((group) => group.name)
       .sort((left, right) => left.localeCompare(right, 'en')),
@@ -136,6 +144,7 @@ function renderModel(model: MarketplaceModelRecord) {
 }
 
 export function renderModelsResource(version: MarketplaceVersionRecord): RenderedResource {
+  const providerById = new Map(version.providers.map((provider) => [provider.id, provider]))
   return {
     group: 'LLM-SERVER',
     dataId: 'ploto.ai-llm.models',
@@ -144,7 +153,7 @@ export function renderModelsResource(version: MarketplaceVersionRecord): Rendere
       data: [...version.models]
         .filter((model) => !model.archivedAt)
         .sort((left, right) => left.logicalModelName.localeCompare(right.logicalModelName, 'en'))
-        .map(renderModel),
+        .map((model) => renderModel(model, providerById)),
     }),
     containsSecret: false,
   }

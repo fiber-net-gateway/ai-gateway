@@ -7,6 +7,7 @@ import type {
   ActivationState,
   MarketplaceEnvironmentRecord,
   MarketplaceModelRecord,
+  MarketplaceModelProviderBindingRecord,
   MarketplaceProviderRecord,
   MarketplaceReleaseRecord,
   MarketplaceReleaseResourceRecord,
@@ -98,18 +99,23 @@ interface ProviderIdentityRow extends RowDataPacket {
   provider_name: string
   ownership: MarketplaceProviderRecord['ownership']
   owner_model_id: string | null
+  created_by: string
+  created_at: Date
+  archived_at: Date | null
 }
 
 interface ProviderSpecRow extends RowDataPacket {
   provider_id: string
   display_name: string
   base_url: string
+  updated_by: string
+  updated_at: Date
 }
 
 interface BindingRow extends RowDataPacket {
   model_id: string
   provider_id: string
-  route_role: MarketplaceProviderRecord['routeRole']
+  route_role: MarketplaceModelProviderBindingRecord['routeRole']
   sort_order: number
 }
 
@@ -267,6 +273,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
     expectedRevision: number
     actorId: string
     now: string
+    providers: MarketplaceProviderRecord[]
     models: MarketplaceModelRecord[]
   }): Promise<MarketplaceVersionRecord> {
     const environment = await this.getEnvironment(input.environmentId)
@@ -280,6 +287,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
         environmentId: input.environmentId,
         actorId: input.actorId,
         now: input.now,
+        providers: input.providers,
         models: input.models,
       })
       const [update] = await connection.query<ResultSetHeader>(
@@ -293,6 +301,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
         environmentId: input.environmentId,
         versionId: environment.draft.id,
         revision: input.expectedRevision + 1,
+        providers: input.providers,
         models: input.models,
         latestRelease: environment.latestRelease,
         publicationState: environment.publicationState,
@@ -377,6 +386,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
         environmentId: input.environmentId,
         actorId: input.actorId,
         now: input.now,
+        providers: environment.draft.providers,
         models: environment.draft.models,
       })
       await connection.query(
@@ -712,13 +722,15 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
       ),
       this.pool.query<ProviderIdentityRow[]>(
         `SELECT BIN_TO_UUID(id) AS id, provider_name, ownership,
-                  BIN_TO_UUID(owner_model_id) AS owner_model_id
+                  BIN_TO_UUID(owner_model_id) AS owner_model_id,
+                  BIN_TO_UUID(created_by) AS created_by, created_at, archived_at
            FROM marketplace_providers
            WHERE environment_id = UUID_TO_BIN(?)`,
         [row.environment_id],
       ),
       this.pool.query<ProviderSpecRow[]>(
-        `SELECT BIN_TO_UUID(provider_id) AS provider_id, display_name, base_url
+        `SELECT BIN_TO_UUID(provider_id) AS provider_id, display_name, base_url,
+                  BIN_TO_UUID(updated_by) AS updated_by, updated_at
            FROM marketplace_provider_specs
            WHERE version_id = UUID_TO_BIN(?)`,
         [row.id],
@@ -841,11 +853,13 @@ function resourceFromRow(row: ReleaseResourceRow): MarketplaceReleaseResourceRec
 function resourcesForVersion(
   version: MarketplaceVersionRecord,
 ): MarketplaceReleaseResourceRecord[] {
-  const providerNames = [
-    ...new Set(
-      version.models.flatMap((model) => model.providers.map((provider) => provider.providerName)),
-    ),
-  ].sort((left, right) => left.localeCompare(right, 'en'))
+  const referencedProviderIds = new Set(
+    version.models.flatMap((model) => model.providerBindings.map((binding) => binding.providerId)),
+  )
+  const providerNames = version.providers
+    .filter((provider) => referencedProviderIds.has(provider.id) && !provider.archivedAt)
+    .map((provider) => provider.providerName)
+    .sort((left, right) => left.localeCompare(right, 'en'))
   return [
     ...providerNames.map((providerName, index) => ({
       id: randomUUID(),
@@ -946,26 +960,36 @@ function assembleVersion(
     list.push(tag)
     tagsByModel.set(tag.model_id, list)
   }
+  const providerRecords = providerSpecs.map((spec): MarketplaceProviderRecord => {
+    const identity = providerById.get(spec.provider_id)
+    if (!identity) throw new DomainError('CONFIG_GRAPH_INVALID', 422, '供应商身份引用不完整')
+    return {
+      id: identity.id,
+      providerName: identity.provider_name,
+      ownership: identity.ownership,
+      ownerModelId: identity.owner_model_id,
+      displayName: spec.display_name,
+      baseUrl: spec.base_url,
+      protocols: protocolsByProvider.get(identity.id) ?? [],
+      tokens: tokensByProvider.get(identity.id) ?? [],
+      createdBy: identity.created_by,
+      createdAt: identity.created_at.toISOString(),
+      updatedBy: spec.updated_by,
+      updatedAt: spec.updated_at.toISOString(),
+      archivedAt: iso(identity.archived_at),
+    }
+  })
   const models = modelSpecs.map((spec): MarketplaceModelRecord => {
     const identity = modelById.get(spec.model_id)
     if (!identity) throw new DomainError('CONFIG_GRAPH_INVALID', 422, '模型身份引用不完整')
-    const modelProviders = (bindingsByModel.get(spec.model_id) ?? []).map((binding) => {
-      const provider = providerById.get(binding.provider_id)
-      const providerSpec = providerSpecById.get(binding.provider_id)
-      if (!provider || !providerSpec) {
+    const providerBindings = (bindingsByModel.get(spec.model_id) ?? []).map((binding) => {
+      if (!providerById.has(binding.provider_id) || !providerSpecById.has(binding.provider_id)) {
         throw new DomainError('CONFIG_GRAPH_INVALID', 422, '供应商引用关系不完整')
       }
       return {
-        id: provider.id,
-        providerName: provider.provider_name,
-        ownership: provider.ownership,
-        ownerModelId: provider.owner_model_id,
-        displayName: providerSpec.display_name,
-        baseUrl: providerSpec.base_url,
+        providerId: binding.provider_id,
         routeRole: binding.route_role,
         sortOrder: binding.sort_order,
-        protocols: protocolsByProvider.get(provider.id) ?? [],
-        tokens: tokensByProvider.get(provider.id) ?? [],
       }
     })
     return {
@@ -987,7 +1011,7 @@ function assembleVersion(
           }
         : null,
       allowUserGroups: groupsByModel.get(identity.id) ?? [],
-      providers: modelProviders,
+      providerBindings,
       createdBy: identity.created_by,
       createdAt: identity.created_at.toISOString(),
       updatedBy: spec.updated_by,
@@ -1003,6 +1027,7 @@ function assembleVersion(
     baseReleaseVersionId: version.base_release_version_id,
     schemaVersion: version.schema_version,
     revision: integer(version.revision),
+    providers: providerRecords,
     models,
     createdBy: version.created_by,
     createdAt: version.created_at.toISOString(),
@@ -1018,6 +1043,7 @@ async function persistSnapshot(
     environmentId: string
     actorId: string
     now: string
+    providers: MarketplaceProviderRecord[]
     models: MarketplaceModelRecord[]
   },
 ): Promise<void> {
@@ -1038,16 +1064,15 @@ async function persistSnapshot(
       ],
     )
   }
-  const providers = new Map(
-    input.models.flatMap((model) => model.providers.map((provider) => [provider.id, provider])),
-  )
-  for (const provider of providers.values()) {
+  for (const provider of input.providers) {
     await executor.query(
       `INSERT INTO marketplace_providers
         (id, environment_id, provider_name, ownership, owner_model_id,
          created_by, created_at, archived_by, archived_at)
-       VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), ?, ?, ?, UUID_TO_BIN(?), ?, NULL, NULL)
-       ON DUPLICATE KEY UPDATE provider_name = provider_name`,
+       VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), ?, ?, ?, UUID_TO_BIN(?), ?, ?, ?)
+       ON DUPLICATE KEY UPDATE ownership = VALUES(ownership),
+         owner_model_id = VALUES(owner_model_id), archived_by = VALUES(archived_by),
+         archived_at = VALUES(archived_at)`,
       [
         provider.id,
         input.environmentId,
@@ -1056,13 +1081,15 @@ async function persistSnapshot(
         provider.ownerModelId
           ? Buffer.from(provider.ownerModelId.replaceAll('-', ''), 'hex')
           : null,
-        input.actorId,
-        input.now,
+        provider.createdBy,
+        provider.createdAt,
+        provider.archivedAt ? Buffer.from(input.actorId.replaceAll('-', ''), 'hex') : null,
+        provider.archivedAt,
       ],
     )
   }
   const tokens = new Map(
-    [...providers.values()].flatMap((provider) =>
+    input.providers.flatMap((provider) =>
       provider.tokens.map((token) => [token.id, { ...token, providerId: provider.id }]),
     ),
   )
@@ -1126,16 +1153,16 @@ async function persistSnapshot(
         [input.versionId, model.id, group.id, group.name],
       )
     }
-    for (const provider of model.providers) {
+    for (const binding of model.providerBindings) {
       await executor.query(
         `INSERT INTO marketplace_model_provider_bindings
           (version_id, model_id, provider_id, route_role, sort_order)
          VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), UUID_TO_BIN(?), ?, ?)`,
-        [input.versionId, model.id, provider.id, provider.routeRole, provider.sortOrder],
+        [input.versionId, model.id, binding.providerId, binding.routeRole, binding.sortOrder],
       )
     }
   }
-  for (const provider of providers.values()) {
+  for (const provider of input.providers) {
     await executor.query(
       `INSERT INTO marketplace_provider_specs
         (version_id, provider_id, display_name, base_url, updated_by, updated_at)
@@ -1145,8 +1172,8 @@ async function persistSnapshot(
         provider.id,
         provider.displayName,
         provider.baseUrl,
-        input.actorId,
-        input.now,
+        provider.updatedBy,
+        provider.updatedAt,
       ],
     )
     for (const protocol of provider.protocols) {
@@ -1161,8 +1188,8 @@ async function persistSnapshot(
           protocol.type,
           protocol.path,
           protocol.upstreamModelName,
-          input.actorId,
-          input.now,
+          provider.updatedBy,
+          provider.updatedAt,
         ],
       )
     }
@@ -1192,6 +1219,7 @@ async function refreshProjection(
     environmentId: string
     versionId: string
     revision: number
+    providers: MarketplaceProviderRecord[]
     models: MarketplaceModelRecord[]
     latestRelease: MarketplaceReleaseRecord | null
     publicationState: PublicationState
@@ -1205,9 +1233,16 @@ async function refreshProjection(
     [input.environmentId],
   )
   for (const model of input.models.filter((candidate) => !candidate.archivedAt)) {
-    const coverage: { openai: ProtocolCoverage; anthropic: ProtocolCoverage } =
-      protocolCoverage(model)
-    const issues = validateModelGraph(model)
+    const providerById = new Map(input.providers.map((provider) => [provider.id, provider]))
+    const boundProviders = model.providerBindings.flatMap((binding) => {
+      const provider = providerById.get(binding.providerId)
+      return provider ? [provider] : []
+    })
+    const coverage: { openai: ProtocolCoverage; anthropic: ProtocolCoverage } = protocolCoverage(
+      model,
+      input.providers,
+    )
+    const issues = validateModelGraph(model, input.providers)
     await executor.query(
       `INSERT INTO model_marketplace_projections
         (environment_id, view_kind, model_id, source_version_id, source_revision,
@@ -1228,9 +1263,9 @@ async function refreshProjection(
         model.description.slice(0, 300),
         coverage.openai,
         coverage.anthropic,
-        model.providers.length,
-        model.providers.reduce((sum, provider) => sum + provider.tokens.length, 0),
-        model.providers.filter((provider) => provider.tokens.length === 0).length,
+        model.providerBindings.length,
+        boundProviders.reduce((sum, provider) => sum + provider.tokens.length, 0),
+        boundProviders.filter((provider) => provider.tokens.length === 0).length,
         model.allowUserGroups.length ? 'GROUP_RESTRICTED' : 'ALL_AUTHENTICATED',
         issues.some((issue) => issue.severity === 'ERROR') ? 'INVALID' : 'MODIFIED',
         input.publicationState,

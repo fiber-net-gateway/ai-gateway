@@ -19,14 +19,3 @@ export interface ProtocolDraft {
   path: string
   upstreamModelName: string
 }
-
-export interface ProviderDraft {
-  key: number
-  id?: string
-  displayName: string
-  baseUrl: string
-  routeRole: 'PRIMARY' | 'FALLBACK'
-  protocols: ProtocolDraft[]
-  authenticationMode: 'BEARER_TOKEN_POOL' | 'NO_CREDENTIALS'
-  tokens: TokenDraftRow[]
-}

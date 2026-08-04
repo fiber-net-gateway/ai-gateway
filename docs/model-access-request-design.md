@@ -17,9 +17,9 @@
 
 ## 2. 设计结论
 
-1. 申请目标是逻辑模型；Provider 只托管申请授权组，不形成运行时 Provider 级 ACL。
-2. `APPROVAL_REQUIRED` 模型只绑定一个控制台管理组，组由首次启用时排序最靠前的主
-   Provider 托管，之后保持稳定。
+1. 申请目标是逻辑模型；授权组由模型拥有，不形成运行时 Provider 级 ACL。
+2. `APPROVAL_REQUIRED` 模型只绑定一个控制台管理组，组按不可变 model ID 创建并保持稳定，
+   不随 Provider 绑定变化。
 3. 组 identity 和成员是 MySQL 事实；发布记录保存不可变完整 JSON，rnacos 只是发布目标。
 4. 批准事务先落 MySQL，再在事务外发布。外部失败不会反向改写审批历史。
 5. 普通用户的 `accessible=true` 只在组的已校验 rnacos 发布内容包含本人时成立；实例缺少
@@ -76,11 +76,11 @@ export type ModelAccessRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CA
 export type AccessPublicationState = 'NOT_STARTED' | 'PENDING' | 'PUBLISHED' | 'FAILED'
 export type AccessActivationState = 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'PARTIAL' | 'REJECTED'
 
-export interface ProviderAccessGroupRecord {
+export interface ModelAccessGroupRecord {
   id: string
   environmentId: string
-  providerId: string
-  providerName: string
+  modelId: string
+  logicalModelName: string
   groupName: string
   revision: number
   createdBy: string
@@ -99,8 +99,6 @@ export interface ModelAccessRequestRecord {
   modelDisplayName: string
   groupId: string
   groupName: string
-  providerId: string
-  providerName: string
   reason: string
   status: ModelAccessRequestStatus
   publicationState: AccessPublicationState
@@ -115,12 +113,12 @@ export interface ModelAccessRequestRecord {
 }
 ```
 
-申请记录冗余保存当时的安全显示快照，使历史列表不依赖模型或 Provider 后续改名；安全决定
+申请记录冗余保存当时的模型安全显示快照，使历史列表不依赖模型后续改名；安全决定
 仍使用不可变 ID 和审批时重新读取的当前关系。
 
 ### 4.1 不变量
 
-- 一个环境内 `providerId` 最多一个 access group，`groupName` 永久唯一。
+- 一个环境内 `modelId` 最多一个 access group，`groupName` 永久唯一。
 - 一个 group 对一个 `userId` 最多一个有效成员；成员保存精确 `username` 快照。
 - 同一 applicant/environment/model 最多一个 `PENDING` 申请。
 - `APPROVED` 必须有 `decidedBy`、`decidedAt` 和 `latestPublicationId`。
@@ -130,12 +128,12 @@ export interface ModelAccessRequestRecord {
 - 模型只把 `provider_access_groups.id/name` 冻结到 `marketplace_model_user_groups`；成员不进入
   models release 版本。
 
-## 5. Provider 授权组
+## 5. 模型授权组
 
 ### 5.1 名称生成
 
 ```text
-pa_<provider-name-prefix>_<sha256(environment-id + "\n" + provider-id)[0..9]>
+ma_<logical-model-name-prefix>_<sha256(environment-id + "\n" + model-id)[0..9]>
 ```
 
 - 前缀只保留 `[A-Za-z0-9_-]`，总字节数不超过 64。
@@ -152,22 +150,22 @@ accessMode: 'ALL_AUTHENTICATED' | 'APPROVAL_REQUIRED'
 
 保存算法：
 
-1. 先完成 Provider 字段校验并构造稳定 provider IDs。
+1. 先完成模型字段和 Provider 绑定关系校验，并确定不可变 model ID。
 2. `ALL_AUTHENTICATED` 输出空 `allowUserGroups`。
-3. `APPROVAL_REQUIRED` 且旧模型已有单个托管组时，验证托管 Provider 仍绑定该模型并复用。
-4. 首次启用时选择 `routeRole=PRIMARY`、`sortOrder` 最小、Provider 名最小的 Provider。
-5. 调用 `ensureGroupForProvider` 幂等创建 identity，把 `{id,name}` 写入模型草稿。
-6. 没有主 Provider 时返回 `ACCESS_GROUP_PRIMARY_PROVIDER_REQUIRED`。
+3. `APPROVAL_REQUIRED` 且旧模型已有单个模型组时，验证 group.modelId 后复用。
+4. 首次启用时调用 `ensureGroupForModel` 幂等创建 identity，把 `{id,name}` 写入模型草稿。
+5. 组创建不依赖主 Provider，也不因 Provider 解绑、排序或 Fallback 变化而迁移。
 
 创建 release 时按“用户组 → Provider → models”生成逐资源计划；申请授权组 Data ID 必须先于
 引用它的 models Data ID 发布。只创建 release 不代表资源已经写入 rnacos。
 
 Access group identity 与 marketplace 分属两个 store。首次启用可能在 marketplace 草稿并发冲突
-前创建一个未引用空组；它不包含成员、不会发布，不形成授权，后续相同 Provider 会复用。
+前创建一个未引用空组；它不包含成员、不会发布，不形成授权，后续相同模型会复用。
 
 ## 6. 数据库设计
 
-迁移文件：`server/src/database/migrations/003-model-access.ts`。
+基础表来自 `server/src/database/migrations/003-model-access.ts`；模型归属字段由
+`server/src/database/migrations/005-model-owned-access-groups.ts` 增加。
 
 ### 6.1 `provider_access_groups`
 
@@ -175,6 +173,8 @@ Access group identity 与 marketplace 分属两个 store。首次启用可能在
 CREATE TABLE provider_access_groups (
   id BINARY(16) NOT NULL,
   environment_id BINARY(16) NOT NULL,
+  model_id BINARY(16) NULL,
+  logical_model_name VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL,
   provider_id BINARY(16) NOT NULL,
   provider_name VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   group_name VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -184,14 +184,17 @@ CREATE TABLE provider_access_groups (
   created_at DATETIME(6) NOT NULL,
   updated_at DATETIME(6) NOT NULL,
   PRIMARY KEY (id),
+  UNIQUE KEY uq_model_access_group_model (environment_id, model_id),
   UNIQUE KEY uq_provider_access_group_provider (environment_id, provider_id),
   UNIQUE KEY uq_provider_access_group_name (environment_id, group_name),
   KEY idx_provider_access_groups_environment (environment_id, updated_at, id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 ```
 
-不声明到 marketplace provider 的物理外键，避免新模型首次保存前的模块事务耦合；service 在
-每次启用和审批时校验 provider ID、名称和环境。
+表名及 `provider_id/provider_name` 是兼容旧版本的物理字段。新记录以 `model_id` 和
+`logical_model_name` 为权威，并暂时把相同模型值镜像到旧列以满足旧 NOT NULL 约束；领域类型、
+API 和服务逻辑不再暴露 Provider 归属。读取旧记录时回退旧列，后续数据迁移完成后再移除兼容
+列和旧唯一键。
 
 ### 6.2 `provider_access_group_members`
 
@@ -225,8 +228,8 @@ CREATE TABLE model_access_requests (
   model_display_name VARCHAR(100) NOT NULL,
   group_id BINARY(16) NOT NULL,
   group_name VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  provider_id BINARY(16) NOT NULL,
-  provider_name VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  provider_id BINARY(16) NOT NULL, -- 兼容列，新记录镜像 model_id
+  provider_name VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, -- 兼容列
   reason VARCHAR(500) NOT NULL,
   request_status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   publication_state VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -293,8 +296,8 @@ CREATE TABLE access_group_publications (
 ```ts
 export interface ModelAccessStore {
   acquirePublicationLock(groupId: string): Promise<() => Promise<void>>
-  ensureGroupForProvider(input: EnsureGroupInput): Promise<ProviderAccessGroupRecord>
-  getGroupsByIds(ids: string[]): Promise<ProviderAccessGroupRecord[]>
+  ensureGroupForModel(input: EnsureGroupInput): Promise<ModelAccessGroupRecord>
+  getGroupsByIds(ids: string[]): Promise<ModelAccessGroupRecord[]>
   getPublishedMembershipGroupIds(groupIds: string[], userId: string): Promise<string[]>
   isPublishedMember(groupIds: string[], userId: string): Promise<boolean>
   createRequest(input: CreateRequestInput): Promise<ModelAccessRequestRecord>
@@ -372,7 +375,7 @@ Service 捕获后调用 `markPublicationResult` 写 `FAILED`，仍以 200 返回
 
 ```ts
 export function renderAccessGroup(
-  group: ProviderAccessGroupRecord,
+  group: ModelAccessGroupRecord,
   usernames: string[],
 ): { dataId: string; content: string; md5: string }
 ```
@@ -443,8 +446,8 @@ If-Match: "1"
 {"reason":"业务用途合理"}
 ```
 
-响应另含 `providerName`、`groupName`、`affectedModels` 和 publication 安全视图；不返回完整
-成员集合或 target content。
+响应另含 `groupName` 和 publication 安全视图；不返回 Provider 字段、完整成员集合或 target
+content。
 
 ### 11.3 Cursor
 
@@ -460,9 +463,8 @@ id DESC`，查询 `LIMIT pageSize + 1`。伪造、过期结构或签名错误返
 - 所有已认证用户；
 - 需要管理员审批。
 
-选择审批后展示只读说明：“系统将为主 Provider 托管一个授权组；获得模型权限不代表固定
-命中该 Provider。”编辑已有模型时显示组名和托管 Provider。切换为全部用户时弹出扩大访问
-范围确认。
+选择审批后展示只读说明：“系统将为此模型维护一个独立授权组；获得模型权限不代表固定命中
+某个 Provider。”编辑已有模型时显示组名。切换为全部用户时弹出扩大访问范围确认。
 
 ### 12.2 普通用户
 
@@ -526,7 +528,7 @@ Service 使用 `UserStore.appendAudit`，事件字段遵循需求文档。安全
 - fake publisher 成功后 publication 为 `PUBLISHED`、activation 仍 `UNKNOWN`。
 - fake publisher 失败后 request 仍 `APPROVED`，重试使用同一 content。
 - 普通模型响应不泄漏 group name、成员或 Provider 安全字段。
-- Provider 共享组时 affected models 完整。
+- Provider 绑定变化后 group.modelId 和 groupName 保持稳定。
 - renderer 与 ai-server codec fixture 对齐。
 
 ### 15.2 MySQL 静态测试
@@ -546,6 +548,6 @@ Service 使用 `UserStore.appendAudit`，事件字段遵循需求文档。安全
 
 1. 增加迁移、领域类型、renderer 和 memory/mysql stores。
 2. 实现 service、publisher、routes 和 API 测试。
-3. 把模型 `accessMode` 与 Provider 托管组接入 marketplace service、editor 和 renderer。
+3. 把模型 `accessMode` 与模型授权组接入 marketplace service、editor 和 renderer。
 4. 实现普通用户申请弹窗、我的状态和管理员审批页。
 5. 执行 typecheck、全部 Node tests、format check、build 和 `git diff --check`。

@@ -9,6 +9,7 @@ import type {
   MarketplaceStore,
   MarketplaceVersionRecord,
   ModelMutationInput,
+  ProviderMutationInput,
 } from '../model-marketplace/types.js'
 import { MemoryModelAccessStore } from './memory-store.js'
 import { renderAccessGroup } from './renderer.js'
@@ -111,7 +112,26 @@ class FailOncePublisher implements AccessGroupPublisher {
   }
 }
 
-function modelMutation(): ModelMutationInput {
+function providerMutation(): ProviderMutationInput {
+  return {
+    displayName: '受控供应商',
+    baseUrl: 'https://provider.example',
+    protocols: [
+      {
+        type: 'OPENAI_CHAT_COMPLETIONS',
+        path: '/v1/chat/completions',
+        upstreamModelName: 'controlled-upstream',
+      },
+    ],
+    authentication: {
+      mode: 'NO_CREDENTIALS',
+      tokens: [],
+      confirmUnauthenticated: true,
+    },
+  }
+}
+
+function modelMutation(providerId: string): ModelMutationInput {
   return {
     displayName: '受控对话模型',
     logicalModelName: 'controlled-chat',
@@ -119,23 +139,9 @@ function modelMutation(): ModelMutationInput {
     tags: ['controlled'],
     providers: [
       {
-        mode: 'CREATE_DEDICATED',
-        displayName: '受控供应商',
-        baseUrl: 'https://provider.example',
+        providerId,
         routeRole: 'PRIMARY',
         sortOrder: 0,
-        protocols: [
-          {
-            type: 'OPENAI_CHAT_COMPLETIONS',
-            path: '/v1/chat/completions',
-            upstreamModelName: 'controlled-upstream',
-          },
-        ],
-        authentication: {
-          mode: 'NO_CREDENTIALS',
-          tokens: [],
-          confirmUnauthenticated: true,
-        },
       },
     ],
     accessMode: 'APPROVAL_REQUIRED',
@@ -191,6 +197,18 @@ test('model access approval preserves failure, retries publication and does not 
     headers: { cookie: adminCookie },
   })
   const draftId = adminList.json().draft.id as string
+  const provider = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/drafts/${draftId}/providers`,
+    headers: {
+      cookie: adminCookie,
+      'x-csrf-token': adminCsrf,
+      'idempotency-key': 'access-provider-create-0001',
+      'if-match': adminList.headers.etag!,
+    },
+    payload: providerMutation(),
+  })
+  assert.equal(provider.statusCode, 201, provider.body)
   const key = await app.inject({
     method: 'POST',
     url: '/api/idempotency-keys',
@@ -203,9 +221,9 @@ test('model access approval preserves failure, retries publication and does not 
       cookie: adminCookie,
       'x-csrf-token': adminCsrf,
       'idempotency-key': key.json().key,
-      'if-match': adminList.headers.etag!,
+      'if-match': provider.headers.etag!,
     },
-    payload: modelMutation(),
+    payload: modelMutation(provider.json().id as string),
   })
   assert.equal(created.statusCode, 201, created.body)
   assert.equal(created.json().accessMode, 'APPROVAL_REQUIRED')
@@ -277,7 +295,7 @@ test('model access approval preserves failure, retries publication and does not 
   assert.equal(approved.json().publicationState, 'FAILED')
   assert.equal(approved.json().activationState, 'UNKNOWN')
   assert.equal(publisher.calls.length, 1)
-  assert.match(publisher.calls[0].dataId, /^ploto\.ai-llm\.user-group\.pa_/u)
+  assert.match(publisher.calls[0].dataId, /^ploto\.ai-llm\.user-group\.ma_/u)
   assert.deepEqual(JSON.parse(publisher.calls[0].content).data.users, ['alice-access'])
 
   const unavailableAfterApproval = await app.inject({
@@ -340,9 +358,9 @@ test('access group renderer is byte-stable and MySQL SQL stays single-table', as
     {
       id: '00000000-0000-4000-8000-000000000010',
       environmentId: '00000000-0000-4000-8000-000000000001',
-      providerId: '00000000-0000-4000-8000-000000000011',
-      providerName: 'provider-a',
-      groupName: 'pa_provider_a_0123456789',
+      modelId: '00000000-0000-4000-8000-000000000011',
+      logicalModelName: 'controlled-chat',
+      groupName: 'ma_controlled_chat_0123456789',
       revision: 7,
       publishedRevision: 0,
       createdBy: '00000000-0000-4000-8000-000000000001',
@@ -353,7 +371,7 @@ test('access group renderer is byte-stable and MySQL SQL stays single-table', as
   )
   assert.equal(
     rendered.content,
-    '{"version":7,"data":{"name":"pa_provider_a_0123456789","users":["alice","zoe"]}}',
+    '{"version":7,"data":{"name":"ma_controlled_chat_0123456789","users":["alice","zoe"]}}',
   )
   const source = await readFile(new URL('./mysql-store.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /\bJOIN\b|\bUNION\b|\bWITH\s+[A-Za-z_]/u)

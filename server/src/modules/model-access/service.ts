@@ -17,7 +17,7 @@ import type {
   ModelAccessRequestRecord,
   ModelAccessRequestStatus,
   ModelAccessStore,
-  ProviderAccessGroupRecord,
+  ModelAccessGroupRecord,
   RequestCursor,
 } from './types.js'
 
@@ -63,21 +63,21 @@ export class ModelAccessService implements ModelAccessDirectory {
     return requestRevision(etag)
   }
 
-  async ensureGroupForProvider(input: {
+  async ensureGroupForModel(input: {
     environmentId: string
-    providerId: string
-    providerName: string
+    modelId: string
+    logicalModelName: string
     actorId: string
-  }): Promise<ProviderAccessGroupRecord> {
+  }): Promise<ModelAccessGroupRecord> {
     const groupName = generateAccessGroupName(
       input.environmentId,
-      input.providerId,
-      input.providerName,
+      input.modelId,
+      input.logicalModelName,
     )
     if (!validAccessGroupName(groupName)) {
       throw new DomainError('ACCESS_GROUP_NAME_INVALID', 500, '无法生成合法的申请授权组名称')
     }
-    return this.store.ensureGroupForProvider({
+    return this.store.ensureGroupForModel({
       id: randomUUID(),
       ...input,
       groupName,
@@ -85,14 +85,14 @@ export class ModelAccessService implements ModelAccessDirectory {
     })
   }
 
-  getGroupsByIds(ids: string[]): Promise<ProviderAccessGroupRecord[]> {
+  getGroupsByIds(ids: string[]): Promise<ModelAccessGroupRecord[]> {
     return this.store.getGroupsByIds(ids)
   }
 
   async ensureGroupPublished(input: {
     environmentId: string
     groupId: string
-  }): Promise<ProviderAccessGroupRecord> {
+  }): Promise<ModelAccessGroupRecord> {
     return this.withGroupLock(input.groupId, async () => {
       const snapshot = await this.store.getGroupSnapshot(input.groupId)
       if (!snapshot || snapshot.group.environmentId !== input.environmentId) {
@@ -155,19 +155,11 @@ export class ModelAccessService implements ModelAccessDirectory {
       throw new DomainError('MODEL_ACCESS_OPEN_TO_ALL', 409, '该模型面向所有已认证用户，无需申请')
     }
     if (model.allowUserGroups.length !== 1) {
-      throw new DomainError(
-        'MODEL_ACCESS_REQUEST_UNAVAILABLE',
-        409,
-        '该模型没有唯一的托管申请授权组',
-      )
+      throw new DomainError('MODEL_ACCESS_REQUEST_UNAVAILABLE', 409, '该模型没有唯一的申请授权组')
     }
     const group = (await this.store.getGroupsByIds([model.allowUserGroups[0].id]))[0]
-    if (!group || !model.providers.some((provider) => provider.id === group.providerId)) {
-      throw new DomainError(
-        'MODEL_ACCESS_REQUEST_UNAVAILABLE',
-        409,
-        '模型申请授权组与 Provider 关系不完整',
-      )
+    if (!group || group.modelId !== model.id) {
+      throw new DomainError('MODEL_ACCESS_REQUEST_UNAVAILABLE', 409, '模型申请授权组关系不完整')
     }
     if (
       await this.store.isPublishedMember({
@@ -189,8 +181,6 @@ export class ModelAccessService implements ModelAccessDirectory {
       modelDisplayName: model.displayName,
       groupId: group.id,
       groupName: group.groupName,
-      providerId: group.providerId,
-      providerName: group.providerName,
       reason,
       status: 'PENDING',
       publicationState: 'NOT_STARTED',
@@ -362,7 +352,7 @@ export class ModelAccessService implements ModelAccessDirectory {
           input.correlationId,
           {
             groupId: committed.request.groupId,
-            providerId: committed.request.providerId,
+            modelId: committed.request.modelId,
             affectedModelIds: affectedModels.map((model) => model.id),
             publicationId,
           },
@@ -522,16 +512,11 @@ export class ModelAccessService implements ModelAccessDirectory {
     )
     const target = affected.find((model) => model.id === request.modelId)
     const group = (await this.store.getGroupsByIds([request.groupId]))[0]
-    if (
-      !target ||
-      !group ||
-      group.providerId !== request.providerId ||
-      !target.providers.some((provider) => provider.id === group.providerId)
-    ) {
+    if (!target || !group || group.modelId !== target.id) {
       throw new DomainError(
         'MODEL_ACCESS_TARGET_CHANGED',
         409,
-        '模型或 Provider 授权组关系已变化，请拒绝后重新申请',
+        '模型授权组关系已变化，请拒绝后重新申请',
       )
     }
     return affected.map((model) => ({
@@ -599,8 +584,6 @@ export class ModelAccessService implements ModelAccessDirectory {
       applicantUserId: request.applicantUserId,
       applicantUsername: request.applicantUsername,
       applicantDisplayName: request.applicantDisplayName,
-      providerId: request.providerId,
-      providerName: request.providerName,
       groupId: request.groupId,
       groupName: request.groupName,
       decidedBy: request.decidedBy,

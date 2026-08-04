@@ -32,10 +32,19 @@ export interface MarketplaceProviderRecord {
   ownerModelId: string | null
   displayName: string
   baseUrl: string
-  routeRole: ProviderRouteRole
-  sortOrder: number
   protocols: MarketplaceProtocolRecord[]
   tokens: MarketplaceTokenRecord[]
+  createdBy: string
+  createdAt: string
+  updatedBy: string
+  updatedAt: string
+  archivedAt: string | null
+}
+
+export interface MarketplaceModelProviderBindingRecord {
+  providerId: string
+  routeRole: ProviderRouteRole
+  sortOrder: number
 }
 
 export interface MarketplaceModelRecord {
@@ -53,7 +62,7 @@ export interface MarketplaceModelRecord {
     maxTokensPerWindow: string
   }
   allowUserGroups: Array<{ id: string; name: string }>
-  providers: MarketplaceProviderRecord[]
+  providerBindings: MarketplaceModelProviderBindingRecord[]
   createdBy: string
   createdAt: string
   updatedBy: string
@@ -69,6 +78,7 @@ export interface MarketplaceVersionRecord {
   baseReleaseVersionId: string | null
   schemaVersion: number
   revision: number
+  providers: MarketplaceProviderRecord[]
   models: MarketplaceModelRecord[]
   createdBy: string
   createdAt: string
@@ -133,6 +143,7 @@ export interface MarketplaceStore {
     expectedRevision: number
     actorId: string
     now: string
+    providers: MarketplaceProviderRecord[]
     models: MarketplaceModelRecord[]
   }): Promise<MarketplaceVersionRecord>
   createRelease(input: {
@@ -210,20 +221,21 @@ export type TokenMutationInput =
   | { name: string; secretAction: 'replace'; value: string }
 
 export interface ProviderMutationInput {
-  id?: string
-  mode: 'CREATE_DEDICATED' | 'UPDATE_EXISTING' | 'BIND_EXISTING'
-  providerId?: string
-  displayName?: string
-  baseUrl?: string
-  routeRole: ProviderRouteRole
-  sortOrder: number
-  protocols?: MarketplaceProtocolRecord[]
-  authentication?: {
+  displayName: string
+  baseUrl: string
+  protocols: MarketplaceProtocolRecord[]
+  authentication: {
     mode: 'BEARER_TOKEN_POOL' | 'NO_CREDENTIALS'
-    tokens?: TokenMutationInput[]
+    tokens: TokenMutationInput[]
     confirmUnauthenticated?: boolean
   }
-  confirmSharedImpact?: boolean
+  confirmProviderImpact?: boolean
+}
+
+export interface ModelProviderBindingInput {
+  providerId: string
+  routeRole: ProviderRouteRole
+  sortOrder: number
 }
 
 export interface ModelMutationInput {
@@ -231,7 +243,7 @@ export interface ModelMutationInput {
   logicalModelName: string
   description?: string
   tags?: string[]
-  providers: ProviderMutationInput[]
+  providers: ModelProviderBindingInput[]
   accessMode: ModelAccessMode
   loadBalance: {
     prefixMaxBytes: number
@@ -263,13 +275,24 @@ export interface ProviderTokenSafeView {
 export interface ProviderAdminView {
   id: string
   providerName: string
-  ownership: ProviderOwnership
   displayName: string
   baseUrl: string
-  routeRole: ProviderRouteRole
-  sortOrder: number
   protocols: MarketplaceProtocolRecord[]
   tokens: ProviderTokenSafeView[]
+}
+
+export interface ProviderAdminSummaryView extends ProviderAdminView {
+  referencedModelCount: number
+  referencedModels: Array<{ id: string; logicalModelName: string; displayName: string }>
+  draftState: DraftState
+  publicationState: PublicationState
+  activationState: ActivationState
+  updatedAt: string
+}
+
+export interface ModelProviderAdminView extends ProviderAdminView {
+  routeRole: ProviderRouteRole
+  sortOrder: number
 }
 
 export interface AdminModelView {
@@ -315,7 +338,7 @@ export interface AdminModelDetailView extends AdminModelView {
   retryableStatuses: number[]
   rateLimit: MarketplaceModelRecord['rateLimit']
   allowUserGroups: MarketplaceModelRecord['allowUserGroups']
-  providers: ProviderAdminView[]
+  providers: ModelProviderAdminView[]
   draft: {
     versionId: string
     revision: number

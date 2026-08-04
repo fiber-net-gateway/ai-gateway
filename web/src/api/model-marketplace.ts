@@ -108,17 +108,32 @@ export interface ProviderTokenSafeView {
 export interface ProviderView {
   id: string
   providerName: string
-  ownership: 'DEDICATED' | 'SHARED'
   displayName: string
   baseUrl: string
-  routeRole: 'PRIMARY' | 'FALLBACK'
-  sortOrder: number
   protocols: Array<{
     type: ProviderProtocolType
     path: string
     upstreamModelName: string
   }>
   tokens: ProviderTokenSafeView[]
+}
+
+export interface ModelProviderView extends ProviderView {
+  routeRole: 'PRIMARY' | 'FALLBACK'
+  sortOrder: number
+}
+
+export interface ProviderSummary extends ProviderView {
+  referencedModelCount: number
+  referencedModels: Array<{ id: string; logicalModelName: string; displayName: string }>
+  draftState: DraftState
+  publicationState: PublicationState
+  activationState: ActivationState
+  updatedAt: string
+}
+
+export interface ProviderDetail extends ProviderSummary {
+  draft: { id: string; revision: number }
 }
 
 export interface MarketplaceModelDetail extends MarketplaceModelSummary {
@@ -128,7 +143,7 @@ export interface MarketplaceModelDetail extends MarketplaceModelSummary {
   retryableStatuses: number[]
   rateLimit: null | { windowDurationMillis: string; maxTokensPerWindow: string }
   allowUserGroups: Array<{ id: string; name: string }>
-  providers: ProviderView[]
+  providers: ModelProviderView[]
   draft: { versionId: string; revision: number; state: DraftState }
   published: {
     versionId: string | null
@@ -152,22 +167,9 @@ export interface ModelMutation {
   description: string
   tags: string[]
   providers: Array<{
-    id?: string
-    mode: 'CREATE_DEDICATED' | 'UPDATE_EXISTING'
-    displayName: string
-    baseUrl: string
+    providerId: string
     routeRole: 'PRIMARY' | 'FALLBACK'
     sortOrder: number
-    protocols: Array<{
-      type: ProviderProtocolType
-      path: string
-      upstreamModelName: string
-    }>
-    authentication: {
-      mode: 'BEARER_TOKEN_POOL' | 'NO_CREDENTIALS'
-      tokens: TokenMutation[]
-      confirmUnauthenticated?: boolean
-    }
   }>
   accessMode: ModelAccessMode
   loadBalance: {
@@ -177,6 +179,22 @@ export interface ModelMutation {
     retryableStatuses: number[]
   }
   rateLimit: null | { windowDurationMillis: string; maxTokensPerWindow: string }
+}
+
+export interface ProviderMutation {
+  displayName: string
+  baseUrl: string
+  protocols: Array<{
+    type: ProviderProtocolType
+    path: string
+    upstreamModelName: string
+  }>
+  authentication: {
+    mode: 'BEARER_TOKEN_POOL' | 'NO_CREDENTIALS'
+    tokens: TokenMutation[]
+    confirmUnauthenticated?: boolean
+  }
+  confirmProviderImpact?: boolean
 }
 
 export interface ValidationIssue {
@@ -219,6 +237,53 @@ export const modelMarketplaceApi = {
   availableDetail: (environmentId: string, modelId: string) =>
     request<AvailableModelSummary>(
       `/api/environments/${environmentId}/models/${modelId}?view=available`,
+    ),
+  listProviders: (environmentId: string) =>
+    requestWithMetadata<{
+      items: ProviderSummary[]
+      draft: { id: string; revision: number }
+    }>(`/api/environments/${environmentId}/providers`),
+  providerDetail: (environmentId: string, providerId: string) =>
+    requestWithMetadata<ProviderDetail>(
+      `/api/environments/${environmentId}/providers/${providerId}`,
+    ),
+  createProvider: async (
+    environmentId: string,
+    draftId: string,
+    etag: string,
+    body: ProviderMutation,
+  ) =>
+    requestWithMetadata<ProviderSummary>(
+      `/api/environments/${environmentId}/drafts/${draftId}/providers`,
+      {
+        method: 'POST',
+        headers: {
+          'If-Match': etag,
+          'Idempotency-Key': await serverIdempotencyKey(),
+        },
+        body: JSON.stringify(body),
+      },
+    ),
+  updateProvider: (
+    environmentId: string,
+    draftId: string,
+    providerId: string,
+    etag: string,
+    body: ProviderMutation,
+  ) =>
+    requestWithMetadata<{
+      provider: ProviderView
+      revision: number
+      affectedModelIds: string[]
+    }>(`/api/environments/${environmentId}/drafts/${draftId}/providers/${providerId}`, {
+      method: 'PATCH',
+      headers: { 'If-Match': etag },
+      body: JSON.stringify(body),
+    }),
+  archiveProvider: (environmentId: string, draftId: string, providerId: string, etag: string) =>
+    requestWithMetadata<void>(
+      `/api/environments/${environmentId}/drafts/${draftId}/providers/${providerId}`,
+      { method: 'DELETE', headers: { 'If-Match': etag } },
     ),
   create: async (environmentId: string, draftId: string, etag: string, body: ModelMutation) =>
     requestWithMetadata<MarketplaceModelDetail>(

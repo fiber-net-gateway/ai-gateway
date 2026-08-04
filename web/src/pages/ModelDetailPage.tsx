@@ -294,10 +294,6 @@ export function ModelDetailPage({
                   <dt>Base URL</dt>
                   <dd>{provider.baseUrl}</dd>
                 </div>
-                <div>
-                  <dt>所有权</dt>
-                  <dd>{provider.ownership}</dd>
-                </div>
               </dl>
               <div className="protocol-row">
                 {provider.protocols.map((protocol) => (

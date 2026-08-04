@@ -38,13 +38,13 @@
 
 1. **模型广场是控制台聚合，不是新的 rnacos schema。** 发布时仍生成标准 Provider Data ID
    和唯一的 models Data ID。
-2. **逻辑模型和 Provider 分开建模。** 一个逻辑模型可以引用多个主 Provider 和一个
-   Fallback；Provider 独立持有地址、协议和 Token。
+2. **逻辑模型和 Provider 分开建模、分开维护。** Provider 管理独立持有地址、协议和 Token；
+   模型编辑器只保存对现有 Provider 的 PRIMARY/FALLBACK 绑定。
 3. **协议映射按 Provider 保存。** 同一 Provider 最多一项 OpenAI 和一项 Anthropic，每项
    独立保存上游模型名与路径。
 4. **不做协议转换。** OpenAI 请求只使用 OpenAI 映射，Anthropic 请求只使用 Anthropic
    映射。
-5. **Token 属于 Provider。** 共享 Provider 时 Token 修改影响所有引用模型，必须做影响分析。
+5. **Token 属于 Provider。** Token 修改影响该 Provider 的所有引用模型，必须做影响分析。
 6. **Token 永远只写。** 版本表只保存 `managed_secrets.id` 和安全指纹，不保存明文。
 7. **配置版本是完整环境快照。** 开放版本可作为草稿编辑；提交后复制为冻结版本供 release
    引用。回滚从历史冻结版本复制，不修改旧版本。
@@ -53,6 +53,8 @@
 9. **列表读投影。** 三层状态、协议覆盖和摘要写入单表投影，避免列表请求现场跨表计算。
 10. **状态证据分层。** 草稿事实来自 MySQL，发布事实来自 release/资源结果，生效事实只能
     来自实例接受证据；缺证据时保持 `UNKNOWN`。
+11. **发布仍是环境级统一 Release。** 分开维护不等于分开发布；用户组、Provider 和 models
+    在同一冻结版本中按依赖顺序发布并分别保存结果。
 
 ## 3. 总体架构
 
@@ -113,7 +115,6 @@ erDiagram
 export type ConfigVersionKind = 'DRAFT' | 'RELEASE'
 export type ConfigVersionState = 'OPEN' | 'FROZEN' | 'ABANDONED'
 export type ProviderRouteRole = 'PRIMARY' | 'FALLBACK'
-export type ProviderOwnership = 'DEDICATED' | 'SHARED'
 export type ProviderProtocolType = 'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES'
 
 export interface MarketplaceModelIdentity {
@@ -143,8 +144,6 @@ export interface ProviderIdentity {
   id: string
   environmentId: string
   providerName: string
-  ownership: ProviderOwnership
-  ownerModelId: string | null
 }
 
 export interface ProviderSpec {
@@ -169,6 +168,12 @@ export interface ProviderTokenSafeView {
   fingerprintSuffix: string
   updatedAt: string
 }
+
+export interface ModelProviderBinding {
+  providerId: string
+  routeRole: ProviderRouteRole
+  sortOrder: number
+}
 ```
 
 int64 配置在 HTTP JSON 中使用十进制字符串，防止 JavaScript `number` 超过安全整数范围。
@@ -178,7 +183,7 @@ int64 配置在 HTTP JSON 中使用十进制字符串，防止 JavaScript `numbe
 
 - `MarketplaceModelIdentity.logicalModelName` 在环境内永久唯一，归档后不复用。
 - `ProviderIdentity.providerName` 在环境内永久唯一，并与 Provider Data ID 后缀相同。
-- 专属 Provider 的 `ownerModelId` 必填且只能绑定该模型；共享 Provider 必须为空。
+- Provider 是环境级独立 identity，可以被零个或多个模型绑定。
 - 一个版本中，一个模型至少有一个 PRIMARY 或 FALLBACK 绑定。
 - 一个版本中，一个模型最多一个 FALLBACK，且同一 Provider 不能同时是 PRIMARY/FALLBACK。
 - 一个版本中，一个 Provider 至少有一项受支持协议；每种协议最多一项。
@@ -190,7 +195,7 @@ int64 配置在 HTTP JSON 中使用十进制字符串，防止 JavaScript `numbe
 
 ### 4.4 Provider 标识生成
 
-专属 Provider 标识由服务端生成，不依赖浏览器 `crypto.randomUUID`：
+Provider 标识由服务端生成，不依赖浏览器 `crypto.randomUUID`：
 
 ```text
 mp_<logical-name-slug-prefix>_<12-char-random-suffix>
@@ -249,16 +254,15 @@ web/src/
 │   ├── ModelStateStrip.tsx
 │   ├── ProtocolBadge.tsx
 │   ├── ProtocolCoverageMatrix.tsx
-│   ├── ProviderEditor.tsx
 │   ├── ProtocolEditor.tsx
 │   ├── TokenPoolEditor.tsx
 │   ├── SecretActionField.tsx
-│   ├── ProviderImpactDialog.tsx
 │   └── ValidationSummary.tsx
 ├── pages/
 │   ├── ModelMarketplacePage.tsx
 │   ├── ModelDetailPage.tsx
-│   └── ModelEditorPage.tsx
+│   ├── ModelEditorPage.tsx
+│   └── ProvidersPage.tsx
 └── data/
     └── model-protocols.ts
 ```
@@ -278,12 +282,13 @@ web/src/
 模型详情不再直接创建 release。模型广场页头提供“查看发布差异”，创建成功后导航到
 release 详情。存在活动 release 时入口替换为“查看 Release #N”，避免重复冻结同一草稿。
 
-| 前端路由                                             | 页面     |
-| ---------------------------------------------------- | -------- |
-| `/environments/:env/models`                          | 广场列表 |
-| `/environments/:env/models/:modelId`                 | 模型详情 |
-| `/environments/:env/drafts/:draftId/models/new`      | 新增向导 |
-| `/environments/:env/drafts/:draftId/models/:modelId` | 编辑模型 |
+| 前端路由                                             | 页面          |
+| ---------------------------------------------------- | ------------- |
+| `/environments/:env/models`                          | 广场列表      |
+| `/environments/:env/models/:modelId`                 | 模型详情      |
+| `/environments/:env/drafts/:draftId/models/new`      | 新增向导      |
+| `/environments/:env/drafts/:draftId/models/:modelId` | 编辑模型      |
+| `/environments/:env/providers`                       | Provider 管理 |
 
 使用不透明 UUID 作为详情路由 ID；逻辑模型名只做显示和 API 响应字段，避免改名/编码问题扩散。
 
@@ -319,7 +324,7 @@ key，可使用模块级递增序号；所有持久化 ID 和幂等键由后端�
 
 - 向导步骤使用有序列表和 `aria-current="step"`。
 - 表单错误用 `aria-describedby` 关联，提交后聚焦错误摘要，再允许跳转到字段。
-- Provider 排序同时提供“上移/下移”按钮和键盘操作。
+- 模型绑定的 Provider 排序同时提供“上移/下移”按钮和键盘操作。
 - Token 显示/隐藏只作用于尚未提交的新输入，按钮有可读标签。
 - 状态条使用文字、图标和辅助说明；窄屏按草稿、发布、生效顺序纵向排列。
 
@@ -457,6 +462,8 @@ GET /api/environments/:env/models/:modelId?view=available
 GET /api/environments/:env/models?view=admin&draftId=&cursor=&limit=
 GET /api/environments/:env/models/:modelId?view=admin&draftId=
 GET /api/environments/:env/models/:modelId/impact?draftId=
+GET /api/environments/:env/providers?draftId=
+GET /api/environments/:env/providers/:providerId?draftId=
 ```
 
 详情通过服务层组装，返回 `draft`、`published`、`activation` 三个独立对象。Token 安全视图：
@@ -491,33 +498,9 @@ POST   /api/environments/:env/drafts/:draftId/models/:modelId/validate
   "tags": ["chat", "general"],
   "providers": [
     {
-      "mode": "CREATE_DEDICATED",
-      "displayName": "供应商 A",
-      "baseUrl": "https://api.vendor.example",
+      "providerId": "217786a7-d927-47e0-af42-36dd921a7668",
       "routeRole": "PRIMARY",
-      "sortOrder": 0,
-      "protocols": [
-        {
-          "type": "OPENAI_CHAT_COMPLETIONS",
-          "path": "/v1/chat/completions",
-          "upstreamModelName": "vendor-chat-2026-07"
-        },
-        {
-          "type": "ANTHROPIC_MESSAGES",
-          "path": "/v1/messages",
-          "upstreamModelName": "vendor-chat-2026-07"
-        }
-      ],
-      "authentication": {
-        "mode": "BEARER_TOKEN_POOL",
-        "tokens": [
-          {
-            "name": "vendor-primary-2026-08",
-            "secretAction": "replace",
-            "value": "write-only-value"
-          }
-        ]
-      }
+      "sortOrder": 0
     }
   ],
   "accessMode": "ALL_AUTHENTICATED",
@@ -531,18 +514,23 @@ POST   /api/environments/:env/drafts/:draftId/models/:modelId/validate
 }
 ```
 
-成功响应返回模型详情和新 ETag，但不会回显请求中的 `value`。
+成功响应返回模型详情和新 ETag。模型写接口不接受 Base URL、协议或 Token 字段。
 
 ### 8.5 Provider 与 Token 写接口
 
-Provider 可在模型聚合 PATCH 中编辑，也提供细粒度接口以缩小 secret 请求体：
+Provider 只能通过独立接口维护；模型写接口只保存 Provider ID、路由角色和顺序：
 
 ```text
-POST  /api/environments/:env/drafts/:draftId/models/:modelId/providers
+POST  /api/environments/:env/drafts/:draftId/providers
 PATCH /api/environments/:env/drafts/:draftId/providers/:providerId
+DELETE /api/environments/:env/drafts/:draftId/providers/:providerId
 POST  /api/environments/:env/drafts/:draftId/providers/:providerId/tokens
 PATCH /api/environments/:env/drafts/:draftId/providers/:providerId/tokens/:tokenId
 ```
+
+创建或更新 Provider 的请求包含 `displayName`、`baseUrl`、`protocols` 和 `authentication`；
+新建时由后端生成稳定 `providerName`。归档前服务端检查完整草稿引用关系，仍被模型绑定时返回
+`409 PROVIDER_IN_USE`，不执行部分写入。
 
 新增 Token：
 
@@ -562,7 +550,7 @@ PATCH /api/environments/:env/drafts/:draftId/providers/:providerId/tokens/:token
   "secretAction": "replace",
   "value": "new-write-only-value",
   "reason": "同名紧急替换",
-  "confirmSharedImpact": false
+  "confirmProviderImpact": false
 }
 ```
 
@@ -573,12 +561,12 @@ PATCH /api/environments/:env/drafts/:draftId/providers/:providerId/tokens/:token
   "secretAction": "delete",
   "reason": "旧凭据已下线",
   "confirmUnauthenticated": false,
-  "confirmSharedImpact": false
+  "confirmProviderImpact": false
 }
 ```
 
-`keep` 只允许出现在聚合 Provider 保存中，且不能携带 `value`。`replace` 必须有非空
-`value`。`delete` 不能有 `value`。共享 Provider 或最后一个 Token 的确认字段缺失时返回
+`keep` 只允许出现在 Provider 保存中，且不能携带 `value`。`replace` 必须有非空
+`value`。`delete` 不能有 `value`。多模型引用 Provider 或最后一个 Token 的确认字段缺失时返回
 `409` 和影响摘要，不执行部分写入。
 
 ### 8.6 校验与发布集成
@@ -778,6 +766,10 @@ CREATE TABLE marketplace_providers (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 ```
 
+`ownership` 和 `owner_model_id` 是从旧“模型内专属 Provider”方案保留的兼容列。新建 Provider
+统一写 `ownership='SHARED'`、`owner_model_id=NULL`，领域规则和 API 不再暴露专属所有权；后续
+在确认没有旧数据依赖后可用独立迁移移除这两列及相关约束。
+
 ### 9.7 `marketplace_provider_specs`
 
 ```sql
@@ -976,7 +968,7 @@ release 内容冻结并进入已发布事实后更新，不能读取开放草稿
 
 - identity、spec、Provider、Token 和用户组属于同一环境。
 - 冻结版本不可变，release 只能引用冻结版本。
-- 专属 Provider 只能绑定 owner model，共享 Provider 变更已确认影响范围。
+- Provider 绑定目标必须存在且未归档；多模型共享变更已确认完整影响范围。
 - 每模型最多一个 Fallback，且至少存在一个路由绑定。
 - 每 Provider 至少一种协议，路径与 Base URL 组合合法。
 - Token spec 的 `provider_id` 与 Token identity 一致，secret kind 正确且未销毁。
@@ -1103,7 +1095,7 @@ Base URL 校验器应通过共享 fixtures 对齐上游，而不是依赖通用 
 
 1. 以 identity ID 建 Map，发现重复或缺失立即记录稳定错误。
 2. 验证所有 spec/绑定的 environment 与版本环境一致。
-3. 按 model ID 分组绑定，检查 PRIMARY/FALLBACK 和专属所有权。
+3. 按 model ID 分组绑定，检查 Provider 存在性、PRIMARY/FALLBACK 和顺序。
 4. 按 provider ID 分组协议，检查至少一项和类型唯一。
 5. 按 provider ID 分组 Token，检查名称唯一、secret metadata 可用。
 6. 验证用户组 identity 和冻结名称。
@@ -1118,13 +1110,21 @@ Base URL 校验器应通过共享 fixtures 对齐上游，而不是依赖通用 
 ```ts
 function candidates(
   model: ModelAggregate,
+  providersById: Map<string, ProviderAggregate>,
   protocol: ProviderProtocolType,
 ): { primary: ProviderAggregate[]; fallback: ProviderAggregate | null } {
-  const primary = model.primaryProviders.filter((provider) => provider.protocols.has(protocol))
+  const bound = model.providerBindings
+    .map((binding) => ({ binding, provider: providersById.get(binding.providerId) }))
+    .filter((item): item is ResolvedBinding => item.provider !== undefined)
+  const primary = bound
+    .filter((item) => item.binding.routeRole === 'PRIMARY')
+    .map((item) => item.provider)
+    .filter((provider) => provider.protocols.has(protocol))
   const fallback =
-    model.fallbackEnabled && model.fallbackProvider?.protocols.has(protocol)
-      ? model.fallbackProvider
-      : null
+    bound
+      .filter((item) => item.binding.routeRole === 'FALLBACK')
+      .map((item) => item.provider)
+      .find((provider) => provider.protocols.has(protocol)) ?? null
   return { primary, fallback }
 }
 ```
@@ -1132,7 +1132,7 @@ function candidates(
 - 某协议无候选则产生 warning 和 `UNSUPPORTED`。
 - 两种协议都无候选产生 `PROTOCOL_COVERAGE_EMPTY` error。
 - 引用 Provider 缺 spec、secret 已销毁、Data ID 冲突产生 error。
-- 共享 Provider 修改列出所有受影响模型；未确认阻止保存高风险动作。
+- Provider 修改列出所有受影响模型；多模型共享时未确认阻止保存高风险动作。
 - 发布时再检查 draft base revision、rnacos MD5、release policy 和 secret 可解密。
 
 运行时熔断、Token 暂停和服务实例过滤不加入静态发布校验；它们进入运行状态摘要。
@@ -1443,7 +1443,7 @@ export interface MarketplaceAuthorizer {
 }
 ```
 
-生产 Token 替换/删除、共享 Provider 修改、扩大模型访问范围和 release/rollback 按环境策略
+生产 Token 替换/删除、多模型引用的 Provider 修改、扩大模型访问范围和 release/rollback 按环境策略
 要求新鲜 MFA。前端隐藏操作不构成授权。
 
 ### 16.2 审计 payload 白名单
@@ -1517,9 +1517,9 @@ Provider 原始内容。
 
 - 三种名称分离及 Provider 标识生成、长度、字符和冲突重试。
 - OpenAI only、Anthropic only、双协议、无协议的覆盖矩阵。
-- 多主 Provider、Fallback 重复、无路由、专属 Provider 跨模型绑定。
+- 多主 Provider、Fallback 重复、无路由、绑定不存在或已归档 Provider。
 - Token keep/replace/delete 真值表和最后 Token 风险。
-- 共享 Provider 影响模型集合。
+- Provider 反向引用模型集合。
 - int64 字符串边界、重试状态去重排序和确定性渲染。
 - 冻结版本拒绝修改、回滚创建新版本。
 
@@ -1573,11 +1573,11 @@ Provider 原始内容。
 
 ### 18.7 前端验收
 
-- 桌面/移动列表、五步向导、键盘导航、错误焦点和 reduced motion。
+- 桌面/移动列表、Provider 管理、模型编辑器、键盘导航、错误焦点和 reduced motion。
 - 未保存离开保护；保存后 ETag 更新；并发冲突不覆盖本地输入。
 - 双协议复制后可独立编辑。
 - Token 输入保存后清空，后退/刷新不恢复；keep 不要求重新输入。
-- 删除最后 Token、共享 Provider 修改和生产高风险操作确认完整。
+- 删除最后 Token、多模型引用 Provider 修改和生产高风险操作确认完整。
 - 三层状态始终分别展示，颜色不是唯一提示。
 
 ## 19. 迁移与交付顺序
@@ -1589,7 +1589,7 @@ Provider 原始内容。
 5. 实现投影 worker 与管理员列表/详情。
 6. 实现普通用户 `PUBLISHED` 目录和用户组访问判断。
 7. 接入全局草稿提交、release 编排和逐资源结果。
-8. 实现前端列表、详情和五步向导。
+8. 实现前端模型列表、详情、编辑器和独立 Provider 管理页。
 9. 增加实例生效观察；上游证据不足时按设计保持 UNKNOWN。
 10. 在开发环境用 MySQL/rnacos 做显式集成测试，再进入 staging。
 
@@ -1598,7 +1598,7 @@ release。上线前运行仓库规定的 typecheck、test、format check 和 bui
 
 ## 20. 待确认但不阻塞 MVP 的事项
 
-- 共享 Provider 是否在 MVP 开放 UI；数据模型已经支持，默认仍为专属。
+- Provider 连接探测是否在 MVP 开放 UI；当前只校验配置契约与运行状态证据。
 - 普通用户是否能看到无访问权限模型；本文默认可见并给出申请指引。
 - Token 保留与销毁期限；必须由安全策略确定，不能早于回滚和事件调查窗口。
 - 实例级配置身份接口的最终字段；能力缺失期间 activation 固定按证据显示 UNKNOWN。

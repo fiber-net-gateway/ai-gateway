@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto'
 
-import type { ProviderAccessGroupRecord } from './types.js'
+import type { ModelAccessGroupRecord } from './types.js'
 
 function compareUtf8(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'))
 }
 
 export function renderAccessGroup(
-  group: ProviderAccessGroupRecord,
+  group: ModelAccessGroupRecord,
   usernames: string[],
 ): { dataId: string; content: string; md5: string } {
   const users = [...new Set(usernames.filter(Boolean))].sort(compareUtf8)

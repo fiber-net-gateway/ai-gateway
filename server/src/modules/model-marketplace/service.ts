@@ -25,6 +25,7 @@ import type {
   MarketplaceStore,
   ModelMutationInput,
   ProviderAdminView,
+  ProviderAdminSummaryView,
   ProviderMutationInput,
   RenderedResource,
   TokenMutationInput,
@@ -35,6 +36,7 @@ import {
   protocolCoverage,
   validateModelGraph,
   validateModelMutation,
+  validateProviderMutation,
 } from './validation.js'
 
 interface IdempotencyResult {
@@ -51,7 +53,6 @@ interface TokenIdempotencyResult {
 
 interface ProviderIdempotencyResult {
   requestHash: string
-  modelId: string
   providerId: string
 }
 
@@ -65,6 +66,10 @@ function hashRequest(value: unknown): string {
 
 function activeModels(environment: MarketplaceEnvironmentRecord): MarketplaceModelRecord[] {
   return environment.draft.models.filter((model) => !model.archivedAt)
+}
+
+function activeProviders(environment: MarketplaceEnvironmentRecord): MarketplaceProviderRecord[] {
+  return environment.draft.providers.filter((provider) => !provider.archivedAt)
 }
 
 function beforeCursor(
@@ -91,11 +96,8 @@ function safeProvider(provider: MarketplaceProviderRecord): ProviderAdminView {
   return {
     id: provider.id,
     providerName: provider.providerName,
-    ownership: provider.ownership,
     displayName: provider.displayName,
     baseUrl: provider.baseUrl,
-    routeRole: provider.routeRole,
-    sortOrder: provider.sortOrder,
     protocols: copy(provider.protocols),
     tokens: provider.tokens.map((token) => ({
       id: token.id,
@@ -156,10 +158,14 @@ export class ModelMarketplaceService {
       )
     }
     if (query.protocol === 'openai') {
-      models = models.filter((model) => protocolCoverage(model).openai === 'SUPPORTED')
+      models = models.filter(
+        (model) => protocolCoverage(model, environment.draft.providers).openai === 'SUPPORTED',
+      )
     }
     if (query.protocol === 'anthropic') {
-      models = models.filter((model) => protocolCoverage(model).anthropic === 'SUPPORTED')
+      models = models.filter(
+        (model) => protocolCoverage(model, environment.draft.providers).anthropic === 'SUPPORTED',
+      )
     }
     models.sort(
       (left, right) =>
@@ -220,7 +226,7 @@ export class ModelMarketplaceService {
     const managedGroupById = new Map(managedGroups.map((group) => [group.id, group]))
     const publishedMemberships = new Set(publishedMembershipGroupIds)
     const available = models.map((model) => {
-      const coverage = protocolCoverage(model)
+      const coverage = protocolCoverage(model, environment.publishedVersion!.providers)
       const accessMode = model.allowUserGroups.length
         ? ('APPROVAL_REQUIRED' as const)
         : ('ALL_AUTHENTICATED' as const)
@@ -228,9 +234,7 @@ export class ModelMarketplaceService {
         model.allowUserGroups.length === 1
           ? managedGroupById.get(model.allowUserGroups[0].id)
           : undefined
-      const requestable = Boolean(
-        managedGroup && model.providers.some((provider) => provider.id === managedGroup.providerId),
-      )
+      const requestable = Boolean(managedGroup && managedGroup.modelId === model.id)
       return {
         id: model.id,
         displayName: model.displayName,
@@ -291,14 +295,10 @@ export class ModelMarketplaceService {
     const environment = await this.ensureEnvironment(environmentId, actorId)
     const model = environment.draft.models.find((candidate) => candidate.id === modelId)
     if (!model || model.archivedAt) throw new DomainError('MODEL_NOT_FOUND', 404, '模型不存在')
-    const sharedProviderIds = new Set(
-      model.providers
-        .filter((provider) => provider.ownership === 'SHARED')
-        .map((provider) => provider.id),
-    )
+    const sharedProviderIds = new Set(model.providerBindings.map((binding) => binding.providerId))
     const affectedModels = activeModels(environment)
       .filter((candidate) =>
-        candidate.providers.some((provider) => sharedProviderIds.has(provider.id)),
+        candidate.providerBindings.some((binding) => sharedProviderIds.has(binding.providerId)),
       )
       .map((candidate) => ({ id: candidate.id, displayName: candidate.displayName }))
     return {
@@ -360,10 +360,10 @@ export class ModelMarketplaceService {
         expectedRevision: input.expectedRevision,
         actorId: input.actor.user.id,
         now,
+        providers: environment.draft.providers,
         models: [...environment.draft.models, model],
       })
     } catch (error) {
-      await this.discardNewSecrets(model, environment, now)
       throw error
     }
     this.idempotency.set(key, { requestHash, modelId })
@@ -375,7 +375,7 @@ export class ModelMarketplaceService {
       input.environmentId,
       {
         logicalModelName: model.logicalModelName,
-        providerIds: model.providers.map((provider) => provider.id),
+        providerIds: model.providerBindings.map((binding) => binding.providerId),
         revision: String(draft.revision),
       },
     )
@@ -427,10 +427,10 @@ export class ModelMarketplaceService {
         expectedRevision: input.expectedRevision,
         actorId: input.actor.user.id,
         now,
+        providers: environment.draft.providers,
         models,
       })
     } catch (error) {
-      await this.discardNewSecrets(model, environment, now)
       throw error
     }
     await this.audit(
@@ -440,7 +440,7 @@ export class ModelMarketplaceService {
       model.id,
       input.environmentId,
       {
-        providerIds: model.providers.map((provider) => provider.id),
+        providerIds: model.providerBindings.map((binding) => binding.providerId),
         revision: String(draft.revision),
       },
     )
@@ -448,19 +448,50 @@ export class ModelMarketplaceService {
     return { model: this.toAdminDetail(model, latest!), revision: draft.revision }
   }
 
-  async addProvider(input: {
+  async listProviders(
+    environmentId: string,
+    actorId: string,
+  ): Promise<{
+    items: ProviderAdminSummaryView[]
+    draft: { id: string; revision: number }
+  }> {
+    const environment = await this.ensureEnvironment(environmentId, actorId)
+    return {
+      items: activeProviders(environment)
+        .sort(
+          (left, right) =>
+            right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id),
+        )
+        .map((provider) => this.toProviderSummary(provider, environment)),
+      draft: { id: environment.draft.id, revision: environment.draft.revision },
+    }
+  }
+
+  async getProvider(
+    environmentId: string,
+    actorId: string,
+    providerId: string,
+  ): Promise<ProviderAdminSummaryView & { draft: { id: string; revision: number } }> {
+    const environment = await this.ensureEnvironment(environmentId, actorId)
+    const provider = activeProviders(environment).find((candidate) => candidate.id === providerId)
+    if (!provider) throw new DomainError('PROVIDER_NOT_FOUND', 404, '供应商不存在')
+    return {
+      ...this.toProviderSummary(provider, environment),
+      draft: { id: environment.draft.id, revision: environment.draft.revision },
+    }
+  }
+
+  async createProvider(input: {
     environmentId: string
     actor: AuthenticatedActor
-    modelId: string
     provider: ProviderMutationInput
     expectedRevision: number
     idempotencyKey: string
     correlationId: string
-  }): Promise<{ model: AdminModelDetailView; revision: number; replayed: boolean }> {
+  }): Promise<{ provider: ProviderAdminSummaryView; revision: number; replayed: boolean }> {
     this.validateIdempotencyKey(input.idempotencyKey)
+    validateProviderMutation(input.provider)
     const environment = await this.ensureEnvironment(input.environmentId, input.actor.user.id)
-    const model = environment.draft.models.find((candidate) => candidate.id === input.modelId)
-    if (!model || model.archivedAt) throw new DomainError('MODEL_NOT_FOUND', 404, '模型不存在')
     const requestHash = hashRequest(input.provider)
     const key = `${input.actor.user.id}:${input.environmentId}:provider:${input.idempotencyKey}`
     const replay = this.providerIdempotency.get(key)
@@ -468,34 +499,50 @@ export class ModelMarketplaceService {
       if (replay.requestHash !== requestHash) {
         throw new DomainError('IDEMPOTENCY_CONFLICT', 409, 'Idempotency-Key 已用于其他请求')
       }
-      const current = await this.getAdminDetail(
+      const current = await this.getProvider(
         input.environmentId,
         input.actor.user.id,
-        replay.modelId,
+        replay.providerId,
       )
-      return { model: current, revision: current.draft.revision, replayed: true }
+      return { provider: current, revision: current.draft.revision, replayed: true }
     }
-    const previousProviderIds = new Set(model.providers.map((provider) => provider.id))
-    const mutation = this.mutationFromRecord(model)
-    mutation.providers.push(input.provider)
-    const result = await this.updateModel({
-      environmentId: input.environmentId,
-      actor: input.actor,
-      modelId: input.modelId,
-      mutation,
-      expectedRevision: input.expectedRevision,
-      correlationId: input.correlationId,
+    const now = this.clock.now().toISOString()
+    const built = await this.buildProvider({
+      environment,
+      actorId: input.actor.user.id,
+      now,
+      mutation: input.provider,
+      previous: null,
     })
-    const providerId =
-      result.model.providers.find((provider) => !previousProviderIds.has(provider.id))?.id ??
-      input.provider.providerId
-    if (!providerId) throw new Error('provider save did not return a provider identity')
-    this.providerIdempotency.set(key, {
-      requestHash,
-      modelId: input.modelId,
-      providerId,
-    })
-    return { ...result, replayed: false }
+    let draft
+    try {
+      draft = await this.store.saveDraft({
+        environmentId: input.environmentId,
+        expectedRevision: input.expectedRevision,
+        actorId: input.actor.user.id,
+        now,
+        providers: [...environment.draft.providers, built],
+        models: environment.draft.models,
+      })
+    } catch (error) {
+      await this.discardProviderSecrets(built, environment, now)
+      throw error
+    }
+    this.providerIdempotency.set(key, { requestHash, providerId: built.id })
+    await this.audit(
+      input.actor,
+      input.correlationId,
+      'marketplace.provider.created',
+      built.id,
+      input.environmentId,
+      { providerName: built.providerName, revision: String(draft.revision) },
+    )
+    const latest = (await this.store.getEnvironment(input.environmentId))!
+    return {
+      provider: this.toProviderSummary(built, latest),
+      revision: draft.revision,
+      replayed: false,
+    }
   }
 
   async updateProvider(input: {
@@ -512,22 +559,17 @@ export class ModelMarketplaceService {
   }> {
     const environment = await this.ensureEnvironment(input.environmentId, input.actor.user.id)
     const affectedModels = activeModels(environment).filter((model) =>
-      model.providers.some((provider) => provider.id === input.providerId),
+      model.providerBindings.some((binding) => binding.providerId === input.providerId),
     )
-    if (affectedModels.length === 0)
-      throw new DomainError('PROVIDER_NOT_FOUND', 404, '供应商不存在')
-    const previous = affectedModels[0].providers.find(
+    const previous = activeProviders(environment).find(
       (provider) => provider.id === input.providerId,
-    )!
-    if (
-      previous.ownership === 'SHARED' &&
-      affectedModels.length > 1 &&
-      !input.provider.confirmSharedImpact
-    ) {
+    )
+    if (!previous) throw new DomainError('PROVIDER_NOT_FOUND', 404, '供应商不存在')
+    if (affectedModels.length > 1 && !input.provider.confirmProviderImpact) {
       throw new DomainError(
-        'SHARED_PROVIDER_CONFIRMATION_REQUIRED',
+        'PROVIDER_IMPACT_CONFIRMATION_REQUIRED',
         409,
-        '共享 Provider 变更需要确认影响范围',
+        'Provider 变更需要确认全部引用模型的影响范围',
         {
           affectedModels: affectedModels.map((model) => ({
             id: model.id,
@@ -536,40 +578,18 @@ export class ModelMarketplaceService {
         },
       )
     }
-    if (input.provider.id !== input.providerId || input.provider.mode !== 'UPDATE_EXISTING') {
-      throw new DomainError('PROVIDER_ID_MISMATCH', 422, 'Provider 路径和请求身份不一致')
-    }
-    const ownerModel = affectedModels[0]
-    const mutation = this.mutationFromRecord(ownerModel)
-    const index = mutation.providers.findIndex((provider) => provider.id === input.providerId)
-    mutation.providers[index] = input.provider
-    validateModelMutation(mutation, false)
+    validateProviderMutation(input.provider)
     const now = this.clock.now().toISOString()
     const built = await this.buildProvider({
-      input: mutation,
-      modelId: ownerModel.id,
+      environment,
       actorId: input.actor.user.id,
       now,
-      environment,
-      previous: ownerModel,
-      provider: input.provider,
-      index,
+      mutation: input.provider,
+      previous,
     })
-    const affectedIds = new Set(affectedModels.map((model) => model.id))
-    const models = environment.draft.models.map((model) => ({
-      ...model,
-      providers: model.providers.map((provider) =>
-        provider.id === input.providerId
-          ? {
-              ...copy(built),
-              routeRole: provider.routeRole,
-              sortOrder: provider.sortOrder,
-            }
-          : provider,
-      ),
-      updatedBy: affectedIds.has(model.id) ? input.actor.user.id : model.updatedBy,
-      updatedAt: affectedIds.has(model.id) ? now : model.updatedAt,
-    }))
+    const providers = environment.draft.providers.map((provider) =>
+      provider.id === input.providerId ? built : provider,
+    )
     let draft
     try {
       draft = await this.store.saveDraft({
@@ -577,10 +597,11 @@ export class ModelMarketplaceService {
         expectedRevision: input.expectedRevision,
         actorId: input.actor.user.id,
         now,
-        models,
+        providers,
+        models: environment.draft.models,
       })
     } catch (error) {
-      await this.discardNewSecrets({ ...ownerModel, providers: [built] }, environment, now)
+      await this.discardProviderSecrets(built, environment, now)
       throw error
     }
     await this.audit(
@@ -592,14 +613,14 @@ export class ModelMarketplaceService {
       {
         providerId: input.providerId,
         providerName: built.providerName,
-        affectedModelIds: [...affectedIds],
+        affectedModelIds: affectedModels.map((model) => model.id),
         revision: String(draft.revision),
       },
     )
     return {
       provider: safeProvider(built),
       revision: draft.revision,
-      affectedModelIds: [...affectedIds],
+      affectedModelIds: affectedModels.map((model) => model.id),
     }
   }
 
@@ -613,7 +634,7 @@ export class ModelMarketplaceService {
     value?: string
     reason: string
     confirmUnauthenticated?: boolean
-    confirmSharedImpact?: boolean
+    confirmProviderImpact?: boolean
     expectedRevision: number
     idempotencyKey?: string
     correlationId: string
@@ -629,22 +650,17 @@ export class ModelMarketplaceService {
     }
     const environment = await this.ensureEnvironment(input.environmentId, input.actor.user.id)
     const affectedModels = activeModels(environment).filter((model) =>
-      model.providers.some((provider) => provider.id === input.providerId),
+      model.providerBindings.some((binding) => binding.providerId === input.providerId),
     )
-    if (affectedModels.length === 0)
-      throw new DomainError('PROVIDER_NOT_FOUND', 404, '供应商不存在')
-    const provider = affectedModels[0].providers.find(
+    const provider = activeProviders(environment).find(
       (candidate) => candidate.id === input.providerId,
-    )!
-    if (
-      provider.ownership === 'SHARED' &&
-      affectedModels.length > 1 &&
-      !input.confirmSharedImpact
-    ) {
+    )
+    if (!provider) throw new DomainError('PROVIDER_NOT_FOUND', 404, '供应商不存在')
+    if (affectedModels.length > 1 && !input.confirmProviderImpact) {
       throw new DomainError(
-        'SHARED_PROVIDER_CONFIRMATION_REQUIRED',
+        'PROVIDER_IMPACT_CONFIRMATION_REQUIRED',
         409,
-        '共享 Provider 变更需要确认影响范围',
+        'Provider 变更需要确认全部引用模型的影响范围',
         {
           affectedModels: affectedModels.map((model) => ({
             id: model.id,
@@ -733,18 +749,11 @@ export class ModelMarketplaceService {
     const nextTokens = provider.tokens
       .filter((token) => token.id !== input.tokenId)
       .concat(replacement ? [replacement] : [])
-    const models = environment.draft.models.map((model) => ({
-      ...model,
-      providers: model.providers.map((candidate) =>
-        candidate.id === input.providerId ? { ...candidate, tokens: copy(nextTokens) } : candidate,
-      ),
-      updatedBy: affectedModels.some((affected) => affected.id === model.id)
-        ? input.actor.user.id
-        : model.updatedBy,
-      updatedAt: affectedModels.some((affected) => affected.id === model.id)
-        ? now
-        : model.updatedAt,
-    }))
+    const providers = environment.draft.providers.map((candidate) =>
+      candidate.id === input.providerId
+        ? { ...candidate, tokens: copy(nextTokens), updatedBy: input.actor.user.id, updatedAt: now }
+        : candidate,
+    )
     let draft
     try {
       draft = await this.store.saveDraft({
@@ -752,7 +761,8 @@ export class ModelMarketplaceService {
         expectedRevision: input.expectedRevision,
         actorId: input.actor.user.id,
         now,
-        models,
+        providers,
+        models: environment.draft.models,
       })
     } catch (error) {
       if (replacement) await this.secrets.discardOrphan(replacement.secretId, now)
@@ -793,6 +803,52 @@ export class ModelMarketplaceService {
     }
   }
 
+  async archiveProvider(input: {
+    environmentId: string
+    actor: AuthenticatedActor
+    providerId: string
+    expectedRevision: number
+    correlationId: string
+  }): Promise<{ revision: number }> {
+    const environment = await this.ensureEnvironment(input.environmentId, input.actor.user.id)
+    const provider = activeProviders(environment).find(
+      (candidate) => candidate.id === input.providerId,
+    )
+    if (!provider) throw new DomainError('PROVIDER_NOT_FOUND', 404, '供应商不存在')
+    const referencedModels = activeModels(environment).filter((model) =>
+      model.providerBindings.some((binding) => binding.providerId === input.providerId),
+    )
+    if (referencedModels.length) {
+      throw new DomainError('PROVIDER_IN_USE', 409, '供应商仍被模型引用，不能归档', {
+        affectedModels: referencedModels.map((model) => ({
+          id: model.id,
+          displayName: model.displayName,
+        })),
+      })
+    }
+    const now = this.clock.now().toISOString()
+    provider.archivedAt = now
+    provider.updatedAt = now
+    provider.updatedBy = input.actor.user.id
+    const draft = await this.store.saveDraft({
+      environmentId: input.environmentId,
+      expectedRevision: input.expectedRevision,
+      actorId: input.actor.user.id,
+      now,
+      providers: environment.draft.providers,
+      models: environment.draft.models,
+    })
+    await this.audit(
+      input.actor,
+      input.correlationId,
+      'marketplace.provider.archived',
+      provider.id,
+      input.environmentId,
+      { providerName: provider.providerName, revision: String(draft.revision) },
+    )
+    return { revision: draft.revision }
+  }
+
   async archiveModel(input: {
     environmentId: string
     actor: AuthenticatedActor
@@ -812,6 +868,7 @@ export class ModelMarketplaceService {
       expectedRevision: input.expectedRevision,
       actorId: input.actor.user.id,
       now,
+      providers: environment.draft.providers,
       models: environment.draft.models,
     })
     await this.audit(
@@ -837,7 +894,9 @@ export class ModelMarketplaceService {
     revision: number
   }> {
     const environment = await this.ensureEnvironment(environmentId, actorId)
-    const issues = activeModels(environment).flatMap(validateModelGraph)
+    const issues = activeModels(environment).flatMap((model) =>
+      validateModelGraph(model, environment.draft.providers),
+    )
     return {
       valid: !issues.some((issue) => issue.severity === 'ERROR'),
       issues,
@@ -876,7 +935,7 @@ export class ModelMarketplaceService {
         resourceCount:
           new Set(
             result.frozenVersion.models.flatMap((model) =>
-              model.providers.map((provider) => provider.id),
+              model.providerBindings.map((binding) => binding.providerId),
             ),
           ).size + 1,
       },
@@ -1371,23 +1430,66 @@ export class ModelMarketplaceService {
     }
   }
 
+  private toProviderSummary(
+    provider: MarketplaceProviderRecord,
+    environment: MarketplaceEnvironmentRecord,
+  ): ProviderAdminSummaryView {
+    const referencedModels = activeModels(environment)
+      .filter((model) =>
+        model.providerBindings.some((binding) => binding.providerId === provider.id),
+      )
+      .map((model) => ({
+        id: model.id,
+        logicalModelName: model.logicalModelName,
+        displayName: model.displayName,
+      }))
+    const publishedReference = environment.publishedVersion?.models.some(
+      (model) =>
+        !model.archivedAt &&
+        model.providerBindings.some((binding) => binding.providerId === provider.id),
+    )
+    return {
+      ...safeProvider(provider),
+      referencedModelCount: referencedModels.length,
+      referencedModels,
+      draftState: 'MODIFIED',
+      publicationState: publishedReference
+        ? (environment.publishedRelease?.publicationState ?? 'NEVER')
+        : 'NEVER',
+      activationState: publishedReference
+        ? (environment.publishedRelease?.activationState ?? 'UNKNOWN')
+        : 'UNKNOWN',
+      updatedAt: provider.updatedAt,
+    }
+  }
+
   private toAdminView(
     model: MarketplaceModelRecord,
     environment: MarketplaceEnvironmentRecord,
   ): AdminModelView {
-    const issues = validateModelGraph(model)
+    const providerById = new Map(
+      environment.draft.providers.map((provider) => [provider.id, provider]),
+    )
+    const boundProviders = model.providerBindings.flatMap((binding) => {
+      const provider = providerById.get(binding.providerId)
+      return provider ? [provider] : []
+    })
+    const issues = validateModelGraph(model, environment.draft.providers)
     return {
       id: model.id,
       logicalModelName: model.logicalModelName,
       displayName: model.displayName,
       description: model.description,
       tags: [...model.tags],
-      protocols: protocolCoverage(model),
-      providerCount: model.providers.length,
-      primaryProviderCount: model.providers.filter((provider) => provider.routeRole === 'PRIMARY')
-        .length,
-      fallbackConfigured: model.providers.some((provider) => provider.routeRole === 'FALLBACK'),
-      configuredTokenCount: model.providers.reduce(
+      protocols: protocolCoverage(model, environment.draft.providers),
+      providerCount: model.providerBindings.length,
+      primaryProviderCount: model.providerBindings.filter(
+        (binding) => binding.routeRole === 'PRIMARY',
+      ).length,
+      fallbackConfigured: model.providerBindings.some(
+        (binding) => binding.routeRole === 'FALLBACK',
+      ),
+      configuredTokenCount: boundProviders.reduce(
         (sum, provider) => sum + provider.tokens.length,
         0,
       ),
@@ -1408,6 +1510,9 @@ export class ModelMarketplaceService {
     model: MarketplaceModelRecord,
     environment: MarketplaceEnvironmentRecord,
   ): AdminModelDetailView {
+    const providerById = new Map(
+      environment.draft.providers.map((provider) => [provider.id, provider]),
+    )
     return {
       ...this.toAdminView(model, environment),
       prefixMaxBytes: model.prefixMaxBytes,
@@ -1416,7 +1521,18 @@ export class ModelMarketplaceService {
       retryableStatuses: [...model.retryableStatuses],
       rateLimit: copy(model.rateLimit),
       allowUserGroups: copy(model.allowUserGroups),
-      providers: model.providers.map(safeProvider),
+      providers: model.providerBindings.flatMap((binding) => {
+        const provider = providerById.get(binding.providerId)
+        return provider
+          ? [
+              {
+                ...safeProvider(provider),
+                routeRole: binding.routeRole,
+                sortOrder: binding.sortOrder,
+              },
+            ]
+          : []
+      }),
       draft: {
         versionId: environment.draft.id,
         revision: environment.draft.revision,
@@ -1444,11 +1560,18 @@ export class ModelMarketplaceService {
     environment: MarketplaceEnvironmentRecord
     previous: MarketplaceModelRecord | null
   }): Promise<MarketplaceModelRecord> {
-    const providers: MarketplaceProviderRecord[] = []
-    for (const [index, provider] of input.input.providers.entries()) {
-      providers.push(await this.buildProvider({ ...input, provider, index }))
+    const availableProviderIds = new Set(
+      activeProviders(input.environment).map((provider) => provider.id),
+    )
+    for (const binding of input.input.providers) {
+      if (!availableProviderIds.has(binding.providerId)) {
+        throw new DomainError('PROVIDER_NOT_FOUND', 404, '模型绑定的供应商不存在', {
+          field: '/providers',
+          providerId: binding.providerId,
+        })
+      }
     }
-    const allowUserGroups = await this.resolveAccessGroups({ ...input, providers })
+    const allowUserGroups = await this.resolveAccessGroups(input)
     return {
       id: input.modelId,
       logicalModelName: input.input.logicalModelName,
@@ -1463,7 +1586,7 @@ export class ModelMarketplaceService {
       ),
       rateLimit: copy(input.input.rateLimit),
       allowUserGroups,
-      providers,
+      providerBindings: copy(input.input.providers),
       createdBy: input.previous?.createdBy ?? input.actorId,
       createdAt: input.previous?.createdAt ?? input.now,
       updatedBy: input.actorId,
@@ -1478,25 +1601,7 @@ export class ModelMarketplaceService {
       logicalModelName: model.logicalModelName,
       description: model.description,
       tags: [...model.tags],
-      providers: model.providers.map((provider) => ({
-        id: provider.id,
-        mode: 'UPDATE_EXISTING',
-        displayName: provider.displayName,
-        baseUrl: provider.baseUrl,
-        routeRole: provider.routeRole,
-        sortOrder: provider.sortOrder,
-        protocols: copy(provider.protocols),
-        authentication: provider.tokens.length
-          ? {
-              mode: 'BEARER_TOKEN_POOL',
-              tokens: provider.tokens.map((token) => ({
-                id: token.id,
-                name: token.name,
-                secretAction: 'keep' as const,
-              })),
-            }
-          : { mode: 'NO_CREDENTIALS', tokens: [], confirmUnauthenticated: true },
-      })),
+      providers: copy(model.providerBindings),
       accessMode: model.allowUserGroups.length ? 'APPROVAL_REQUIRED' : 'ALL_AUTHENTICATED',
       loadBalance: {
         prefixMaxBytes: model.prefixMaxBytes,
@@ -1515,7 +1620,6 @@ export class ModelMarketplaceService {
     now: string
     environment: MarketplaceEnvironmentRecord
     previous: MarketplaceModelRecord | null
-    providers: MarketplaceProviderRecord[]
   }): Promise<MarketplaceModelRecord['allowUserGroups']> {
     if (input.input.accessMode === 'ALL_AUTHENTICATED') return []
     if (input.previous?.allowUserGroups.length) {
@@ -1528,100 +1632,58 @@ export class ModelMarketplaceService {
       }
       const previousGroup = input.previous.allowUserGroups[0]
       const group = (await this.accessDirectory.getGroupsByIds([previousGroup.id]))[0]
-      if (!group || !input.providers.some((provider) => provider.id === group.providerId)) {
-        throw new DomainError(
-          'ACCESS_GROUP_PROVIDER_REQUIRED',
-          409,
-          '托管申请授权组的 Provider 必须继续绑定该模型',
-          { field: '/providers' },
-        )
+      if (!group || group.modelId !== input.modelId) {
+        throw new DomainError('ACCESS_GROUP_MODEL_MISMATCH', 409, '申请授权组与当前模型不匹配', {
+          field: '/accessMode',
+        })
       }
       return [{ id: group.id, name: group.groupName }]
     }
-    const primary = [...input.providers]
-      .filter((provider) => provider.routeRole === 'PRIMARY')
-      .sort(
-        (left, right) =>
-          left.sortOrder - right.sortOrder ||
-          left.providerName.localeCompare(right.providerName, 'en'),
-      )[0]
-    if (!primary) {
-      throw new DomainError(
-        'ACCESS_GROUP_PRIMARY_PROVIDER_REQUIRED',
-        422,
-        '需要审批的模型必须配置主 Provider',
-        { field: '/providers' },
-      )
-    }
-    const group = await this.accessDirectory.ensureGroupForProvider({
+    const group = await this.accessDirectory.ensureGroupForModel({
       environmentId: input.environment.draft.environmentId,
-      providerId: primary.id,
-      providerName: primary.providerName,
+      modelId: input.modelId,
+      logicalModelName: input.input.logicalModelName,
       actorId: input.actorId,
     })
     return [{ id: group.id, name: group.groupName }]
   }
 
   private async buildProvider(input: {
-    input: ModelMutationInput
-    modelId: string
+    environment: MarketplaceEnvironmentRecord
     actorId: string
     now: string
-    environment: MarketplaceEnvironmentRecord
-    previous: MarketplaceModelRecord | null
-    provider: ProviderMutationInput
-    index: number
+    mutation: ProviderMutationInput
+    previous: MarketplaceProviderRecord | null
   }): Promise<MarketplaceProviderRecord> {
-    if (input.provider.mode === 'BIND_EXISTING') {
-      const existing = activeModels(input.environment)
-        .flatMap((model) => model.providers)
-        .find((provider) => provider.id === input.provider.providerId)
-      if (!existing) throw new DomainError('PROVIDER_NOT_FOUND', 404, '要绑定的供应商不存在')
-      if (existing.ownership === 'DEDICATED' && existing.ownerModelId !== input.modelId) {
-        throw new DomainError(
-          'DEDICATED_PROVIDER_OWNERSHIP_CONFLICT',
-          409,
-          '专属供应商不能绑定其他模型',
-        )
-      }
-      return {
-        ...copy(existing),
-        routeRole: input.provider.routeRole,
-        sortOrder: input.provider.sortOrder,
-      }
-    }
-    const oldProvider = input.provider.id
-      ? input.previous?.providers.find((provider) => provider.id === input.provider.id)
-      : undefined
-    if (input.provider.mode === 'UPDATE_EXISTING' && !oldProvider) {
-      throw new DomainError('PROVIDER_NOT_FOUND', 404, '要更新的供应商不存在')
-    }
-    const providerId = oldProvider?.id ?? randomUUID()
+    const providerId = input.previous?.id ?? randomUUID()
     const providerName =
-      oldProvider?.providerName ??
-      this.uniqueProviderName(input.input.logicalModelName, input.environment)
+      input.previous?.providerName ??
+      this.uniqueProviderName(input.mutation.displayName, input.environment)
     const tokens = await this.buildTokens({
       environmentId: input.environment.draft.environmentId,
       providerId,
       actorId: input.actorId,
       now: input.now,
-      oldTokens: oldProvider?.tokens ?? [],
-      authentication: input.provider.authentication!,
+      oldTokens: input.previous?.tokens ?? [],
+      authentication: input.mutation.authentication,
     })
     return {
       id: providerId,
       providerName,
-      ownership: oldProvider?.ownership ?? 'DEDICATED',
-      ownerModelId: oldProvider?.ownerModelId ?? input.modelId,
-      displayName: input.provider.displayName!.trim(),
-      baseUrl: normalizeBaseUrl(input.provider.baseUrl!, `/providers/${input.index}/baseUrl`),
-      routeRole: input.provider.routeRole,
-      sortOrder: input.provider.sortOrder,
-      protocols: input.provider.protocols!.map((protocol) => ({
+      ownership: 'SHARED',
+      ownerModelId: null,
+      displayName: input.mutation.displayName.trim(),
+      baseUrl: normalizeBaseUrl(input.mutation.baseUrl, '/provider/baseUrl'),
+      protocols: input.mutation.protocols.map((protocol) => ({
         ...protocol,
         upstreamModelName: protocol.upstreamModelName.trim(),
       })),
       tokens,
+      createdBy: input.previous?.createdBy ?? input.actorId,
+      createdAt: input.previous?.createdAt ?? input.now,
+      updatedBy: input.actorId,
+      updatedAt: input.now,
+      archivedAt: null,
     }
   }
 
@@ -1635,7 +1697,7 @@ export class ModelMarketplaceService {
   }) {
     if (input.authentication.mode === 'NO_CREDENTIALS') return []
     const result: MarketplaceProviderRecord['tokens'] = []
-    for (const mutation of input.authentication.tokens ?? []) {
+    for (const mutation of input.authentication.tokens) {
       if (mutation.secretAction === 'delete') continue
       if (mutation.secretAction === 'keep') {
         const oldToken = input.oldTokens.find((token) => token.id === mutation.id)
@@ -1687,32 +1749,28 @@ export class ModelMarketplaceService {
     }
   }
 
-  private uniqueProviderName(logicalModelName: string, environment: MarketplaceEnvironmentRecord) {
-    const names = new Set(
-      environment.draft.models.flatMap((model) =>
-        model.providers.map((provider) => provider.providerName),
-      ),
-    )
+  private uniqueProviderName(seed: string, environment: MarketplaceEnvironmentRecord) {
+    const names = new Set(environment.draft.providers.map((provider) => provider.providerName))
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const candidate = generateProviderName(logicalModelName, this.random)
+      const candidate = generateProviderName(seed, this.random)
       if (!names.has(candidate)) return candidate
     }
     throw new DomainError('PROVIDER_NAME_CONFLICT', 409, '无法生成唯一 Provider 标识')
   }
 
-  private async discardNewSecrets(
-    model: MarketplaceModelRecord,
+  private async discardProviderSecrets(
+    provider: MarketplaceProviderRecord,
     environment: MarketplaceEnvironmentRecord,
     now: string,
   ): Promise<void> {
     const referenced = new Set(
-      environment.draft.models.flatMap((candidate) =>
-        candidate.providers.flatMap((provider) => provider.tokens.map((token) => token.secretId)),
+      environment.draft.providers.flatMap((candidate) =>
+        candidate.tokens.map((token) => token.secretId),
       ),
     )
     const newSecretIds = new Set(
-      model.providers
-        .flatMap((provider) => provider.tokens.map((token) => token.secretId))
+      provider.tokens
+        .map((token) => token.secretId)
         .filter((secretId) => !referenced.has(secretId)),
     )
     await Promise.allSettled(

@@ -5,8 +5,8 @@ import type {
   ModelAccessRequestRecord,
   ModelAccessRequestStatus,
   ModelAccessStore,
-  ProviderAccessGroupMemberRecord,
-  ProviderAccessGroupRecord,
+  ModelAccessGroupMemberRecord,
+  ModelAccessGroupRecord,
   RequestCursor,
 } from './types.js'
 
@@ -29,9 +29,9 @@ function sortRequests(records: ModelAccessRequestRecord[]): ModelAccessRequestRe
 }
 
 export class MemoryModelAccessStore implements ModelAccessStore {
-  private readonly groups = new Map<string, ProviderAccessGroupRecord>()
-  private readonly groupByProvider = new Map<string, string>()
-  private readonly members = new Map<string, ProviderAccessGroupMemberRecord>()
+  private readonly groups = new Map<string, ModelAccessGroupRecord>()
+  private readonly groupByModel = new Map<string, string>()
+  private readonly members = new Map<string, ModelAccessGroupMemberRecord>()
   private readonly requests = new Map<string, ModelAccessRequestRecord>()
   private readonly idempotency = new Map<string, { requestHash: string; requestId: string }>()
   private readonly publications = new Map<string, AccessGroupPublicationRecord>()
@@ -40,21 +40,21 @@ export class MemoryModelAccessStore implements ModelAccessStore {
     return async () => undefined
   }
 
-  async ensureGroupForProvider(input: {
+  async ensureGroupForModel(input: {
     id: string
     environmentId: string
-    providerId: string
-    providerName: string
+    modelId: string
+    logicalModelName: string
     groupName: string
     actorId: string
     now: string
-  }): Promise<ProviderAccessGroupRecord> {
-    const providerKey = `${input.environmentId}:${input.providerId}`
-    const existingId = this.groupByProvider.get(providerKey)
+  }): Promise<ModelAccessGroupRecord> {
+    const modelKey = `${input.environmentId}:${input.modelId}`
+    const existingId = this.groupByModel.get(modelKey)
     if (existingId) {
       const existing = this.groups.get(existingId)!
-      if (existing.providerName !== input.providerName) {
-        throw new DomainError('ACCESS_GROUP_PROVIDER_MISMATCH', 409, 'Provider 授权组关系不一致')
+      if (existing.logicalModelName !== input.logicalModelName) {
+        throw new DomainError('ACCESS_GROUP_MODEL_MISMATCH', 409, '模型授权组关系不一致')
       }
       return copy(existing)
     }
@@ -62,11 +62,11 @@ export class MemoryModelAccessStore implements ModelAccessStore {
       (group) => group.environmentId === input.environmentId && group.groupName === input.groupName,
     )
     if (conflict) throw new DomainError('ACCESS_GROUP_NAME_CONFLICT', 409, '授权组名称冲突')
-    const group: ProviderAccessGroupRecord = {
+    const group: ModelAccessGroupRecord = {
       id: input.id,
       environmentId: input.environmentId,
-      providerId: input.providerId,
-      providerName: input.providerName,
+      modelId: input.modelId,
+      logicalModelName: input.logicalModelName,
       groupName: input.groupName,
       revision: 0,
       publishedRevision: 0,
@@ -75,11 +75,11 @@ export class MemoryModelAccessStore implements ModelAccessStore {
       updatedAt: input.now,
     }
     this.groups.set(group.id, group)
-    this.groupByProvider.set(providerKey, group.id)
+    this.groupByModel.set(modelKey, group.id)
     return copy(group)
   }
 
-  async getGroupsByIds(ids: string[]): Promise<ProviderAccessGroupRecord[]> {
+  async getGroupsByIds(ids: string[]): Promise<ModelAccessGroupRecord[]> {
     return ids.flatMap((id) => {
       const group = this.groups.get(id)
       return group ? [copy(group)] : []
@@ -88,7 +88,7 @@ export class MemoryModelAccessStore implements ModelAccessStore {
 
   async getGroupSnapshot(
     groupId: string,
-  ): Promise<{ group: ProviderAccessGroupRecord; usernames: string[] } | null> {
+  ): Promise<{ group: ModelAccessGroupRecord; usernames: string[] } | null> {
     const group = this.groups.get(groupId)
     if (!group) return null
     const usernames = [...this.members.values()]
@@ -101,7 +101,7 @@ export class MemoryModelAccessStore implements ModelAccessStore {
     groupId: string
     revision: number
     now: string
-  }): Promise<ProviderAccessGroupRecord> {
+  }): Promise<ModelAccessGroupRecord> {
     const group = this.groups.get(input.groupId)
     if (!group) throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
     if (group.revision !== input.revision) {

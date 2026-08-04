@@ -16,10 +16,11 @@ The console is intended to provide:
 - Bootstrap configuration templates, instance health, service discovery, and configuration
   snapshot status.
 
-The console currently implements user and token management, the model marketplace, Provider access
-groups, immutable model releases, and recoverable Provider-to-models publication to rnacos. Release
-details retain per-Data-ID write and readback evidence. Instance-level activation evidence and
-rollback execution remain future work and are therefore reported as unknown or unavailable.
+The console currently implements user and token management, separate Provider and model
+maintenance, model-owned access groups, immutable environment releases, and recoverable
+Provider-to-models publication to rnacos. Release details retain per-Data-ID write and readback
+evidence. Instance-level activation evidence and rollback execution remain future work and are
+therefore reported as unknown or unavailable.
 
 ## Architecture
 

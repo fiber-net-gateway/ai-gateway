@@ -7,13 +7,15 @@ import type {
   ModelAccessRequestRecord,
   ModelAccessRequestStatus,
   ModelAccessStore,
-  ProviderAccessGroupRecord,
+  ModelAccessGroupRecord,
   RequestCursor,
 } from './types.js'
 
 interface GroupRow extends RowDataPacket {
   id: string
   environment_id: string
+  model_id: string | null
+  logical_model_name: string | null
   provider_id: string
   provider_name: string
   group_name: string
@@ -83,6 +85,7 @@ interface PublicationRow extends RowDataPacket {
 
 const groupSelect = `SELECT BIN_TO_UUID(id) AS id,
        BIN_TO_UUID(environment_id) AS environment_id,
+       BIN_TO_UUID(model_id) AS model_id, logical_model_name,
        BIN_TO_UUID(provider_id) AS provider_id, provider_name, group_name,
        revision, published_revision, BIN_TO_UUID(created_by) AS created_by,
        created_at, updated_at
@@ -119,12 +122,12 @@ function integer(value: string | number): number {
   return result
 }
 
-function groupFromRow(row: GroupRow): ProviderAccessGroupRecord {
+function groupFromRow(row: GroupRow): ModelAccessGroupRecord {
   return {
     id: row.id,
     environmentId: row.environment_id,
-    providerId: row.provider_id,
-    providerName: row.provider_name,
+    modelId: row.model_id ?? row.provider_id,
+    logicalModelName: row.logical_model_name ?? row.provider_name,
     groupName: row.group_name,
     revision: integer(row.revision),
     publishedRevision: integer(row.published_revision),
@@ -146,8 +149,6 @@ function requestFromRow(row: RequestRow): ModelAccessRequestRecord {
     modelDisplayName: row.model_display_name,
     groupId: row.group_id,
     groupName: row.group_name,
-    providerId: row.provider_id,
-    providerName: row.provider_name,
     reason: row.reason,
     status: row.request_status,
     publicationState: row.publication_state,
@@ -238,34 +239,37 @@ export class MySqlModelAccessStore implements ModelAccessStore {
     }
   }
 
-  async ensureGroupForProvider(input: {
+  async ensureGroupForModel(input: {
     id: string
     environmentId: string
-    providerId: string
-    providerName: string
+    modelId: string
+    logicalModelName: string
     groupName: string
     actorId: string
     now: string
-  }): Promise<ProviderAccessGroupRecord> {
-    const existing = await this.groupForProvider(input.environmentId, input.providerId)
+  }): Promise<ModelAccessGroupRecord> {
+    const existing = await this.groupForModel(input.environmentId, input.modelId)
     if (existing) {
-      if (existing.providerName !== input.providerName) {
-        throw new DomainError('ACCESS_GROUP_PROVIDER_MISMATCH', 409, 'Provider 授权组关系不一致')
+      if (existing.logicalModelName !== input.logicalModelName) {
+        throw new DomainError('ACCESS_GROUP_MODEL_MISMATCH', 409, '模型授权组关系不一致')
       }
       return existing
     }
     try {
       await this.pool.query(
         `INSERT INTO provider_access_groups
-          (id, environment_id, provider_id, provider_name, group_name,
+          (id, environment_id, model_id, logical_model_name,
+           provider_id, provider_name, group_name,
            revision, published_revision, created_by, created_at, updated_at)
-         VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), UUID_TO_BIN(?), ?, ?,
+         VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), UUID_TO_BIN(?), ?, UUID_TO_BIN(?), ?, ?,
                  0, 0, UUID_TO_BIN(?), ?, ?)`,
         [
           input.id,
           input.environmentId,
-          input.providerId,
-          input.providerName,
+          input.modelId,
+          input.logicalModelName,
+          input.modelId,
+          input.logicalModelName,
           input.groupName,
           input.actorId,
           input.now,
@@ -275,14 +279,14 @@ export class MySqlModelAccessStore implements ModelAccessStore {
     } catch (error) {
       if (!duplicateEntry(error)) throw error
     }
-    const result = await this.groupForProvider(input.environmentId, input.providerId)
-    if (!result || result.providerName !== input.providerName) {
+    const result = await this.groupForModel(input.environmentId, input.modelId)
+    if (!result || result.logicalModelName !== input.logicalModelName) {
       throw new DomainError('ACCESS_GROUP_NAME_CONFLICT', 409, '授权组名称冲突')
     }
     return result
   }
 
-  async getGroupsByIds(ids: string[]): Promise<ProviderAccessGroupRecord[]> {
+  async getGroupsByIds(ids: string[]): Promise<ModelAccessGroupRecord[]> {
     if (ids.length === 0) return []
     const unique = [...new Set(ids)]
     const [rows] = await this.pool.query<GroupRow[]>(
@@ -294,7 +298,7 @@ export class MySqlModelAccessStore implements ModelAccessStore {
 
   async getGroupSnapshot(
     groupId: string,
-  ): Promise<{ group: ProviderAccessGroupRecord; usernames: string[] } | null> {
+  ): Promise<{ group: ModelAccessGroupRecord; usernames: string[] } | null> {
     const groups = await this.getGroupsByIds([groupId])
     if (!groups[0]) return null
     const [members] = await this.pool.query<MemberRow[]>(
@@ -311,7 +315,7 @@ export class MySqlModelAccessStore implements ModelAccessStore {
     groupId: string
     revision: number
     now: string
-  }): Promise<ProviderAccessGroupRecord> {
+  }): Promise<ModelAccessGroupRecord> {
     await this.pool.query(
       `UPDATE provider_access_groups
           SET published_revision = ?, updated_at = ?
@@ -416,8 +420,8 @@ export class MySqlModelAccessStore implements ModelAccessStore {
           input.request.modelDisplayName,
           input.request.groupId,
           input.request.groupName,
-          input.request.providerId,
-          input.request.providerName,
+          input.request.modelId,
+          input.request.logicalModelName,
           input.request.reason,
           input.idempotencyKeyHash,
           input.requestHash,
@@ -758,14 +762,14 @@ export class MySqlModelAccessStore implements ModelAccessStore {
     }
   }
 
-  private async groupForProvider(
+  private async groupForModel(
     environmentId: string,
-    providerId: string,
-  ): Promise<ProviderAccessGroupRecord | null> {
+    modelId: string,
+  ): Promise<ModelAccessGroupRecord | null> {
     const [rows] = await this.pool.query<GroupRow[]>(
       `${groupSelect}
-       WHERE environment_id = UUID_TO_BIN(?) AND provider_id = UUID_TO_BIN(?) LIMIT 1`,
-      [environmentId, providerId],
+       WHERE environment_id = UUID_TO_BIN(?) AND model_id = UUID_TO_BIN(?) LIMIT 1`,
+      [environmentId, modelId],
     )
     return rows[0] ? groupFromRow(rows[0]) : null
   }

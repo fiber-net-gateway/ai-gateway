@@ -14,6 +14,7 @@ import {
   environmentParamsSchema,
   modelMutationSchema,
   modelParamsSchema,
+  providerParamsSchema,
   providerSchema,
   updateProviderTokenSchema,
 } from './schemas.js'
@@ -35,6 +36,10 @@ interface EnvironmentParams {
 
 interface ModelParams extends EnvironmentParams {
   modelId: string
+}
+
+interface ProviderParams extends EnvironmentParams {
+  providerId: string
 }
 
 interface ReleaseParams extends EnvironmentParams {
@@ -142,13 +147,12 @@ function needsFreshMfa(environment: EnvironmentRecord, actor: AuthenticatedActor
 }
 
 function mutationNeedsFreshMfa(mutation: ModelMutationInput | ProviderMutationInput): boolean {
-  const providers = 'providers' in mutation ? mutation.providers : [mutation]
-  return providers.some(
-    (provider) =>
-      provider.confirmSharedImpact ||
-      provider.authentication?.tokens?.some(
-        (token) => token.secretAction === 'replace' || token.secretAction === 'delete',
-      ),
+  if (!('authentication' in mutation)) return false
+  return Boolean(
+    mutation.confirmProviderImpact ||
+    mutation.authentication.tokens.some(
+      (token) => token.secretAction === 'replace' || token.secretAction === 'delete',
+    ),
   )
 }
 
@@ -245,6 +249,53 @@ export function registerModelMarketplaceRoutes(
     },
   )
 
+  app.get(
+    '/api/environments/:env/providers',
+    { schema: { params: environmentParamsSchema } },
+    async (request, reply) => {
+      const { env } = request.params as EnvironmentParams
+      const { actor } = await requireAdmin(request, env, dependencies)
+      const result = await dependencies.marketplace.listProviders(env, actor.user.id)
+      setRevision(reply, result.draft.revision)
+      return result
+    },
+  )
+
+  app.get(
+    '/api/environments/:env/providers/:providerId',
+    { schema: { params: providerParamsSchema } },
+    async (request, reply) => {
+      const { env, providerId } = request.params as ProviderParams
+      const { actor } = await requireAdmin(request, env, dependencies)
+      const provider = await dependencies.marketplace.getProvider(env, actor.user.id, providerId)
+      setRevision(reply, provider.draft.revision)
+      return provider
+    },
+  )
+
+  app.post(
+    '/api/environments/:env/drafts/:draftId/providers',
+    { schema: { params: draftParamsSchema, body: providerSchema } },
+    async (request, reply) => {
+      const { env, draftId } = request.params as DraftParams
+      const { actor, environment } = await requireAdmin(request, env, dependencies, true)
+      await assertDraft(env, draftId, actor.user.id, dependencies)
+      const provider = request.body as ProviderMutationInput
+      if (mutationNeedsFreshMfa(provider)) needsFreshMfa(environment, actor)
+      secretResponse(reply)
+      const result = await dependencies.marketplace.createProvider({
+        environmentId: env,
+        actor,
+        provider,
+        expectedRevision: ifMatch(request, dependencies),
+        idempotencyKey: idempotencyKey(request),
+        correlationId: request.id,
+      })
+      setRevision(reply, result.revision)
+      return reply.status(result.replayed ? 200 : 201).send(result.provider)
+    },
+  )
+
   app.post(
     '/api/environments/:env/drafts/:draftId/models',
     { schema: { params: draftParamsSchema, body: modelMutationSchema } },
@@ -288,6 +339,25 @@ export function registerModelMarketplaceRoutes(
       })
       setRevision(reply, result.revision)
       return result
+    },
+  )
+
+  app.delete(
+    '/api/environments/:env/drafts/:draftId/providers/:providerId',
+    { schema: { params: draftProviderParamsSchema } },
+    async (request, reply) => {
+      const { env, draftId, providerId } = request.params as DraftProviderParams
+      const { actor } = await requireAdmin(request, env, dependencies, true)
+      await assertDraft(env, draftId, actor.user.id, dependencies)
+      const result = await dependencies.marketplace.archiveProvider({
+        environmentId: env,
+        actor,
+        providerId,
+        expectedRevision: ifMatch(request, dependencies),
+        correlationId: request.id,
+      })
+      setRevision(reply, result.revision)
+      return reply.status(204).send()
     },
   )
 
@@ -338,30 +408,6 @@ export function registerModelMarketplaceRoutes(
   )
 
   app.post(
-    '/api/environments/:env/drafts/:draftId/models/:modelId/providers',
-    { schema: { params: draftModelParamsSchema, body: providerSchema } },
-    async (request, reply) => {
-      const { env, draftId, modelId } = request.params as DraftModelParams
-      const { actor, environment } = await requireAdmin(request, env, dependencies, true)
-      await assertDraft(env, draftId, actor.user.id, dependencies)
-      const provider = request.body as ProviderMutationInput
-      if (mutationNeedsFreshMfa(provider)) needsFreshMfa(environment, actor)
-      secretResponse(reply)
-      const result = await dependencies.marketplace.addProvider({
-        environmentId: env,
-        actor,
-        modelId,
-        provider,
-        expectedRevision: ifMatch(request, dependencies),
-        idempotencyKey: idempotencyKey(request),
-        correlationId: request.id,
-      })
-      setRevision(reply, result.revision)
-      return reply.status(result.replayed ? 200 : 201).send(result.model)
-    },
-  )
-
-  app.post(
     '/api/environments/:env/drafts/:draftId/providers/:providerId/tokens',
     { schema: { params: draftProviderParamsSchema, body: createProviderTokenSchema } },
     async (request, reply) => {
@@ -371,7 +417,7 @@ export function registerModelMarketplaceRoutes(
         secretAction: 'replace'
         value: string
         reason: string
-        confirmSharedImpact?: boolean
+        confirmProviderImpact?: boolean
       }
       const { actor, environment } = await requireAdmin(request, env, dependencies, true)
       await assertDraft(env, draftId, actor.user.id, dependencies)
@@ -385,7 +431,7 @@ export function registerModelMarketplaceRoutes(
         name: body.name,
         value: body.value,
         reason: body.reason,
-        confirmSharedImpact: body.confirmSharedImpact,
+        confirmProviderImpact: body.confirmProviderImpact,
         expectedRevision: ifMatch(request, dependencies),
         idempotencyKey: idempotencyKey(request),
         correlationId: request.id,
@@ -405,13 +451,13 @@ export function registerModelMarketplaceRoutes(
             secretAction: 'replace'
             value: string
             reason: string
-            confirmSharedImpact?: boolean
+            confirmProviderImpact?: boolean
           }
         | {
             secretAction: 'delete'
             reason: string
             confirmUnauthenticated?: boolean
-            confirmSharedImpact?: boolean
+            confirmProviderImpact?: boolean
           }
       const { actor, environment } = await requireAdmin(request, env, dependencies, true)
       await assertDraft(env, draftId, actor.user.id, dependencies)
@@ -427,7 +473,7 @@ export function registerModelMarketplaceRoutes(
         reason: body.reason,
         confirmUnauthenticated:
           body.secretAction === 'delete' ? body.confirmUnauthenticated : undefined,
-        confirmSharedImpact: body.confirmSharedImpact,
+        confirmProviderImpact: body.confirmProviderImpact,
         expectedRevision: ifMatch(request, dependencies),
         idempotencyKey: idempotencyKey(request),
         correlationId: request.id,

@@ -8,7 +8,11 @@ import { ValueCipher } from '../users/crypto.js'
 import type { MarketplaceConfigPublisher, RnacosConfigRead } from '../rnacos/config-client.js'
 import { MemoryMarketplaceSecretService } from './secret-service.js'
 import { renderModelsResource, renderProviderResources } from './renderer.js'
-import type { MarketplaceVersionRecord, ModelMutationInput } from './types.js'
+import type {
+  MarketplaceVersionRecord,
+  ModelMutationInput,
+  ProviderMutationInput,
+} from './types.js'
 
 class FakeMarketplacePublisher implements MarketplaceConfigPublisher {
   readonly writes: Array<{ dataId: string; md5: string }> = []
@@ -74,7 +78,30 @@ function cookieValue(cookie: string, name: string): string {
   return decodeURIComponent(value)
 }
 
-function mutation(secret: string): ModelMutationInput {
+function providerMutation(secret: string): ProviderMutationInput {
+  return {
+    displayName: '供应商 A',
+    baseUrl: 'https://api.vendor.example/',
+    protocols: [
+      {
+        type: 'OPENAI_CHAT_COMPLETIONS',
+        path: '/v1/chat/completions',
+        upstreamModelName: 'vendor-chat',
+      },
+      {
+        type: 'ANTHROPIC_MESSAGES',
+        path: '/v1/messages',
+        upstreamModelName: 'vendor-chat',
+      },
+    ],
+    authentication: {
+      mode: 'BEARER_TOKEN_POOL',
+      tokens: [{ name: 'primary', secretAction: 'replace', value: secret }],
+    },
+  }
+}
+
+function mutation(providerId: string): ModelMutationInput {
   return {
     displayName: '通用对话模型',
     logicalModelName: 'chat-pro',
@@ -82,27 +109,9 @@ function mutation(secret: string): ModelMutationInput {
     tags: ['chat', 'general'],
     providers: [
       {
-        mode: 'CREATE_DEDICATED',
-        displayName: '供应商 A',
-        baseUrl: 'https://api.vendor.example/',
+        providerId,
         routeRole: 'PRIMARY',
         sortOrder: 0,
-        protocols: [
-          {
-            type: 'OPENAI_CHAT_COMPLETIONS',
-            path: '/v1/chat/completions',
-            upstreamModelName: 'vendor-chat',
-          },
-          {
-            type: 'ANTHROPIC_MESSAGES',
-            path: '/v1/messages',
-            upstreamModelName: 'vendor-chat',
-          },
-        ],
-        authentication: {
-          mode: 'BEARER_TOKEN_POOL',
-          tokens: [{ name: 'primary', secretAction: 'replace', value: secret }],
-        },
       },
     ],
     accessMode: 'ALL_AUTHENTICATED',
@@ -160,8 +169,26 @@ test('model marketplace keeps draft, publication, activation and secrets separat
     headers: { cookie, 'x-csrf-token': csrf },
   })
   assert.equal(keyResponse.statusCode, 200)
-  const idempotencyKey = keyResponse.json().key as string
   const marker = 'MARKETPLACE_SECRET_MUST_NOT_LEAK_93b15c'
+  const createdProvider = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/drafts/${draftId}/providers`,
+    headers: {
+      cookie,
+      'x-csrf-token': csrf,
+      'idempotency-key': keyResponse.json().key as string,
+      'if-match': '"1"',
+    },
+    payload: providerMutation(marker),
+  })
+  assert.equal(createdProvider.statusCode, 201, createdProvider.body)
+  assert.equal(createdProvider.headers.etag, '"2"')
+  assert.equal(createdProvider.body.includes(marker), false)
+  const providerId = createdProvider.json().id as string
+  const providerName = createdProvider.json().providerName as string
+  const originalTokenId = createdProvider.json().tokens[0].id as string
+
+  const idempotencyKey = 'model-create-idempotency-0001'
   const created = await app.inject({
     method: 'POST',
     url: `/api/environments/${environmentId}/drafts/${draftId}/models`,
@@ -169,13 +196,13 @@ test('model marketplace keeps draft, publication, activation and secrets separat
       cookie,
       'x-csrf-token': csrf,
       'idempotency-key': idempotencyKey,
-      'if-match': '"1"',
+      'if-match': '"2"',
     },
-    payload: mutation(marker),
+    payload: mutation(providerId),
   })
   assert.equal(created.statusCode, 201, created.body)
   assert.match(created.headers['cache-control'] ?? '', /no-store/u)
-  assert.equal(created.headers.etag, '"2"')
+  assert.equal(created.headers.etag, '"3"')
   assert.equal(created.body.includes(marker), false)
   assert.equal(created.body.includes('secretId'), false)
   assert.equal(created.json().providers[0].baseUrl, 'https://api.vendor.example')
@@ -183,9 +210,23 @@ test('model marketplace keeps draft, publication, activation and secrets separat
   assert.equal(created.json().draft.state, 'MODIFIED')
   assert.equal(created.json().published.state, 'NEVER')
   assert.equal(created.json().activation.state, 'UNKNOWN')
-  const providerId = created.json().providers[0].id as string
-  const providerName = created.json().providers[0].providerName as string
-  const originalTokenId = created.json().providers[0].tokens[0].id as string
+
+  const providerList = await app.inject({
+    method: 'GET',
+    url: `/api/environments/${environmentId}/providers`,
+    headers: { cookie },
+  })
+  assert.equal(providerList.statusCode, 200, providerList.body)
+  assert.equal(providerList.json().items[0].id, providerId)
+  assert.equal(providerList.json().items[0].referencedModelCount, 1)
+
+  const archiveInUse = await app.inject({
+    method: 'DELETE',
+    url: `/api/environments/${environmentId}/drafts/${draftId}/providers/${providerId}`,
+    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"3"' },
+  })
+  assert.equal(archiveInUse.statusCode, 409, archiveInUse.body)
+  assert.equal(archiveInUse.json().code, 'PROVIDER_IN_USE')
 
   const replay = await app.inject({
     method: 'POST',
@@ -194,9 +235,9 @@ test('model marketplace keeps draft, publication, activation and secrets separat
       cookie,
       'x-csrf-token': csrf,
       'idempotency-key': idempotencyKey,
-      'if-match': '"1"',
+      'if-match': '"2"',
     },
-    payload: mutation(marker),
+    payload: mutation(providerId),
   })
   assert.equal(replay.statusCode, 200)
   assert.equal(replay.body.includes(marker), false)
@@ -210,7 +251,7 @@ test('model marketplace keeps draft, publication, activation and secrets separat
       cookie,
       'x-csrf-token': csrf,
       'idempotency-key': tokenKey,
-      'if-match': '"2"',
+      'if-match': '"3"',
     },
     payload: {
       name: 'secondary',
@@ -220,7 +261,7 @@ test('model marketplace keeps draft, publication, activation and secrets separat
     },
   })
   assert.equal(addedToken.statusCode, 201, addedToken.body)
-  assert.equal(addedToken.headers.etag, '"3"')
+  assert.equal(addedToken.headers.etag, '"4"')
   assert.equal(addedToken.body.includes(granularMarker), false)
   assert.equal(addedToken.body.includes('secretId'), false)
   const secondaryTokenId = addedToken.json().token.id as string
@@ -232,7 +273,7 @@ test('model marketplace keeps draft, publication, activation and secrets separat
       cookie,
       'x-csrf-token': csrf,
       'idempotency-key': tokenKey,
-      'if-match': '"2"',
+      'if-match': '"3"',
     },
     payload: {
       name: 'secondary',
@@ -252,7 +293,7 @@ test('model marketplace keeps draft, publication, activation and secrets separat
       cookie,
       'x-csrf-token': csrf,
       'idempotency-key': 'granular-token-replace-0001',
-      'if-match': '"3"',
+      'if-match': '"4"',
     },
     payload: {
       secretAction: 'replace',
@@ -261,7 +302,7 @@ test('model marketplace keeps draft, publication, activation and secrets separat
     },
   })
   assert.equal(replacedToken.statusCode, 200, replacedToken.body)
-  assert.equal(replacedToken.headers.etag, '"4"')
+  assert.equal(replacedToken.headers.etag, '"5"')
   assert.equal(replacedToken.body.includes('REPLACEMENT_SECRET_MUST_NOT_LEAK_12'), false)
 
   const deletedToken = await app.inject({
@@ -271,15 +312,15 @@ test('model marketplace keeps draft, publication, activation and secrets separat
       cookie,
       'x-csrf-token': csrf,
       'idempotency-key': 'granular-token-delete-0001',
-      'if-match': '"4"',
+      'if-match': '"5"',
     },
     payload: { secretAction: 'delete', reason: '验证凭据下线' },
   })
   assert.equal(deletedToken.statusCode, 200, deletedToken.body)
-  assert.equal(deletedToken.headers.etag, '"5"')
+  assert.equal(deletedToken.headers.etag, '"6"')
   assert.equal(deletedToken.json().deleted, true)
 
-  const conflictMutation = mutation('SECOND_SECRET_MARKER_42')
+  const conflictMutation = mutation(providerId)
   conflictMutation.logicalModelName = 'chat-pro-2'
   const conflict = await app.inject({
     method: 'POST',
@@ -307,12 +348,12 @@ test('model marketplace keeps draft, publication, activation and secrets separat
   const submitted = await app.inject({
     method: 'POST',
     url: `/api/environments/${environmentId}/drafts/${draftId}/submit`,
-    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"5"' },
+    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"6"' },
   })
   assert.equal(submitted.statusCode, 202, submitted.body)
   assert.equal(submitted.json().publicationState, 'NEVER')
   assert.equal(submitted.json().activationState, 'UNKNOWN')
-  assert.equal(submitted.headers.etag, '"6"')
+  assert.equal(submitted.headers.etag, '"7"')
   assert.deepEqual(
     submitted.json().release.resources.map((resource: { dataId: string; state: string }) => ({
       dataId: resource.dataId,
@@ -456,6 +497,18 @@ test('release preflight stops every write when a later Data ID has drifted', asy
     headers: { cookie },
   })
   const draftId = list.json().draft.id as string
+  const provider = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/drafts/${draftId}/providers`,
+    headers: {
+      cookie,
+      'x-csrf-token': csrf,
+      'idempotency-key': 'release-drift-provider-create',
+      'if-match': '"1"',
+    },
+    payload: providerMutation('DRIFT_TEST_SECRET_MUST_NOT_LEAK'),
+  })
+  assert.equal(provider.statusCode, 201, provider.body)
   const created = await app.inject({
     method: 'POST',
     url: `/api/environments/${environmentId}/drafts/${draftId}/models`,
@@ -463,15 +516,15 @@ test('release preflight stops every write when a later Data ID has drifted', asy
       cookie,
       'x-csrf-token': csrf,
       'idempotency-key': 'release-drift-model-create',
-      'if-match': '"1"',
+      'if-match': '"2"',
     },
-    payload: mutation('DRIFT_TEST_SECRET_MUST_NOT_LEAK'),
+    payload: mutation(provider.json().id as string),
   })
   assert.equal(created.statusCode, 201, created.body)
   const submitted = await app.inject({
     method: 'POST',
     url: `/api/environments/${environmentId}/drafts/${draftId}/submit`,
-    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"2"' },
+    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"3"' },
   })
   const releaseId = submitted.json().release.id as string
   const executed = await app.inject({
@@ -530,7 +583,19 @@ test('approval-required model publishes its empty access group before Provider r
     headers: { cookie },
   })
   const draftId = list.json().draft.id as string
-  const model = mutation('ACCESS_GROUP_SECRET_MUST_NOT_LEAK')
+  const provider = await app.inject({
+    method: 'POST',
+    url: `/api/environments/${environmentId}/drafts/${draftId}/providers`,
+    headers: {
+      cookie,
+      'x-csrf-token': csrf,
+      'idempotency-key': 'approval-provider-create-0001',
+      'if-match': '"1"',
+    },
+    payload: providerMutation('ACCESS_GROUP_SECRET_MUST_NOT_LEAK'),
+  })
+  assert.equal(provider.statusCode, 201, provider.body)
+  const model = mutation(provider.json().id as string)
   model.accessMode = 'APPROVAL_REQUIRED'
   const created = await app.inject({
     method: 'POST',
@@ -539,7 +604,7 @@ test('approval-required model publishes its empty access group before Provider r
       cookie,
       'x-csrf-token': csrf,
       'idempotency-key': 'approval-model-create-0001',
-      'if-match': '"1"',
+      'if-match': '"2"',
     },
     payload: model,
   })
@@ -548,7 +613,7 @@ test('approval-required model publishes its empty access group before Provider r
   const submitted = await app.inject({
     method: 'POST',
     url: `/api/environments/${environmentId}/drafts/${draftId}/submit`,
-    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"2"' },
+    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"3"' },
   })
   const releaseId = submitted.json().release.id as string
   const executed = await app.inject({
@@ -607,6 +672,42 @@ test('renderer uses fixed Data IDs, deterministic ordering and exact uint64 JSON
     createdAt: now,
     updatedAt: now,
     frozenAt: now,
+    providers: [
+      {
+        id: providerId,
+        providerName: 'mp_chat_pro_abcdef123456',
+        ownership: 'SHARED',
+        ownerModelId: null,
+        displayName: 'Provider',
+        baseUrl: 'https://api.example.test/',
+        protocols: [
+          {
+            type: 'ANTHROPIC_MESSAGES',
+            path: '/v1/messages',
+            upstreamModelName: 'upstream',
+          },
+          {
+            type: 'OPENAI_CHAT_COMPLETIONS',
+            path: '/v1/chat/completions',
+            upstreamModelName: 'upstream',
+          },
+        ],
+        tokens: [
+          {
+            id: tokenId,
+            name: 'primary',
+            secretId: secret.id,
+            fingerprintSuffix: secret.fingerprintSuffix,
+            updatedAt: now,
+          },
+        ],
+        createdBy: '00000000-0000-4000-8000-000000000004',
+        createdAt: now,
+        updatedBy: '00000000-0000-4000-8000-000000000004',
+        updatedAt: now,
+        archivedAt: null,
+      },
+    ],
     models: [
       {
         id: '00000000-0000-4000-8000-000000000006',
@@ -623,37 +724,11 @@ test('renderer uses fixed Data IDs, deterministic ordering and exact uint64 JSON
           maxTokensPerWindow: '9007199254740993',
         },
         allowUserGroups: [],
-        providers: [
+        providerBindings: [
           {
-            id: providerId,
-            providerName: 'mp_chat_pro_abcdef123456',
-            ownership: 'DEDICATED',
-            ownerModelId: '00000000-0000-4000-8000-000000000006',
-            displayName: 'Provider',
-            baseUrl: 'https://api.example.test/',
+            providerId,
             routeRole: 'PRIMARY',
             sortOrder: 0,
-            protocols: [
-              {
-                type: 'ANTHROPIC_MESSAGES',
-                path: '/v1/messages',
-                upstreamModelName: 'upstream',
-              },
-              {
-                type: 'OPENAI_CHAT_COMPLETIONS',
-                path: '/v1/chat/completions',
-                upstreamModelName: 'upstream',
-              },
-            ],
-            tokens: [
-              {
-                id: tokenId,
-                name: 'primary',
-                secretId: secret.id,
-                fingerprintSuffix: secret.fingerprintSuffix,
-                updatedAt: now,
-              },
-            ],
           },
         ],
         createdBy: '00000000-0000-4000-8000-000000000004',

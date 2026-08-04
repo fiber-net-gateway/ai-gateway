@@ -10,6 +10,7 @@ import {
   LogOut,
   Menu,
   ShieldCheck,
+  Server,
   Users,
   X,
 } from 'lucide-react'
@@ -18,7 +19,14 @@ import { useState, type ReactNode } from 'react'
 import type { EnvironmentAccess, User } from '../api/client'
 
 export type Section =
-  'models' | 'releases' | 'tokens' | 'my-access' | 'access-requests' | 'users' | 'audit'
+  | 'models'
+  | 'providers'
+  | 'releases'
+  | 'tokens'
+  | 'my-access'
+  | 'access-requests'
+  | 'users'
+  | 'audit'
 
 interface LayoutProps {
   user: User
@@ -83,6 +91,15 @@ export function ConsoleLayout({
           >
             <Boxes size={18} /> 模型广场
           </button>
+          {user.systemRole === 'ADMIN' && (
+            <button
+              className={section === 'providers' ? 'active' : ''}
+              type="button"
+              onClick={() => navigate('providers')}
+            >
+              <Server size={18} /> Provider 管理
+            </button>
+          )}
           {user.systemRole === 'ADMIN' && (
             <button
               className={section === 'releases' ? 'active' : ''}

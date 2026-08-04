@@ -1,6 +1,7 @@
 import { DomainError } from '../users/errors.js'
 import type {
   MarketplaceModelRecord,
+  MarketplaceProviderRecord,
   MarketplaceProtocolRecord,
   ModelMutationInput,
   ProtocolCoverage,
@@ -74,31 +75,15 @@ export function normalizeBaseUrl(value: string, field: string): string {
   return input.replace(/\/+$/u, '')
 }
 
-function validateProvider(provider: ProviderMutationInput, index: number): void {
-  const field = `/providers/${index}`
-  if (!['PRIMARY', 'FALLBACK'].includes(provider.routeRole)) {
-    fail('PROVIDER_ROUTE_ROLE_INVALID', '供应商路由角色不合法', `${field}/routeRole`)
-  }
-  if (
-    !Number.isInteger(provider.sortOrder) ||
-    provider.sortOrder < 0 ||
-    provider.sortOrder > 65_535
-  ) {
-    fail('PROVIDER_SORT_ORDER_INVALID', '供应商顺序必须为非负整数', `${field}/sortOrder`)
-  }
-  if (provider.mode === 'BIND_EXISTING') {
-    if (!provider.providerId) {
-      fail('PROVIDER_ID_REQUIRED', '绑定已有供应商时必须提供 providerId', `${field}/providerId`)
-    }
-    return
-  }
-  if (!provider.displayName?.trim() || provider.displayName.trim().length > 100) {
+export function validateProviderMutation(provider: ProviderMutationInput): void {
+  const field = '/provider'
+  if (!provider.displayName.trim() || provider.displayName.trim().length > 100) {
     fail('PROVIDER_DISPLAY_NAME_REQUIRED', '供应商显示名称不能为空', `${field}/displayName`)
   }
   if (!provider.baseUrl)
     fail('PROVIDER_ENDPOINT_REQUIRED', '供应商 Base URL 不能为空', `${field}/baseUrl`)
   normalizeBaseUrl(provider.baseUrl, `${field}/baseUrl`)
-  if (!provider.protocols?.length) {
+  if (!provider.protocols.length) {
     fail('PROVIDER_PROTOCOL_REQUIRED', '供应商至少需要一项协议映射', `${field}/protocols`)
   }
   const seen = new Set<string>()
@@ -114,12 +99,7 @@ function validateProvider(provider: ProviderMutationInput, index: number): void 
     seen.add(protocol.type)
   })
   const authentication = provider.authentication
-  if (!authentication) {
-    fail('PROVIDER_AUTHENTICATION_REQUIRED', '必须明确供应商鉴权方式', `${field}/authentication`)
-  }
-  const activeTokens = (authentication.tokens ?? []).filter(
-    (token) => token.secretAction !== 'delete',
-  )
+  const activeTokens = authentication.tokens.filter((token) => token.secretAction !== 'delete')
   if (authentication.mode === 'NO_CREDENTIALS' && !authentication.confirmUnauthenticated) {
     fail(
       'UNAUTHENTICATED_PROVIDER_CONFIRMATION_REQUIRED',
@@ -136,7 +116,7 @@ function validateProvider(provider: ProviderMutationInput, index: number): void 
     )
   }
   const tokenNames = new Set<string>()
-  for (const [tokenIndex, token] of (authentication.tokens ?? []).entries()) {
+  for (const [tokenIndex, token] of authentication.tokens.entries()) {
     const tokenField = `${field}/authentication/tokens/${tokenIndex}`
     if (
       !token.name ||
@@ -210,7 +190,27 @@ export function validateModelMutation(input: ModelMutationInput, creating: boole
   if (input.accessMode !== 'ALL_AUTHENTICATED' && input.accessMode !== 'APPROVAL_REQUIRED') {
     fail('MODEL_ACCESS_MODE_INVALID', '模型访问模式不合法', '/accessMode')
   }
-  input.providers.forEach(validateProvider)
+  for (const [index, provider] of input.providers.entries()) {
+    const field = `/providers/${index}`
+    if (!provider.providerId) {
+      fail('PROVIDER_ID_REQUIRED', '必须选择已有供应商', `${field}/providerId`)
+    }
+    if (provider.routeRole !== 'PRIMARY' && provider.routeRole !== 'FALLBACK') {
+      fail('PROVIDER_ROUTE_ROLE_INVALID', '供应商路由角色不合法', `${field}/routeRole`)
+    }
+    if (
+      !Number.isInteger(provider.sortOrder) ||
+      provider.sortOrder < 0 ||
+      provider.sortOrder > 65_535
+    ) {
+      fail('PROVIDER_SORT_ORDER_INVALID', '供应商顺序必须为非负整数', `${field}/sortOrder`)
+    }
+  }
+  if (
+    new Set(input.providers.map((provider) => provider.providerId)).size !== input.providers.length
+  ) {
+    fail('MODEL_PROVIDER_DUPLICATE', '同一个供应商不能重复绑定', '/providers')
+  }
   const fallbacks = input.providers.filter((provider) => provider.routeRole === 'FALLBACK')
   if (fallbacks.length > 1) {
     fail('MODEL_FALLBACK_DUPLICATE', '一个模型最多配置一个 Fallback', '/providers')
@@ -253,13 +253,20 @@ export function validateModelMutation(input: ModelMutationInput, creating: boole
   }
 }
 
-export function protocolCoverage(model: MarketplaceModelRecord): {
+export function protocolCoverage(
+  model: MarketplaceModelRecord,
+  providers: MarketplaceProviderRecord[],
+): {
   openai: ProtocolCoverage
   anthropic: ProtocolCoverage
 } {
-  const activeProviders = model.providers.filter(
-    (provider) => provider.routeRole === 'PRIMARY' || model.fallbackEnabled,
-  )
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]))
+  const activeProviders = model.providerBindings
+    .filter((binding) => binding.routeRole === 'PRIMARY' || model.fallbackEnabled)
+    .flatMap((binding) => {
+      const provider = providerById.get(binding.providerId)
+      return provider && !provider.archivedAt ? [provider] : []
+    })
   const supports = (type: MarketplaceProtocolRecord['type']) =>
     activeProviders.some((provider) =>
       provider.protocols.some((protocol) => protocol.type === type),
@@ -272,9 +279,12 @@ export function protocolCoverage(model: MarketplaceModelRecord): {
   }
 }
 
-export function validateModelGraph(model: MarketplaceModelRecord): ValidationIssue[] {
+export function validateModelGraph(
+  model: MarketplaceModelRecord,
+  providers: MarketplaceProviderRecord[],
+): ValidationIssue[] {
   const issues: ValidationIssue[] = []
-  const coverage = protocolCoverage(model)
+  const coverage = protocolCoverage(model, providers)
   if (coverage.openai === 'UNSUPPORTED') {
     issues.push({
       code: 'OPENAI_PROTOCOL_UNSUPPORTED',
@@ -299,7 +309,13 @@ export function validateModelGraph(model: MarketplaceModelRecord): ValidationIss
       severity: 'ERROR',
     })
   }
-  if (model.providers.some((provider) => provider.protocols.length === 0)) {
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]))
+  if (
+    model.providerBindings.some((binding) => {
+      const provider = providerById.get(binding.providerId)
+      return !provider || provider.archivedAt || provider.protocols.length === 0
+    })
+  ) {
     issues.push({
       code: 'PROVIDER_PROTOCOL_REQUIRED',
       message: '供应商至少需要一项协议映射',

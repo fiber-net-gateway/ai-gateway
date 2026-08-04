@@ -35,6 +35,7 @@ export class MemoryMarketplaceStore implements MarketplaceStore {
       baseReleaseVersionId: null,
       schemaVersion: 1,
       revision: 1,
+      providers: [],
       models: [],
       createdBy: input.actorId,
       createdAt: input.now,
@@ -63,6 +64,7 @@ export class MemoryMarketplaceStore implements MarketplaceStore {
     expectedRevision: number
     actorId: string
     now: string
+    providers: MarketplaceVersionRecord['providers']
     models: MarketplaceModelRecord[]
   }): Promise<MarketplaceVersionRecord> {
     const environment = this.environments.get(input.environmentId)
@@ -75,6 +77,7 @@ export class MemoryMarketplaceStore implements MarketplaceStore {
         serverRevision: environment.draft.revision,
       })
     }
+    environment.draft.providers = copy(input.providers)
     environment.draft.models = copy(input.models)
     environment.draft.revision += 1
     environment.draft.updatedAt = input.now
@@ -276,11 +279,13 @@ export class MemoryMarketplaceStore implements MarketplaceStore {
 }
 
 function releaseResources(version: MarketplaceVersionRecord) {
-  const providerNames = [
-    ...new Set(
-      version.models.flatMap((model) => model.providers.map((provider) => provider.providerName)),
-    ),
-  ].sort((left, right) => left.localeCompare(right, 'en'))
+  const referencedProviderIds = new Set(
+    version.models.flatMap((model) => model.providerBindings.map((binding) => binding.providerId)),
+  )
+  const providerNames = version.providers
+    .filter((provider) => referencedProviderIds.has(provider.id) && !provider.archivedAt)
+    .map((provider) => provider.providerName)
+    .sort((left, right) => left.localeCompare(right, 'en'))
   return [
     ...providerNames.map((providerName, index) => ({
       id: randomUUID(),

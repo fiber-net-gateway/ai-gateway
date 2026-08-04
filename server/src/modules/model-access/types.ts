@@ -4,11 +4,11 @@ export type ModelAccessRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CA
 export type AccessPublicationState = 'NOT_STARTED' | 'PENDING' | 'PUBLISHED' | 'FAILED'
 export type AccessActivationState = 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'PARTIAL' | 'REJECTED'
 
-export interface ProviderAccessGroupRecord {
+export interface ModelAccessGroupRecord {
   id: string
   environmentId: string
-  providerId: string
-  providerName: string
+  modelId: string
+  logicalModelName: string
   groupName: string
   revision: number
   publishedRevision: number
@@ -17,7 +17,7 @@ export interface ProviderAccessGroupRecord {
   updatedAt: string
 }
 
-export interface ProviderAccessGroupMemberRecord {
+export interface ModelAccessGroupMemberRecord {
   groupId: string
   userId: string
   username: string
@@ -38,8 +38,6 @@ export interface ModelAccessRequestRecord {
   modelDisplayName: string
   groupId: string
   groupName: string
-  providerId: string
-  providerName: string
   reason: string
   status: ModelAccessRequestStatus
   publicationState: AccessPublicationState
@@ -82,24 +80,24 @@ export interface RequestCursor {
 
 export interface ModelAccessStore {
   acquirePublicationLock(groupId: string): Promise<() => Promise<void>>
-  ensureGroupForProvider(input: {
+  ensureGroupForModel(input: {
     id: string
     environmentId: string
-    providerId: string
-    providerName: string
+    modelId: string
+    logicalModelName: string
     groupName: string
     actorId: string
     now: string
-  }): Promise<ProviderAccessGroupRecord>
-  getGroupsByIds(ids: string[]): Promise<ProviderAccessGroupRecord[]>
+  }): Promise<ModelAccessGroupRecord>
+  getGroupsByIds(ids: string[]): Promise<ModelAccessGroupRecord[]>
   getGroupSnapshot(
     groupId: string,
-  ): Promise<{ group: ProviderAccessGroupRecord; usernames: string[] } | null>
+  ): Promise<{ group: ModelAccessGroupRecord; usernames: string[] } | null>
   markGroupPublished(input: {
     groupId: string
     revision: number
     now: string
-  }): Promise<ProviderAccessGroupRecord>
+  }): Promise<ModelAccessGroupRecord>
   getPublishedMembershipGroupIds(input: { groupIds: string[]; userId: string }): Promise<string[]>
   isPublishedMember(input: { groupIds: string[]; userId: string }): Promise<boolean>
   createRequest(input: {
@@ -174,17 +172,17 @@ export interface AccessGroupPublisher {
 }
 
 export interface ModelAccessDirectory {
-  ensureGroupForProvider(input: {
+  ensureGroupForModel(input: {
     environmentId: string
-    providerId: string
-    providerName: string
+    modelId: string
+    logicalModelName: string
     actorId: string
-  }): Promise<ProviderAccessGroupRecord>
-  getGroupsByIds(ids: string[]): Promise<ProviderAccessGroupRecord[]>
+  }): Promise<ModelAccessGroupRecord>
+  getGroupsByIds(ids: string[]): Promise<ModelAccessGroupRecord[]>
   ensureGroupPublished(input: {
     environmentId: string
     groupId: string
-  }): Promise<ProviderAccessGroupRecord>
+  }): Promise<ModelAccessGroupRecord>
   getPublishedMembershipGroupIds(input: { groupIds: string[]; userId: string }): Promise<string[]>
   isPublishedMember(input: { groupIds: string[]; userId: string }): Promise<boolean>
 }
@@ -213,8 +211,6 @@ export interface AdminAccessRequestView extends ApplicantAccessRequestView {
   applicantUserId: string
   applicantUsername: string
   applicantDisplayName: string
-  providerId: string
-  providerName: string
   groupId: string
   groupName: string
   decidedBy: string | null

@@ -110,7 +110,7 @@ export function AccessRequestsPage({
         <div>
           <span className="eyebrow">MODEL ACCESS / APPROVAL</span>
           <h1>模型权限审批</h1>
-          <p>批准申请会更新 Provider 托管组；审批、rnacos 发布和实例生效分别记录。</p>
+          <p>批准申请会更新模型专属授权组；审批、rnacos 发布和实例生效分别记录。</p>
         </div>
         <div className="request-summary">
           <Clock3 size={18} />
@@ -187,10 +187,6 @@ export function AccessRequestsPage({
                 <blockquote>{request.reason}</blockquote>
               </div>
               <dl>
-                <div>
-                  <dt>托管 Provider</dt>
-                  <dd>{request.providerName}</dd>
-                </div>
                 <div>
                   <dt>申请授权组</dt>
                   <dd>{request.groupName}</dd>
