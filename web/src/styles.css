@@ -3233,11 +3233,16 @@ td code {
 .release-dependencies > div {
   margin-top: 10px;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   color: #68736b;
   font-size: 10px;
+}
+.release-dependencies .secondary-button {
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 9px;
 }
 .release-dependencies code {
   color: #89928c;

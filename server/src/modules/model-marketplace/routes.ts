@@ -604,6 +604,23 @@ export function registerModelMarketplaceRoutes(
     },
   )
 
+  app.post(
+    '/api/environments/:env/releases/:releaseId/refresh-activation',
+    { schema: { params: releaseParamsSchema } },
+    async (request, reply) => {
+      const { env, releaseId } = request.params as ReleaseParams
+      const { actor, environment } = await requireAdmin(request, env, dependencies, true)
+      needsFreshMfa(environment, actor)
+      secretResponse(reply)
+      return dependencies.marketplace.refreshReleaseActivation({
+        environmentId: env,
+        releaseId,
+        actor,
+        correlationId: request.id,
+      })
+    },
+  )
+
   for (const action of ['execute', 'retry'] as const) {
     app.post(
       `/api/environments/:env/releases/:releaseId/${action}`,

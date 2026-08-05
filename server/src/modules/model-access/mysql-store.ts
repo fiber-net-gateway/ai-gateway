@@ -64,7 +64,8 @@ interface MemberRow extends RowDataPacket {
 
 interface PublicationRow extends RowDataPacket {
   id: string
-  request_id: string
+  request_id: string | null
+  publication_kind: AccessGroupPublicationRecord['publicationKind']
   environment_id: string
   group_id: string
   group_revision: string | number
@@ -72,6 +73,7 @@ interface PublicationRow extends RowDataPacket {
   data_id: string
   target_content: string | Record<string, unknown>
   target_md5: string
+  expected_old_md5: string | null
   attempt_number: number
   publication_state: AccessGroupPublicationRecord['state']
   readback_md5: string | null
@@ -107,11 +109,12 @@ const requestSelect = `SELECT BIN_TO_UUID(id) AS id,
 
 const publicationSelect = `SELECT BIN_TO_UUID(id) AS id,
        BIN_TO_UUID(request_id) AS request_id,
+       publication_kind,
        BIN_TO_UUID(environment_id) AS environment_id,
        BIN_TO_UUID(group_id) AS group_id,
        group_revision, group_name, data_id,
        target_content,
-       target_md5, attempt_number, publication_state, readback_md5,
+       target_md5, expected_old_md5, attempt_number, publication_state, readback_md5,
        safe_error_code, safe_error_message, BIN_TO_UUID(created_by) AS created_by,
        created_at, started_at, finished_at
   FROM access_group_publications`
@@ -168,6 +171,7 @@ function publicationFromRow(row: PublicationRow): AccessGroupPublicationRecord {
   return {
     id: row.id,
     requestId: row.request_id,
+    publicationKind: row.publication_kind,
     environmentId: row.environment_id,
     groupId: row.group_id,
     groupRevision: integer(row.group_revision),
@@ -178,6 +182,7 @@ function publicationFromRow(row: PublicationRow): AccessGroupPublicationRecord {
         ? row.target_content
         : JSON.stringify(row.target_content),
     targetMd5: row.target_md5,
+    expectedOldMd5: row.expected_old_md5,
     attemptNumber: row.attempt_number,
     state: row.publication_state,
     readbackMd5: row.readback_md5,
@@ -309,6 +314,145 @@ export class MySqlModelAccessStore implements ModelAccessStore {
       [groupId],
     )
     return { group: groups[0], usernames: members.map((member) => member.username) }
+  }
+
+  async getLatestSuccessfulPublication(
+    groupId: string,
+  ): Promise<AccessGroupPublicationRecord | null> {
+    const [rows] = await this.pool.query<PublicationRow[]>(
+      `${publicationSelect}
+       WHERE group_id = UUID_TO_BIN(?) AND publication_state = 'PUBLISHED'
+       ORDER BY group_revision DESC, attempt_number DESC, created_at DESC, id DESC LIMIT 1`,
+      [groupId],
+    )
+    return rows[0] ? publicationFromRow(rows[0]) : null
+  }
+
+  async createManualPublication(input: {
+    publicationId: string
+    groupId: string
+    actorId: string
+    expectedOldMd5: string | null
+    now: string
+  }): Promise<AccessGroupPublicationRecord> {
+    const connection = await this.pool.getConnection()
+    try {
+      await connection.beginTransaction()
+      const [groupRows] = await connection.query<GroupRow[]>(
+        `${groupSelect} WHERE id = UUID_TO_BIN(?) LIMIT 1 FOR UPDATE`,
+        [input.groupId],
+      )
+      if (!groupRows[0]) {
+        throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
+      }
+      const group = groupFromRow(groupRows[0])
+      const [memberRows] = await connection.query<MemberRow[]>(
+        `SELECT BIN_TO_UUID(group_id) AS group_id, BIN_TO_UUID(user_id) AS user_id,
+                username, added_revision
+           FROM provider_access_group_members
+          WHERE group_id = UUID_TO_BIN(?) ORDER BY username`,
+        [group.id],
+      )
+      const [attemptRows] = await connection.query<PublicationRow[]>(
+        `${publicationSelect}
+         WHERE group_id = UUID_TO_BIN(?) AND group_revision = ?
+         ORDER BY attempt_number DESC LIMIT 1 FOR UPDATE`,
+        [group.id, group.revision],
+      )
+      const rendered = renderAccessGroup(
+        group,
+        memberRows.map((member) => member.username),
+      )
+      const publication: AccessGroupPublicationRecord = {
+        id: input.publicationId,
+        requestId: null,
+        publicationKind: 'MANUAL_SYNC',
+        environmentId: group.environmentId,
+        groupId: group.id,
+        groupRevision: group.revision,
+        groupName: group.groupName,
+        dataId: rendered.dataId,
+        targetContent: rendered.content,
+        targetMd5: rendered.md5,
+        expectedOldMd5: input.expectedOldMd5,
+        attemptNumber: (attemptRows[0]?.attempt_number ?? 0) + 1,
+        state: 'PENDING',
+        readbackMd5: null,
+        safeErrorCode: null,
+        safeErrorMessage: null,
+        createdBy: input.actorId,
+        createdAt: input.now,
+        startedAt: null,
+        finishedAt: null,
+      }
+      await this.insertPublication(connection, publication)
+      await connection.commit()
+      return publication
+    } catch (error) {
+      await connection.rollback()
+      throw error
+    } finally {
+      connection.release()
+    }
+  }
+
+  async markManualPublicationResult(input: {
+    publicationId: string
+    state: 'PUBLISHED' | 'FAILED'
+    readbackMd5?: string
+    safeErrorCode?: string
+    safeErrorMessage?: string
+    now: string
+  }): Promise<ModelAccessGroupRecord> {
+    const connection = await this.pool.getConnection()
+    try {
+      await connection.beginTransaction()
+      const [rows] = await connection.query<PublicationRow[]>(
+        `${publicationSelect} WHERE id = UUID_TO_BIN(?) LIMIT 1 FOR UPDATE`,
+        [input.publicationId],
+      )
+      if (!rows[0] || rows[0].publication_kind !== 'MANUAL_SYNC' || rows[0].request_id) {
+        throw new DomainError('PUBLICATION_NOT_FOUND', 404, '发布记录不存在')
+      }
+      const publication = publicationFromRow(rows[0])
+      await connection.query(
+        `UPDATE access_group_publications
+            SET publication_state = ?, readback_md5 = ?, safe_error_code = ?,
+                safe_error_message = ?, started_at = COALESCE(started_at, ?), finished_at = ?
+          WHERE id = UUID_TO_BIN(?)`,
+        [
+          input.state,
+          input.readbackMd5 ?? null,
+          input.safeErrorCode ?? null,
+          input.safeErrorMessage ?? null,
+          input.now,
+          input.now,
+          input.publicationId,
+        ],
+      )
+      if (input.state === 'PUBLISHED') {
+        await connection.query(
+          `UPDATE provider_access_groups
+              SET published_revision = GREATEST(published_revision, ?), updated_at = ?
+            WHERE id = UUID_TO_BIN(?)`,
+          [publication.groupRevision, input.now, publication.groupId],
+        )
+      }
+      const [groupRows] = await connection.query<GroupRow[]>(
+        `${groupSelect} WHERE id = UUID_TO_BIN(?) LIMIT 1`,
+        [publication.groupId],
+      )
+      if (!groupRows[0]) {
+        throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
+      }
+      await connection.commit()
+      return groupFromRow(groupRows[0])
+    } catch (error) {
+      await connection.rollback()
+      throw error
+    } finally {
+      connection.release()
+    }
   }
 
   async markGroupPublished(input: {
@@ -812,15 +956,16 @@ export class MySqlModelAccessStore implements ModelAccessStore {
   ): Promise<void> {
     await connection.query<ResultSetHeader>(
       `INSERT INTO access_group_publications
-        (id, request_id, environment_id, group_id, group_revision, group_name,
-         data_id, target_content, target_md5, attempt_number, publication_state,
+        (id, request_id, publication_kind, environment_id, group_id, group_revision, group_name,
+         data_id, target_content, target_md5, expected_old_md5, attempt_number, publication_state,
          readback_md5, safe_error_code, safe_error_message, created_by,
          created_at, started_at, finished_at)
-       VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), UUID_TO_BIN(?), UUID_TO_BIN(?), ?, ?,
-               ?, ?, ?, ?, ?, ?, ?, ?, UUID_TO_BIN(?), ?, ?, ?)`,
+       VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), ?, UUID_TO_BIN(?), UUID_TO_BIN(?), ?, ?,
+               ?, ?, ?, ?, ?, ?, ?, ?, ?, UUID_TO_BIN(?), ?, ?, ?)`,
       [
         publication.id,
         publication.requestId,
+        publication.publicationKind,
         publication.environmentId,
         publication.groupId,
         publication.groupRevision,
@@ -828,6 +973,7 @@ export class MySqlModelAccessStore implements ModelAccessStore {
         publication.dataId,
         publication.targetContent,
         publication.targetMd5,
+        publication.expectedOldMd5,
         publication.attemptNumber,
         publication.state,
         publication.readbackMd5,

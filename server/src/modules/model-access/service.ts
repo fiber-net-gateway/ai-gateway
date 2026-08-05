@@ -10,6 +10,7 @@ import { renderAccessGroup } from './renderer.js'
 import { AccessGroupPublisherError } from './rnacos-publisher.js'
 import type {
   AccessGroupPublicationRecord,
+  AccessGroupPublicationView,
   AccessGroupPublisher,
   AdminAccessRequestView,
   ApplicantAccessRequestView,
@@ -28,6 +29,16 @@ function requestRevision(etag: string | undefined): number {
   if (!match) throw new DomainError('IF_MATCH_REQUIRED', 428, '审批操作需要有效的 If-Match')
   const revision = Number(match[1])
   if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new DomainError('IF_MATCH_INVALID', 400, 'If-Match revision 不合法')
+  }
+  return revision
+}
+
+function groupRevision(etag: string | undefined): number {
+  const match = etag?.trim().match(/^(?:W\/)?"([0-9]+)"$/u)
+  if (!match) throw new DomainError('IF_MATCH_REQUIRED', 428, '发布操作需要有效的 If-Match')
+  const revision = Number(match[1])
+  if (!Number.isSafeInteger(revision) || revision < 0) {
     throw new DomainError('IF_MATCH_INVALID', 400, 'If-Match revision 不合法')
   }
   return revision
@@ -63,6 +74,10 @@ export class ModelAccessService implements ModelAccessDirectory {
     return requestRevision(etag)
   }
 
+  parseGroupRevision(etag: string | undefined): number {
+    return groupRevision(etag)
+  }
+
   async ensureGroupForModel(input: {
     environmentId: string
     modelId: string
@@ -89,20 +104,36 @@ export class ModelAccessService implements ModelAccessDirectory {
     return this.store.getGroupsByIds(ids)
   }
 
-  async ensureGroupPublished(input: {
-    environmentId: string
+  async getGroupPublicationTargets(ids: string[]) {
+    const targets = []
+    for (const groupId of [...new Set(ids)]) {
+      const snapshot = await this.store.getGroupSnapshot(groupId)
+      if (!snapshot) continue
+      const rendered = renderAccessGroup(snapshot.group, snapshot.usernames)
+      const latest = await this.store.getLatestSuccessfulPublication(groupId)
+      targets.push({
+        group: snapshot.group,
+        dataId: rendered.dataId,
+        targetMd5: rendered.md5,
+        publishedMd5: latest?.readbackMd5 ?? null,
+      })
+    }
+    return targets
+  }
+
+  async publishGroup(input: {
     groupId: string
-  }): Promise<ModelAccessGroupRecord> {
+    actor: AuthenticatedActor
+    expectedRevision: number
+    correlationId: string
+  }): Promise<AccessGroupPublicationView> {
     return this.withGroupLock(input.groupId, async () => {
       const snapshot = await this.store.getGroupSnapshot(input.groupId)
-      if (!snapshot || snapshot.group.environmentId !== input.environmentId) {
-        throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
-      }
-      if (
-        snapshot.group.revision > 0 &&
-        snapshot.group.publishedRevision >= snapshot.group.revision
-      ) {
-        return snapshot.group
+      if (!snapshot) throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
+      if (snapshot.group.revision !== input.expectedRevision) {
+        throw new DomainError('ACCESS_GROUP_REVISION_CONFLICT', 412, '授权组已被其他操作更新', {
+          serverRevision: snapshot.group.revision,
+        })
       }
       if (!this.publisher) {
         throw new DomainError(
@@ -112,18 +143,81 @@ export class ModelAccessService implements ModelAccessDirectory {
         )
       }
       const rendered = renderAccessGroup(snapshot.group, snapshot.usernames)
-      await this.publisher.publish({
+      const latest = await this.store.getLatestSuccessfulPublication(snapshot.group.id)
+      const current = await this.publisher.read({
         environmentId: snapshot.group.environmentId,
         group: 'LLM-SERVER',
         dataId: rendered.dataId,
-        content: rendered.content,
-        expectedMd5: rendered.md5,
       })
-      return this.store.markGroupPublished({
+      const publication = await this.store.createManualPublication({
+        publicationId: randomUUID(),
         groupId: snapshot.group.id,
-        revision: snapshot.group.revision,
+        actorId: input.actor.user.id,
+        expectedOldMd5: latest?.readbackMd5 ?? null,
         now: this.clock.now().toISOString(),
       })
+      let group: ModelAccessGroupRecord
+      try {
+        this.assertSafeGroupWrite(current, publication.targetMd5, publication.expectedOldMd5)
+        const result =
+          current.md5 === publication.targetMd5
+            ? { readbackMd5: publication.targetMd5 }
+            : await this.publisher.publish({
+                environmentId: publication.environmentId,
+                group: 'LLM-SERVER',
+                dataId: publication.dataId,
+                content: publication.targetContent,
+                expectedMd5: publication.targetMd5,
+                expectedOldMd5: publication.expectedOldMd5,
+              })
+        group = await this.store.markManualPublicationResult({
+          publicationId: publication.id,
+          state: 'PUBLISHED',
+          readbackMd5: result.readbackMd5,
+          now: this.clock.now().toISOString(),
+        })
+        await this.auditGroup(
+          input.actor,
+          'model_access.group.publication_succeeded',
+          group,
+          input.correlationId,
+          {
+            publicationId: publication.id,
+            dataId: publication.dataId,
+            targetMd5: publication.targetMd5,
+            readbackMd5: result.readbackMd5,
+          },
+        )
+        return this.groupPublicationView(group, publication.id, 'PUBLISHED', result.readbackMd5)
+      } catch (error) {
+        const code =
+          error instanceof AccessGroupPublisherError || error instanceof DomainError
+            ? error.code
+            : 'RNACOS_UNAVAILABLE'
+        const message =
+          error instanceof AccessGroupPublisherError || error instanceof DomainError
+            ? error.message
+            : 'rnacos 发布失败'
+        group = await this.store.markManualPublicationResult({
+          publicationId: publication.id,
+          state: 'FAILED',
+          safeErrorCode: code,
+          safeErrorMessage: safeMessage(message),
+          now: this.clock.now().toISOString(),
+        })
+        await this.auditGroup(
+          input.actor,
+          'model_access.group.publication_failed',
+          group,
+          input.correlationId,
+          {
+            publicationId: publication.id,
+            dataId: publication.dataId,
+            safeErrorCode: code,
+          },
+        )
+        return this.groupPublicationView(group, publication.id, 'FAILED', null)
+      }
     })
   }
 
@@ -319,6 +413,7 @@ export class ModelAccessService implements ModelAccessDirectory {
       await this.requireEnvironmentAccess(applicant.id, current.environmentId)
       const now = this.clock.now().toISOString()
       const publicationId = randomUUID()
+      const latest = await this.store.getLatestSuccessfulPublication(current.groupId)
       const committed = await this.store.approve({
         requestId: current.id,
         expectedRevision: input.expectedRevision,
@@ -327,10 +422,12 @@ export class ModelAccessService implements ModelAccessDirectory {
         publication: {
           id: publicationId,
           requestId: current.id,
+          publicationKind: 'ACCESS_APPROVAL',
           environmentId: current.environmentId,
           groupId: current.groupId,
           groupName: current.groupName,
           dataId: `ploto.ai-llm.user-group.${current.groupName}`,
+          expectedOldMd5: latest?.readbackMd5 ?? null,
           attemptNumber: 1,
           state: 'PENDING',
           readbackMd5: null,
@@ -441,18 +538,31 @@ export class ModelAccessService implements ModelAccessDirectory {
     actor: AuthenticatedActor,
     correlationId: string,
   ): Promise<ModelAccessRequestRecord> {
+    if (!publication.requestId) {
+      throw new DomainError('PUBLICATION_NOT_FOUND', 404, '发布记录不存在')
+    }
     if (!this.publisher) return (await this.store.getRequest(publication.requestId))!
     let request: ModelAccessRequestRecord
     let eventType: string
     let auditPayload: Record<string, unknown>
     try {
-      const result = await this.publisher.publish({
+      const current = await this.publisher.read({
         environmentId: publication.environmentId,
         group: 'LLM-SERVER',
         dataId: publication.dataId,
-        content: publication.targetContent,
-        expectedMd5: publication.targetMd5,
       })
+      this.assertSafeGroupWrite(current, publication.targetMd5, publication.expectedOldMd5)
+      const result =
+        current.md5 === publication.targetMd5
+          ? { readbackMd5: publication.targetMd5 }
+          : await this.publisher.publish({
+              environmentId: publication.environmentId,
+              group: 'LLM-SERVER',
+              dataId: publication.dataId,
+              content: publication.targetContent,
+              expectedMd5: publication.targetMd5,
+              expectedOldMd5: publication.expectedOldMd5,
+            })
       request = await this.store.markPublicationResult({
         publicationId: publication.id,
         requestId: publication.requestId,
@@ -671,6 +781,60 @@ export class ModelAccessService implements ModelAccessDirectory {
       environmentId: request.environmentId,
       correlationId,
       reason: eventType.endsWith('.rejected') ? request.decisionReason : null,
+      payload,
+      occurredAt: this.clock.now().toISOString(),
+    })
+  }
+
+  private assertSafeGroupWrite(
+    current: { state: 'PRESENT' | 'NOT_FOUND'; md5: string | null },
+    targetMd5: string,
+    expectedOldMd5: string | null,
+  ): void {
+    if (current.md5 === targetMd5) return
+    const drifted =
+      current.state === 'PRESENT' ? current.md5 !== expectedOldMd5 : expectedOldMd5 !== null
+    if (drifted) {
+      throw new DomainError(
+        'ACCESS_GROUP_DRIFTED',
+        409,
+        '授权组 rnacos 内容与上次成功发布证据不一致',
+      )
+    }
+  }
+
+  private groupPublicationView(
+    group: ModelAccessGroupRecord,
+    publicationId: string,
+    publicationState: 'PUBLISHED' | 'FAILED',
+    readbackMd5: string | null,
+  ): AccessGroupPublicationView {
+    return {
+      groupId: group.id,
+      groupName: group.groupName,
+      revision: group.revision,
+      publishedRevision: group.publishedRevision,
+      publicationId,
+      publicationState,
+      readbackMd5,
+    }
+  }
+
+  private async auditGroup(
+    actor: AuthenticatedActor,
+    eventType: string,
+    group: ModelAccessGroupRecord,
+    correlationId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.userStore.appendAudit({
+      actor: actor.user,
+      eventType,
+      targetType: 'access_group',
+      targetId: group.id,
+      environmentId: group.environmentId,
+      correlationId,
+      reason: null,
       payload,
       occurredAt: this.clock.now().toISOString(),
     })

@@ -8,9 +8,9 @@ import type {
   ProviderMutationInput,
   ValidationIssue,
 } from './types.js'
+import { parseNonNegativeInt64 } from './config-contract.js'
 
 const controlCharacters = /[\u0000-\u001f\u007f]/u
-const unsignedInteger = /^(0|[1-9][0-9]*)$/u
 
 function fail(code: string, message: string, field: string, statusCode = 422): never {
   throw new DomainError(code, statusCode, message, { field, severity: 'ERROR' })
@@ -64,13 +64,19 @@ export function normalizeBaseUrl(value: string, field: string): string {
     url.username ||
     url.password ||
     url.search ||
-    url.hash
+    url.hash ||
+    url.port === '0' ||
+    input.includes('\\')
   ) {
     fail(
       'PROVIDER_ENDPOINT_INVALID',
       '供应商 Base URL 只能使用 http、https 或 service，且不能包含凭据、查询或片段',
       field,
     )
+  }
+  const authority = input.slice(input.indexOf('://') + 3).split('/', 1)[0]
+  if (/[\u0080-\u{10ffff}]/u.test(authority) || byteLength(url.hostname) > 255) {
+    fail('PROVIDER_ENDPOINT_INVALID', '供应商 Base URL 主机名不符合 ai-server 约束', field)
   }
   return input.replace(/\/+$/u, '')
 }
@@ -145,11 +151,9 @@ export function validateProviderMutation(provider: ProviderMutationInput): void 
 }
 
 function validateInt64(value: string, field: string, positive: boolean): void {
-  if (!unsignedInteger.test(value))
-    fail('RATE_LIMIT_INVALID', '限流值必须是无符号十进制字符串', field)
-  const parsed = BigInt(value)
-  if ((positive && parsed === 0n) || parsed > 18_446_744_073_709_551_615n) {
-    fail('RATE_LIMIT_INVALID', '限流值超出 uint64 范围', field)
+  const parsed = parseNonNegativeInt64(value)
+  if (parsed === null || (positive && parsed === 0n)) {
+    fail('RATE_LIMIT_INVALID', '限流值超出 ai-server int64 范围', field)
   }
 }
 

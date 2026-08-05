@@ -137,6 +137,7 @@ export class MemoryMarketplaceStore implements MarketplaceStore {
       finishedAt: null,
       updatedAt: input.now,
       resources: releaseResources(frozenVersion),
+      activationResults: [],
     }
     this.frozenVersions.set(frozenVersion.id, frozenVersion)
     this.releases.set(release.id, release)
@@ -273,6 +274,29 @@ export class MemoryMarketplaceStore implements MarketplaceStore {
       environment.draft.baseReleaseVersionId = version.id
       environment.draft.revision += 1
       environment.draft.updatedAt = input.now
+    }
+    return copy(release)
+  }
+
+  async recordReleaseActivation(input: {
+    releaseId: string
+    result: MarketplaceReleaseRecord['activationResults'][number]
+    activationState: MarketplaceEnvironmentRecord['activationState']
+    now: string
+  }): Promise<MarketplaceReleaseRecord> {
+    const release = this.releases.get(input.releaseId)
+    if (!release) throw new DomainError('RELEASE_NOT_FOUND', 404, 'Release 不存在')
+    const index = release.activationResults.findIndex(
+      (result) => result.instanceId === input.result.instanceId,
+    )
+    if (index < 0) release.activationResults.push(copy(input.result))
+    else release.activationResults[index] = copy(input.result)
+    release.activationState = input.activationState
+    release.updatedAt = input.now
+    release.revision += 1
+    const environment = this.environments.get(release.environmentId)
+    if (environment?.publishedRelease?.id === release.id) {
+      environment.activationState = input.activationState
     }
     return copy(release)
   }

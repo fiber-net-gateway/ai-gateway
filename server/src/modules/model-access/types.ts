@@ -54,7 +54,8 @@ export interface ModelAccessRequestRecord {
 
 export interface AccessGroupPublicationRecord {
   id: string
-  requestId: string
+  requestId: string | null
+  publicationKind: 'ACCESS_APPROVAL' | 'MANUAL_SYNC'
   environmentId: string
   groupId: string
   groupRevision: number
@@ -62,6 +63,7 @@ export interface AccessGroupPublicationRecord {
   dataId: string
   targetContent: string
   targetMd5: string
+  expectedOldMd5: string | null
   attemptNumber: number
   state: 'PENDING' | 'PUBLISHED' | 'FAILED'
   readbackMd5: string | null
@@ -93,6 +95,22 @@ export interface ModelAccessStore {
   getGroupSnapshot(
     groupId: string,
   ): Promise<{ group: ModelAccessGroupRecord; usernames: string[] } | null>
+  getLatestSuccessfulPublication(groupId: string): Promise<AccessGroupPublicationRecord | null>
+  createManualPublication(input: {
+    publicationId: string
+    groupId: string
+    actorId: string
+    expectedOldMd5: string | null
+    now: string
+  }): Promise<AccessGroupPublicationRecord>
+  markManualPublicationResult(input: {
+    publicationId: string
+    state: 'PUBLISHED' | 'FAILED'
+    readbackMd5?: string
+    safeErrorCode?: string
+    safeErrorMessage?: string
+    now: string
+  }): Promise<ModelAccessGroupRecord>
   markGroupPublished(input: {
     groupId: string
     revision: number
@@ -162,13 +180,36 @@ export interface ModelAccessStore {
 }
 
 export interface AccessGroupPublisher {
+  read(input: {
+    environmentId: string
+    group: 'LLM-SERVER'
+    dataId: string
+  }): Promise<{ state: 'PRESENT' | 'NOT_FOUND'; md5: string | null }>
   publish(input: {
     environmentId: string
     group: 'LLM-SERVER'
     dataId: string
     content: string
     expectedMd5: string
+    expectedOldMd5: string | null
   }): Promise<{ readbackMd5: string }>
+}
+
+export interface AccessGroupPublicationTarget {
+  group: ModelAccessGroupRecord
+  dataId: string
+  targetMd5: string
+  publishedMd5: string | null
+}
+
+export interface AccessGroupPublicationView {
+  groupId: string
+  groupName: string
+  revision: number
+  publishedRevision: number
+  publicationId: string
+  publicationState: 'PUBLISHED' | 'FAILED'
+  readbackMd5: string | null
 }
 
 export interface ModelAccessDirectory {
@@ -179,10 +220,7 @@ export interface ModelAccessDirectory {
     actorId: string
   }): Promise<ModelAccessGroupRecord>
   getGroupsByIds(ids: string[]): Promise<ModelAccessGroupRecord[]>
-  ensureGroupPublished(input: {
-    environmentId: string
-    groupId: string
-  }): Promise<ModelAccessGroupRecord>
+  getGroupPublicationTargets(ids: string[]): Promise<AccessGroupPublicationTarget[]>
   getPublishedMembershipGroupIds(input: { groupIds: string[]; userId: string }): Promise<string[]>
   isPublishedMember(input: { groupIds: string[]; userId: string }): Promise<boolean>
 }

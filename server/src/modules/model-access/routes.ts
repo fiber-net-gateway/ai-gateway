@@ -4,6 +4,7 @@ import { DomainError } from '../users/errors.js'
 import type { AuthenticatedActor, SessionService, UserService } from '../users/services.js'
 import type { EnvironmentRecord, UserStore } from '../users/types.js'
 import {
+  accessGroupParamsSchema,
   accessRequestParamsSchema,
   adminListQuerySchema,
   applicantListQuerySchema,
@@ -48,6 +49,11 @@ function idempotencyKey(request: FastifyRequest): string {
 function ifMatch(request: FastifyRequest, dependencies: Dependencies): number {
   const value = request.headers['if-match']
   return dependencies.access.parseRevision(Array.isArray(value) ? value[0] : value)
+}
+
+function groupIfMatch(request: FastifyRequest, dependencies: Dependencies): number {
+  const value = request.headers['if-match']
+  return dependencies.access.parseGroupRevision(Array.isArray(value) ? value[0] : value)
 }
 
 function setRevision(reply: FastifyReply, revision: number): void {
@@ -148,6 +154,29 @@ export function registerModelAccessRoutes(app: FastifyInstance, dependencies: De
       }
       if (query.environmentId) await environmentFor(actor, query.environmentId, dependencies)
       return dependencies.access.listForAdmin(query)
+    },
+  )
+
+  app.post(
+    '/api/admin/model-access-groups/:groupId/publish',
+    { schema: { params: accessGroupParamsSchema } },
+    async (request, reply) => {
+      const actor = await actorFor(request, dependencies)
+      csrfFor(request, actor, dependencies)
+      dependencies.users.requireAdmin(actor.user)
+      const groupId = (request.params as { groupId: string }).groupId
+      const target = (await dependencies.access.getGroupPublicationTargets([groupId]))[0]
+      if (!target) throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
+      const environment = await environmentFor(actor, target.group.environmentId, dependencies)
+      needsFreshMfa(environment, actor)
+      const result = await dependencies.access.publishGroup({
+        groupId,
+        actor,
+        expectedRevision: groupIfMatch(request, dependencies),
+        correlationId: request.id,
+      })
+      setRevision(reply, result.revision)
+      return result
     },
   )
 

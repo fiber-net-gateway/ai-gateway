@@ -97,6 +97,94 @@ export class MemoryModelAccessStore implements ModelAccessStore {
     return { group: copy(group), usernames }
   }
 
+  async getLatestSuccessfulPublication(
+    groupId: string,
+  ): Promise<AccessGroupPublicationRecord | null> {
+    const publication = [...this.publications.values()]
+      .filter((candidate) => candidate.groupId === groupId && candidate.state === 'PUBLISHED')
+      .sort(
+        (left, right) =>
+          right.groupRevision - left.groupRevision ||
+          right.attemptNumber - left.attemptNumber ||
+          right.createdAt.localeCompare(left.createdAt),
+      )[0]
+    return publication ? copy(publication) : null
+  }
+
+  async createManualPublication(input: {
+    publicationId: string
+    groupId: string
+    actorId: string
+    expectedOldMd5: string | null
+    now: string
+  }): Promise<AccessGroupPublicationRecord> {
+    const snapshot = await this.getGroupSnapshot(input.groupId)
+    if (!snapshot) throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
+    const rendered = renderAccessGroup(snapshot.group, snapshot.usernames)
+    const attemptNumber =
+      Math.max(
+        0,
+        ...[...this.publications.values()]
+          .filter(
+            (publication) =>
+              publication.groupId === input.groupId &&
+              publication.groupRevision === snapshot.group.revision,
+          )
+          .map((publication) => publication.attemptNumber),
+      ) + 1
+    const publication: AccessGroupPublicationRecord = {
+      id: input.publicationId,
+      requestId: null,
+      publicationKind: 'MANUAL_SYNC',
+      environmentId: snapshot.group.environmentId,
+      groupId: snapshot.group.id,
+      groupRevision: snapshot.group.revision,
+      groupName: snapshot.group.groupName,
+      dataId: rendered.dataId,
+      targetContent: rendered.content,
+      targetMd5: rendered.md5,
+      expectedOldMd5: input.expectedOldMd5,
+      attemptNumber,
+      state: 'PENDING',
+      readbackMd5: null,
+      safeErrorCode: null,
+      safeErrorMessage: null,
+      createdBy: input.actorId,
+      createdAt: input.now,
+      startedAt: null,
+      finishedAt: null,
+    }
+    this.publications.set(publication.id, publication)
+    return copy(publication)
+  }
+
+  async markManualPublicationResult(input: {
+    publicationId: string
+    state: 'PUBLISHED' | 'FAILED'
+    readbackMd5?: string
+    safeErrorCode?: string
+    safeErrorMessage?: string
+    now: string
+  }): Promise<ModelAccessGroupRecord> {
+    const publication = this.publications.get(input.publicationId)
+    if (!publication || publication.publicationKind !== 'MANUAL_SYNC') {
+      throw new DomainError('PUBLICATION_NOT_FOUND', 404, '发布记录不存在')
+    }
+    publication.state = input.state
+    publication.readbackMd5 = input.readbackMd5 ?? null
+    publication.safeErrorCode = input.safeErrorCode ?? null
+    publication.safeErrorMessage = input.safeErrorMessage ?? null
+    publication.startedAt ??= input.now
+    publication.finishedAt = input.now
+    const group = this.groups.get(publication.groupId)
+    if (!group) throw new DomainError('ACCESS_GROUP_NOT_FOUND', 404, '申请授权组不存在')
+    if (input.state === 'PUBLISHED') {
+      group.publishedRevision = Math.max(group.publishedRevision, publication.groupRevision)
+      group.updatedAt = input.now
+    }
+    return copy(group)
+  }
+
   async markGroupPublished(input: {
     groupId: string
     revision: number

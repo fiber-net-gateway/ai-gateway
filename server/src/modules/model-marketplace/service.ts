@@ -3,6 +3,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import type { Clock, RandomSource } from '../users/crypto.js'
 import { DomainError } from '../users/errors.js'
 import type { AuthenticatedActor } from '../users/services.js'
+import { AiServerConfigStatusError, type AiServerConfigStatusReader } from './ai-server-status.js'
 import type { UserStore } from '../users/types.js'
 import type { ModelAccessDirectory } from '../model-access/types.js'
 import {
@@ -124,6 +125,7 @@ export class ModelMarketplaceService {
     private readonly cursorKey: Buffer,
     private readonly accessDirectory: ModelAccessDirectory,
     private readonly publisher: MarketplaceConfigPublisher | null,
+    private readonly configStatusReader: AiServerConfigStatusReader | null,
   ) {}
 
   parseRevision(etag: string | undefined): number {
@@ -989,6 +991,33 @@ export class ModelMarketplaceService {
     return this.releaseView(started)
   }
 
+  async refreshReleaseActivation(input: {
+    environmentId: string
+    releaseId: string
+    actor: AuthenticatedActor
+    correlationId: string
+  }) {
+    const release = await this.store.getRelease(input.environmentId, input.releaseId)
+    if (!release) throw new DomainError('RELEASE_NOT_FOUND', 404, 'Release 不存在')
+    if (release.state !== 'COMPLETED' || release.publicationState !== 'PUBLISHED') {
+      throw new DomainError('ACTIVATION_CHECK_NOT_ALLOWED', 409, '只能校验已发布的 Release')
+    }
+    const version = await this.store.getVersion(release.versionId)
+    const checked = await this.checkReleaseActivation(release, version)
+    await this.audit(
+      input.actor,
+      input.correlationId,
+      'marketplace.release.activation_checked',
+      release.id,
+      release.environmentId,
+      {
+        activationState: checked.activationState,
+        instanceCount: checked.activationResults.length,
+      },
+    )
+    return this.releaseView(checked)
+  }
+
   async resumePublishingReleases(): Promise<void> {
     if (!this.publisher) return
     for (const release of await this.store.listPublishingReleases()) {
@@ -1052,7 +1081,7 @@ export class ModelMarketplaceService {
       for (const resource of [...release.resources].sort(
         (left, right) => left.dependencyOrder - right.dependencyOrder,
       )) {
-        let rendered = await this.renderReleaseResource(version, resource)
+        let rendered = await this.renderReleaseResource(release, version, resource)
         try {
           await this.publishResource(
             release,
@@ -1070,6 +1099,7 @@ export class ModelMarketplaceService {
         publicationState: 'PUBLISHED',
         now: this.clock.now().toISOString(),
       })
+      const activated = await this.checkReleaseActivation(finished, version)
       await this.audit(
         actor,
         correlationId,
@@ -1079,8 +1109,8 @@ export class ModelMarketplaceService {
         {
           releaseNumber: release.releaseNumber,
           resourceCount: release.resources.length,
-          revision: finished.revision,
-          activationState: 'UNKNOWN',
+          revision: activated.revision,
+          activationState: activated.activationState,
         },
       )
     } catch (error) {
@@ -1097,52 +1127,40 @@ export class ModelMarketplaceService {
       version.models.flatMap((model) => model.allowUserGroups.map((group) => [group.id, group])),
     )
     if (groupRefs.size === 0) return
-    const groups = await this.accessDirectory.getGroupsByIds([...groupRefs.keys()])
-    const byId = new Map(groups.map((group) => [group.id, group]))
+    const targets = await this.accessDirectory.getGroupPublicationTargets([...groupRefs.keys()])
+    const byId = new Map(targets.map((target) => [target.group.id, target]))
     for (const [groupId, reference] of groupRefs) {
-      let group = byId.get(groupId)
-      if (!group) {
+      const target = byId.get(groupId)
+      if (!target || target.group.environmentId !== version.environmentId) {
         throw new ReleaseExecutionError(
-          'ACCESS_GROUP_NOT_PUBLISHED',
-          `用户组 ${reference.name} 尚未发布到 rnacos`,
+          'ACCESS_GROUP_PUBLICATION_REQUIRED',
+          `用户组 ${reference.name} 缺少可验证的发布内容`,
         )
       }
-      let readback = await this.publisher!.read({
+      if (target.group.groupName !== reference.name) {
+        throw new ReleaseExecutionError(
+          'ACCESS_GROUP_REFERENCE_CHANGED',
+          `用户组 ${reference.name} 引用已发生变化`,
+        )
+      }
+      const readback = await this.publisher!.read({
         environmentId: version.environmentId,
         group: 'LLM-SERVER',
-        dataId: `ploto.ai-llm.user-group.${reference.name}`,
+        dataId: target.dataId,
       })
       if (
-        (group.revision === 0 && readback.state !== 'PRESENT') ||
-        group.publishedRevision < group.revision
+        target.group.publishedRevision < target.group.revision ||
+        target.publishedMd5 !== target.targetMd5
       ) {
-        try {
-          group = await this.accessDirectory.ensureGroupPublished({
-            environmentId: version.environmentId,
-            groupId,
-          })
-        } catch {
-          throw new ReleaseExecutionError(
-            'ACCESS_GROUP_PUBLICATION_FAILED',
-            `用户组 ${reference.name} 发布失败`,
-          )
-        }
-        readback = await this.publisher!.read({
-          environmentId: version.environmentId,
-          group: 'LLM-SERVER',
-          dataId: `ploto.ai-llm.user-group.${reference.name}`,
-        })
-      }
-      if (group.publishedRevision < group.revision) {
         throw new ReleaseExecutionError(
-          'ACCESS_GROUP_NOT_PUBLISHED',
-          `用户组 ${reference.name} 尚未发布到 rnacos`,
+          'ACCESS_GROUP_PUBLICATION_REQUIRED',
+          `用户组 ${reference.name} 当前修订尚未显式发布`,
         )
       }
-      if (readback.state !== 'PRESENT') {
+      if (readback.state !== 'PRESENT' || readback.md5 !== target.targetMd5) {
         throw new ReleaseExecutionError(
-          'ACCESS_GROUP_NOT_FOUND_IN_RNACOS',
-          `rnacos 中不存在用户组 ${reference.name}`,
+          'ACCESS_GROUP_DRIFTED',
+          `rnacos 中用户组 ${reference.name} 与当前修订的 MD5 不一致`,
         )
       }
     }
@@ -1156,7 +1174,7 @@ export class ModelMarketplaceService {
     for (const resource of release.resources) {
       let rendered: RenderedResource | undefined
       try {
-        rendered = await this.renderReleaseResource(version, resource)
+        rendered = await this.renderReleaseResource(release, version, resource)
         const targetMd5 = createHash('md5').update(rendered.content, 'utf8').digest('hex')
         targetMd5ByDataId.set(resource.dataId, targetMd5)
         await this.store.updateReleaseResource({
@@ -1176,6 +1194,62 @@ export class ModelMarketplaceService {
       }
     }
     return targetMd5ByDataId
+  }
+
+  private async checkReleaseActivation(
+    release: MarketplaceReleaseRecord,
+    version: Awaited<ReturnType<MarketplaceStore['getVersion']>>,
+  ): Promise<MarketplaceReleaseRecord> {
+    if (!this.configStatusReader) return release
+    const now = this.clock.now().toISOString()
+    let result: MarketplaceReleaseRecord['activationResults'][number]
+    let activationState: MarketplaceReleaseRecord['activationState']
+    try {
+      const status = await this.configStatusReader.read()
+      const expected = new Map(
+        release.resources.flatMap((resource) =>
+          resource.newMd5 ? [[resource.dataId, resource.newMd5] as const] : [],
+        ),
+      )
+      const groupIds = [
+        ...new Set(
+          version.models.flatMap((model) => model.allowUserGroups.map((group) => group.id)),
+        ),
+      ]
+      for (const target of await this.accessDirectory.getGroupPublicationTargets(groupIds)) {
+        expected.set(target.dataId, target.targetMd5)
+      }
+      const active = new Map(status.resources.map((resource) => [resource.dataId, resource.md5]))
+      const exact = [...expected].every(([dataId, md5]) => active.get(dataId) === md5)
+      const effective = status.state === 'ACTIVE' && status.workers.converged && exact
+      activationState = effective ? 'EFFECTIVE' : 'PENDING'
+      result = {
+        instanceId: this.configStatusReader.instanceId,
+        activationState,
+        evidenceKind: 'CONFIG_STATUS_MD5',
+        acceptedIdentity: `generation:${status.generation};workers:${status.workers.generations.join(',')}`,
+        safeErrorCode: effective ? null : 'CONFIG_NOT_YET_ACTIVE',
+        observedAt: now,
+      }
+    } catch (error) {
+      const code =
+        error instanceof AiServerConfigStatusError ? error.code : 'AI_SERVER_STATUS_UNAVAILABLE'
+      activationState = 'UNKNOWN'
+      result = {
+        instanceId: this.configStatusReader.instanceId,
+        activationState,
+        evidenceKind: 'CONFIG_STATUS_MD5',
+        acceptedIdentity: null,
+        safeErrorCode: code,
+        observedAt: now,
+      }
+    }
+    return this.store.recordReleaseActivation({
+      releaseId: release.id,
+      activationState,
+      result,
+      now,
+    })
   }
 
   private async preflightResources(
@@ -1228,16 +1302,24 @@ export class ModelMarketplaceService {
   }
 
   private renderReleaseResource(
+    release: MarketplaceReleaseRecord,
     version: Awaited<ReturnType<MarketplaceStore['getVersion']>>,
     resource: MarketplaceReleaseResourceRecord,
   ): Promise<RenderedResource> {
+    if (release.releaseNumber > 2_147_483_647) {
+      throw new ReleaseExecutionError(
+        'CONFIG_VERSION_EXHAUSTED',
+        'Release 序号已超出 ai-server int32 配置版本范围',
+      )
+    }
     return resource.kind === 'PROVIDER'
       ? renderProviderResource(
           version,
           resource.dataId.slice('ploto.ai-llm.provider.'.length),
           this.secrets,
+          release.releaseNumber,
         )
-      : Promise.resolve(renderModelsResource(version))
+      : Promise.resolve(renderModelsResource(version, release.releaseNumber))
   }
 
   private async publishResource(
@@ -1407,22 +1489,24 @@ export class ModelMarketplaceService {
     const references = new Map(
       version.models.flatMap((model) => model.allowUserGroups.map((group) => [group.id, group])),
     )
-    const groups = await this.accessDirectory.getGroupsByIds([...references.keys()])
-    const byId = new Map(groups.map((group) => [group.id, group]))
+    const targets = await this.accessDirectory.getGroupPublicationTargets([...references.keys()])
+    const byId = new Map(targets.map((target) => [target.group.id, target]))
     return {
       ...release,
       target: this.publisher?.target() ?? null,
       groupDependencies: [...references].map(([id, reference]) => {
-        const group = byId.get(id)
+        const target = byId.get(id)
+        const group = target?.group
         return {
           id,
           name: reference.name,
           revision: group?.revision ?? null,
           publishedRevision: group?.publishedRevision ?? null,
           state:
+            target &&
             group &&
             group.publishedRevision >= group.revision &&
-            (group.revision > 0 || release.state === 'COMPLETED')
+            target.publishedMd5 === target.targetMd5
               ? ('READY' as const)
               : ('NOT_PUBLISHED' as const),
         }

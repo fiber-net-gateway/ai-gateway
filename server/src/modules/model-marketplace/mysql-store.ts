@@ -10,6 +10,7 @@ import type {
   MarketplaceModelProviderBindingRecord,
   MarketplaceProviderRecord,
   MarketplaceReleaseRecord,
+  MarketplaceReleaseInstanceResultRecord,
   MarketplaceReleaseResourceRecord,
   MarketplaceStore,
   MarketplaceVersionRecord,
@@ -69,6 +70,15 @@ interface ReleaseResourceRow extends RowDataPacket {
   retry_count: string | number
   started_at: Date | null
   finished_at: Date | null
+}
+
+interface ReleaseActivationRow extends RowDataPacket {
+  instance_id: string
+  activation_state: MarketplaceReleaseInstanceResultRecord['activationState']
+  evidence_kind: MarketplaceReleaseInstanceResultRecord['evidenceKind']
+  accepted_identity: string | null
+  safe_error_code: string | null
+  observed_at: Date | null
 }
 
 interface ModelIdentityRow extends RowDataPacket {
@@ -240,6 +250,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
       ? {
           ...releaseFromRow(releaseRows[0]),
           resources: await this.loadReleaseResources(releaseRows[0].id),
+          activationResults: await this.loadReleaseActivationResults(releaseRows[0].id),
         }
       : null
     const [publishedRows] = await this.pool.query<ReleaseRow[]>(
@@ -253,6 +264,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
       ? {
           ...releaseFromRow(publishedRows[0]),
           resources: await this.loadReleaseResources(publishedRows[0].id),
+          activationResults: await this.loadReleaseActivationResults(publishedRows[0].id),
         }
       : null
     const publishedVersion = publishedRows[0]
@@ -458,6 +470,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
         finishedAt: null,
         updatedAt: input.now,
         resources: releaseResources,
+        activationResults: [],
       },
     }
   }
@@ -479,6 +492,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
     return {
       ...releaseFromRow(rows[0]),
       resources: await this.loadReleaseResources(releaseId),
+      activationResults: await this.loadReleaseActivationResults(releaseId),
     }
   }
 
@@ -491,7 +505,11 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
     )
     const releases: MarketplaceReleaseRecord[] = []
     for (const row of rows) {
-      releases.push({ ...releaseFromRow(row), resources: await this.loadReleaseResources(row.id) })
+      releases.push({
+        ...releaseFromRow(row),
+        resources: await this.loadReleaseResources(row.id),
+        activationResults: await this.loadReleaseActivationResults(row.id),
+      })
     }
     return releases
   }
@@ -502,7 +520,11 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
     )
     const releases: MarketplaceReleaseRecord[] = []
     for (const row of rows) {
-      releases.push({ ...releaseFromRow(row), resources: await this.loadReleaseResources(row.id) })
+      releases.push({
+        ...releaseFromRow(row),
+        resources: await this.loadReleaseResources(row.id),
+        activationResults: await this.loadReleaseActivationResults(row.id),
+      })
     }
     return releases
   }
@@ -638,6 +660,54 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
     return this.requireReleaseById(input.releaseId)
   }
 
+  async recordReleaseActivation(input: {
+    releaseId: string
+    result: MarketplaceReleaseInstanceResultRecord
+    activationState: ActivationState
+    now: string
+  }): Promise<MarketplaceReleaseRecord> {
+    const connection = await this.pool.getConnection()
+    try {
+      await connection.beginTransaction()
+      const [rows] = await connection.query<ReleaseRow[]>(
+        `${releaseSelect} WHERE id = UUID_TO_BIN(?) LIMIT 1 FOR UPDATE`,
+        [input.releaseId],
+      )
+      if (!rows[0]) throw new DomainError('RELEASE_NOT_FOUND', 404, 'Release 不存在')
+      await connection.query(
+        `INSERT INTO marketplace_release_instance_results
+          (release_id, instance_id, activation_state, evidence_kind,
+           accepted_identity, safe_error_code, observed_at)
+         VALUES (UUID_TO_BIN(?), ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE activation_state = VALUES(activation_state),
+           evidence_kind = VALUES(evidence_kind), accepted_identity = VALUES(accepted_identity),
+           safe_error_code = VALUES(safe_error_code), observed_at = VALUES(observed_at)`,
+        [
+          input.releaseId,
+          input.result.instanceId,
+          input.result.activationState,
+          input.result.evidenceKind,
+          input.result.acceptedIdentity,
+          input.result.safeErrorCode,
+          input.result.observedAt,
+        ],
+      )
+      await connection.query(
+        `UPDATE marketplace_releases
+            SET activation_state = ?, revision = revision + 1, updated_at = ?
+          WHERE id = UUID_TO_BIN(?)`,
+        [input.activationState, input.now, input.releaseId],
+      )
+      await connection.commit()
+    } catch (error) {
+      await connection.rollback()
+      throw error
+    } finally {
+      connection.release()
+    }
+    return this.requireReleaseById(input.releaseId)
+  }
+
   private async requireReleaseById(releaseId: string): Promise<MarketplaceReleaseRecord> {
     const [rows] = await this.pool.query<ReleaseRow[]>(
       `${releaseSelect} WHERE id = UUID_TO_BIN(?) LIMIT 1`,
@@ -647,6 +717,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
     return {
       ...releaseFromRow(rows[0]),
       resources: await this.loadReleaseResources(releaseId),
+      activationResults: await this.loadReleaseActivationResults(releaseId),
     }
   }
 
@@ -680,6 +751,26 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
       [releaseId],
     )
     return rows.map(resourceFromRow)
+  }
+
+  private async loadReleaseActivationResults(
+    releaseId: string,
+  ): Promise<MarketplaceReleaseInstanceResultRecord[]> {
+    const [rows] = await this.pool.query<ReleaseActivationRow[]>(
+      `SELECT instance_id, activation_state, evidence_kind, accepted_identity,
+              safe_error_code, observed_at
+         FROM marketplace_release_instance_results
+        WHERE release_id = UUID_TO_BIN(?) ORDER BY instance_id`,
+      [releaseId],
+    )
+    return rows.map((row) => ({
+      instanceId: row.instance_id,
+      activationState: row.activation_state,
+      evidenceKind: row.evidence_kind,
+      acceptedIdentity: row.accepted_identity,
+      safeErrorCode: row.safe_error_code,
+      observedAt: iso(row.observed_at),
+    }))
   }
 
   private async loadVersion(versionId: string): Promise<MarketplaceVersionRecord> {
@@ -826,6 +917,7 @@ function releaseFromRow(row: ReleaseRow): MarketplaceReleaseRecord {
     finishedAt: iso(row.finished_at),
     updatedAt: row.updated_at.toISOString(),
     resources: [],
+    activationResults: [],
   }
 }
 

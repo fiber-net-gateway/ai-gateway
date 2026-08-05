@@ -97,6 +97,28 @@ function readHttpUrl(name: string, fallback: string): string {
   return url.toString().replace(/\/$/, '')
 }
 
+function readAiServerUrl(): string {
+  const value = readString('AI_SERVER_BASE_URL', 'http://127.0.0.1:8080')
+  const url = new URL(value)
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== '/' && url.pathname !== '')
+  ) {
+    throw new Error(
+      'AI_SERVER_BASE_URL must be an http(s) origin without credentials, path, query, or hash',
+    )
+  }
+  const normalized = url.origin
+  if (Buffer.byteLength(normalized, 'utf8') > 256) {
+    throw new Error('AI_SERVER_BASE_URL must not exceed 256 bytes')
+  }
+  return normalized
+}
+
 function readBoolean(name: string, fallback: boolean): boolean {
   const rawValue = process.env[name]?.trim().toLowerCase()
   if (!rawValue) return fallback
@@ -192,7 +214,7 @@ export function loadConfig(): AppConfig {
       configGroup: readString('RNACOS_CONFIG_GROUP', 'LLM-SERVER'),
     },
     aiServer: {
-      baseUrl: readHttpUrl('AI_SERVER_BASE_URL', 'http://127.0.0.1:8080'),
+      baseUrl: readAiServerUrl(),
     },
     auditIngest: {
       token: auditIngestToken,

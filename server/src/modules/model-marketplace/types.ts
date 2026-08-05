@@ -101,6 +101,16 @@ export interface MarketplaceReleaseRecord {
   finishedAt: string | null
   updatedAt: string
   resources: MarketplaceReleaseResourceRecord[]
+  activationResults: MarketplaceReleaseInstanceResultRecord[]
+}
+
+export interface MarketplaceReleaseInstanceResultRecord {
+  instanceId: string
+  activationState: 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'REJECTED'
+  evidenceKind: 'CONFIG_STATUS_MD5'
+  acceptedIdentity: string | null
+  safeErrorCode: string | null
+  observedAt: string | null
 }
 
 export interface MarketplaceReleaseResourceRecord {
@@ -180,6 +190,12 @@ export interface MarketplaceStore {
     releaseId: string
     workflowState: 'COMPLETED' | 'FAILED'
     publicationState: PublicationState
+    now: string
+  }): Promise<MarketplaceReleaseRecord>
+  recordReleaseActivation(input: {
+    releaseId: string
+    result: MarketplaceReleaseInstanceResultRecord
+    activationState: ActivationState
     now: string
   }): Promise<MarketplaceReleaseRecord>
 }

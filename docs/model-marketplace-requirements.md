@@ -162,9 +162,11 @@ Provider 是环境级独立主体，不归属于任何单个模型。Provider �
 模型编辑器只能从当前环境的未归档 Provider 中建立 PRIMARY/FALLBACK 关联。修改 Provider
 时必须展示全部引用模型；仍被模型引用的 Provider 不允许归档。
 
-两类信息虽然分开维护，但保存在同一个 MySQL 环境草稿中，并在同一个不可变 Release 内按
-“用户组 → Provider → models”依赖顺序发布。界面不得制造“只发布当前 Provider”或“只发布
-当前模型”的认知。
+两类信息虽然分开维护，但保存在同一个 MySQL 环境草稿中，并在同一个不可变“模型路由
+Release”内按“Provider → models”依赖顺序发布。用户组成员由模型访问模块独立发布，模型
+路由 Release 只验证依赖组的目标 MD5 已经存在于 rnacos，不得隐式改写授权成员。界面不得
+制造“只发布当前 Provider”或“只发布当前模型”的认知，也不得把模型路由 Release 描述为
+包含 BT1 Key Ring 的完整 ai-server 环境发布。
 
 ## 6. 页面与交互需求
 
@@ -354,7 +356,9 @@ Token 池不是简单轮询列表。ai-server 会基于 route key、Provider 名
 | 实例生效    | 每个 ai-server 实例报告的接受证据         | 已生效/部分生效/未知 |
 
 “保存成功”的 Toast 只能表示草稿已保存。“发布成功”只表示目标 rnacos 资源写入并回读一致。
-在缺少实例级配置身份能力时必须显示“生效未知”，不能以 `/ready` 或健康检查代替。
+ai-server 的 `/internal/config/status` 只返回当前活跃 Data ID/MD5 与 worker generation；
+控制台只有在直连端点全部精确匹配时才显示“已生效”。缺少该证据时必须显示
+“待生效”或“生效未知”，不能以 `/ready` 或健康检查代替。
 
 ### 7.2 保存草稿
 
@@ -384,10 +388,12 @@ Token 池不是简单轮询列表。ai-server 会基于 route key、Provider 名
 3. 等待目标 ai-server 实例报告接受结果。
 4. 在后续独立清理 release 中处理已无引用 Provider。
 
-用户组成员配置仍由模型访问模块拥有。模型 release 不自行拼接或覆盖用户组成员，只把当前
-冻结版本引用的用户组作为发布前依赖：组的数据库 revision 必须已经发布，且目标 Data ID
-必须存在。新建的空组由模型访问模块先发布空快照；依赖未满足时阻止 Provider 和 models
-写入，返回稳定错误码，不把缺失用户组留给 ai-server 被动发现。
+用户组成员配置仍由模型访问模块拥有。模型 release 不自行拼接、发布或覆盖用户组成员，只把
+当前冻结版本引用的用户组作为发布前依赖：后台根据当前数据库 revision 渲染确定性目标内容，
+rnacos Data ID 必须存在且回读 MD5 必须与目标 MD5 完全一致。新建空组和失败重试都通过模型
+访问模块的显式发布操作完成；依赖未满足时阻止 Provider 和 models 写入，返回
+`ACCESS_GROUP_PUBLICATION_REQUIRED` 或 `ACCESS_GROUP_DRIFTED`，不允许执行 Release 时静默
+修复授权状态。
 
 多个 Data ID 不构成事务。更新一个已被线上模型引用的 Provider 时，它可能在模型总表写入
 前就影响运行请求；发布确认页必须明确展示此风险。失败时逐项保留 `pending`、`writing`、
@@ -405,8 +411,9 @@ Token 池不是简单轮询列表。ai-server 会基于 route key、Provider 名
 3. “创建 Release”只冻结版本并创建资源步骤；成功后跳转 Release 详情页。
 4. “执行发布”单独触发后台编排，生产环境继续要求五分钟内的二次认证。
 5. 详情页刷新逐资源状态，失败后只允许“重试同一 Release”，不能用重复提交代替重试。
-6. rnacos 全部回读一致后显示“已发布 / 实例生效未知”；成功、提示、警告和错误使用不同
-   Toast 语义与视觉样式。
+6. rnacos 全部回读一致后独立拉取 ai-server 证据，分别显示“已发布 / 已生效”、
+   “已发布 / 待生效”或“已发布 / 生效未知”；成功、提示、警告和错误使用
+   不同 Toast 语义与视觉样式。
 
 ### 7.6 回滚
 
@@ -603,5 +610,5 @@ UTC 时间。Token 事件只能记录名称、动作和前后指纹后缀。
 
 - Provider 认证头策略，例如 Anthropic `x-api-key`。
 - `openai-embedding` 入站路由与广场协议徽标。
-- 实例上报已接受 release/Data ID MD5 的强生效证明。
+- 基于服务发现冻结多实例集合，并为每个实例配置身份端点增加认证。
 - 不暴露 secret 到 rnacos 明文配置的 secret 引用协议。

@@ -41,6 +41,15 @@ export const accessRequestParamsSchema = {
   },
 } as const
 
+export const accessGroupParamsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['groupId'],
+  properties: {
+    groupId: { type: 'string', format: 'uuid' },
+  },
+} as const
+
 export const applicantListQuerySchema = {
   type: 'object',
   additionalProperties: false,

@@ -53,8 +53,12 @@
 9. **列表读投影。** 三层状态、协议覆盖和摘要写入单表投影，避免列表请求现场跨表计算。
 10. **状态证据分层。** 草稿事实来自 MySQL，发布事实来自 release/资源结果，生效事实只能
     来自实例接受证据；缺证据时保持 `UNKNOWN`。
-11. **发布仍是环境级统一 Release。** 分开维护不等于分开发布；用户组、Provider 和 models
-    在同一冻结版本中按依赖顺序发布并分别保存结果。
+11. **发布是非原子的模型路由 Release。** Provider 和 models 在同一冻结版本中按依赖顺序
+    发布并分别保存结果；用户组由模型访问模块独立发布，路由 Release 只校验其精确 MD5。
+    BT1 Key Ring 接入前不得把该 Release 描述为完整 ai-server 环境发布。
+12. **配置包络 `version` 是运行版本。** Provider 和 models 在同一 Release 使用
+    相同的环境 Release 序号；用户组使用 `group.revision + 1`。固定 schema 版本
+    不得写入每次动态配置的 `version`。
 
 ## 3. 总体架构
 
@@ -177,7 +181,9 @@ export interface ModelProviderBinding {
 ```
 
 int64 配置在 HTTP JSON 中使用十进制字符串，防止 JavaScript `number` 超过安全整数范围。
-领域层校验后再转换为数据库 `BIGINT` 字符串和 rnacos JSON 整数。
+窗口范围为 `1..9223372036854775807`，窗口 Token 上限范围为
+`0..9223372036854775807`；领域层校验后再转换为数据库 `BIGINT` 字符串和 rnacos JSON
+整数。控制台不得接受 ai-server codec 无法表示的 uint64 上半区。
 
 ### 4.3 领域不变量
 
@@ -1074,17 +1080,17 @@ Repository 的 SQL 常量集中定义并接受静态测试。测试去除注释�
 
 ### 11.1 字段层
 
-| 校验对象    | 核心规则                                         |
-| ----------- | ------------------------------------------------ |
-| 逻辑模型名  | 1..128 bytes，ASCII `[A-Za-z0-9_.-]`             |
-| Provider 名 | 1..128 bytes，ASCII `[A-Za-z0-9_-]`              |
-| Base URL    | 与 `ProviderEndpoint.cpp` 等价，移除多余尾部 `/` |
-| Token 名    | 1..128 字符、非空、无控制字符                    |
-| Token 值    | 1..8192 bytes、禁止 CR/LF/NUL，不 trim           |
-| 协议路径    | 1..2048 bytes，以 `/` 开头，无控制字符           |
-| 上游模型名  | trim 后 1..512 bytes                             |
-| 重试状态    | 每项 100..599，去重升序                          |
-| int64 限流  | 十进制字符串，无符号，窗口大于 0                 |
+| 校验对象    | 核心规则                                           |
+| ----------- | -------------------------------------------------- |
+| 逻辑模型名  | 1..128 bytes，ASCII `[A-Za-z0-9_.-]`               |
+| Provider 名 | 1..128 bytes，ASCII `[A-Za-z0-9_-]`                |
+| Base URL    | 与 `ProviderEndpoint.cpp` 等价，移除多余尾部 `/`   |
+| Token 名    | 1..128 字符、非空、无控制字符                      |
+| Token 值    | 1..8192 bytes、禁止 CR/LF/NUL，不 trim             |
+| 协议路径    | 1..2048 bytes，以 `/` 开头，无控制字符             |
+| 上游模型名  | trim 后 1..512 bytes                               |
+| 重试状态    | 每项 100..599，去重升序                            |
+| int64 限流  | 十进制字符串；窗口 1..INT64_MAX，额度 0..INT64_MAX |
 
 Base URL 校验器应通过共享 fixtures 对齐上游，而不是依赖通用 `new URL()` 后自行猜测，因为
 `service://` 和 IPv6/基础路径规则属于 ai-server 特定契约。
@@ -1339,9 +1345,11 @@ Provider 更新可能在 models 更新前影响已有引用，编排器不能提
 - models 聚合资源；
 - 推迟到清理 release 的 Provider 删除。
 
-用户组仍由模型访问模块拥有。release 只验证引用组的 `revision = published_revision` 和
-Data ID 存在性；需要创建空组时调用模型访问模块的专用发布能力，Marketplace 不读取或
-重建成员名单。任一用户组依赖未满足时，在写 Provider 前失败。
+用户组仍由模型访问模块拥有。release 通过只读目录取得当前 revision、确定性目标 MD5 和最近
+成功发布证据，再回读 rnacos 并要求内容 MD5 完全一致。Marketplace 不调用用户组 Publisher，
+也不在 Release 执行期间重建或覆盖成员名单。空组初始化和漂移修复必须经过模型访问模块的
+显式发布 API、CAS、不可变 publication 和审计。任一用户组依赖未满足时，在写 Provider 前
+失败。
 
 ### 14.3 逐资源状态
 
@@ -1378,11 +1386,16 @@ release workflow 使用 `PENDING | PUBLISHING | COMPLETED | FAILED | CANCELLED`�
 
 ### 14.5 实例生效
 
-- 发布开始时冻结目标实例集合。
-- 只有实例明确报告接受目标 generation/release 或各 Data ID 身份时才写 `EFFECTIVE`。
-- 当前上游不能提供该证据时，发布完成后保持 `UNKNOWN`。
+- ai-server 提供 `GET /internal/config/status`，只返回当前活跃配置的 Data ID、
+  MD5、包络版本、config generation 和各 HTTP worker generation，不返回配置正文。
+- `AI_SERVER_BASE_URL` 必须指向可识别的直连实例管理端点，不能使用会隐藏实例身份的
+  随机负载均衡地址。
+- 只有端点返回 `ACTIVE`、所有 worker generation 收敛，且 Release 资源与用户组
+  依赖的目标 MD5 全部匹配时才写 `EFFECTIVE`。可达但尚未匹配时写
+  `PENDING`，不可达或契约无效时写 `UNKNOWN`。
 - `/health`、`/ready`、进程存活或请求成功不能单独证明接受本 release。
-- 部分实例接受时保留实例矩阵和 `PARTIAL`，不自动回滚。
+- 当前配置为单直连端点；扩展为多实例后必须冻结目标集合，保留实例矩阵，
+  部分接受时写 `PARTIAL`，不自动回滚。
 
 ### 14.6 发布中心
 
@@ -1590,7 +1603,8 @@ Provider 原始内容。
 6. 实现普通用户 `PUBLISHED` 目录和用户组访问判断。
 7. 接入全局草稿提交、release 编排和逐资源结果。
 8. 实现前端模型列表、详情、编辑器和独立 Provider 管理页。
-9. 增加实例生效观察；上游证据不足时按设计保持 UNKNOWN。
+9. 通过 ai-server 配置状态接口增加单直连实例生效观察；证据不足时保持
+   `PENDING` 或 `UNKNOWN`。
 10. 在开发环境用 MySQL/rnacos 做显式集成测试，再进入 staging。
 
 每一步都应保持 Fastify 可独立构造、单元测试无需外部服务。迁移确定性执行，不回写历史
@@ -1601,6 +1615,7 @@ release。上线前运行仓库规定的 typecheck、test、format check 和 bui
 - Provider 连接探测是否在 MVP 开放 UI；当前只校验配置契约与运行状态证据。
 - 普通用户是否能看到无访问权限模型；本文默认可见并给出申请指引。
 - Token 保留与销毁期限；必须由安全策略确定，不能早于回滚和事件调查窗口。
-- 实例级配置身份接口的最终字段；能力缺失期间 activation 固定按证据显示 UNKNOWN。
+- 多实例目标集合来源、实例稳定身份和鉴权方式；在此之前只对配置的单直连端点
+  出具 `EFFECTIVE` 证据。
 - 是否需要供应商成本、上下文窗口和能力标签。这些不是当前 ai-server 路由契约，首版不参与
   发布，仅可作为后续控制台元数据扩展。

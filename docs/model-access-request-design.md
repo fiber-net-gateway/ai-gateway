@@ -156,8 +156,10 @@ accessMode: 'ALL_AUTHENTICATED' | 'APPROVAL_REQUIRED'
 4. 首次启用时调用 `ensureGroupForModel` 幂等创建 identity，把 `{id,name}` 写入模型草稿。
 5. 组创建不依赖主 Provider，也不因 Provider 解绑、排序或 Fallback 变化而迁移。
 
-创建 release 时按“用户组 → Provider → models”生成逐资源计划；申请授权组 Data ID 必须先于
-引用它的 models Data ID 发布。只创建 release 不代表资源已经写入 rnacos。
+创建模型路由 release 时只生成 Provider 和 models 逐资源计划。申请授权组是只读发布前依赖：
+其当前确定性目标 MD5 必须已存在于 rnacos。空组初始化或失败重试由模型访问模块的显式发布
+API 完成，Marketplace 不得在 Release 执行期间隐式写入用户组。只创建 release 不代表任何
+资源已经写入 rnacos。
 
 Access group identity 与 marketplace 分属两个 store。首次启用可能在 marketplace 草稿并发冲突
 前创建一个未引用空组；它不包含成员、不会发布，不形成授权，后续相同模型会复用。
@@ -384,7 +386,8 @@ export function renderAccessGroup(
 
 - username 精确字符串去重，按 UTF-8 byte order 排序；
 - JSON 无空白，字段顺序固定为 `version`、`data.name`、`data.users`；
-- `version` 使用 group revision 的 JSON 整数，HTTP 中不经 JavaScript number 精度转换；
+- `version` 使用 `group revision + 1` 的正 JSON 整数，HTTP 中不经 JavaScript number 精度
+  转换；数据库 revision 仍作为并发控制和 publication 归属证据；
 - MD5 对最终 UTF-8 content 字节计算；
 - Data ID 固定为 `ploto.ai-llm.user-group.${group.groupName}`。
 

@@ -30,6 +30,7 @@ test('rnacos publisher uses the fixed config target and verifies exact readback 
       dataId: 'ploto.ai-llm.user-group.pa_provider_a',
       content,
       expectedMd5,
+      expectedOldMd5: null,
     })
 
     assert.equal(result.readbackMd5, expectedMd5)

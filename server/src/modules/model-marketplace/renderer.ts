@@ -4,6 +4,7 @@ import type {
   MarketplaceVersionRecord,
   RenderedResource,
 } from './types.js'
+import { int64JsonLiteral } from './config-contract.js'
 
 const protocolOrder = {
   OPENAI_CHAT_COMPLETIONS: 0,
@@ -15,17 +16,14 @@ const protocolType = {
   ANTHROPIC_MESSAGES: 'anthropic-messages',
 } as const
 
-function uint64(value: string): string {
-  return `__marketplace_uint64_${value}`
-}
-
 function stringifyConfig(value: unknown): string {
-  return JSON.stringify(value).replace(/"__marketplace_uint64_([0-9]+)"/gu, '$1')
+  return JSON.stringify(value).replace(/"__marketplace_int64_([0-9]+)"/gu, '$1')
 }
 
 export async function renderProviderResources(
   version: MarketplaceVersionRecord,
   secrets: MarketplaceSecretService,
+  configVersion = version.schemaVersion,
 ): Promise<RenderedResource[]> {
   const referencedProviderIds = new Set(
     version.models.flatMap((model) => model.providerBindings.map((binding) => binding.providerId)),
@@ -37,7 +35,7 @@ export async function renderProviderResources(
   for (const provider of providers.sort((left, right) =>
     left.providerName.localeCompare(right.providerName, 'en'),
   )) {
-    resources.push(await renderProvider(version, provider, secrets))
+    resources.push(await renderProvider(version, provider, secrets, configVersion))
   }
   return resources
 }
@@ -46,18 +44,20 @@ export async function renderProviderResource(
   version: MarketplaceVersionRecord,
   providerName: string,
   secrets: MarketplaceSecretService,
+  configVersion = version.schemaVersion,
 ): Promise<RenderedResource> {
   const provider = version.providers.find(
     (candidate) => candidate.providerName === providerName && !candidate.archivedAt,
   )
   if (!provider) throw new Error(`frozen Provider is missing: ${providerName}`)
-  return renderProvider(version, provider, secrets)
+  return renderProvider(version, provider, secrets, configVersion)
 }
 
 async function renderProvider(
   version: MarketplaceVersionRecord,
   provider: MarketplaceVersionRecord['providers'][number],
   secrets: MarketplaceSecretService,
+  configVersion: number,
 ): Promise<RenderedResource> {
   const tokens: Array<{ name: string; token: string }> = []
   try {
@@ -77,7 +77,7 @@ async function renderProvider(
       }
     }
     const content = stringifyConfig({
-      version: version.schemaVersion,
+      version: configVersion,
       data: {
         provider: provider.providerName,
         baseurl: provider.baseUrl.replace(/\/+$/u, ''),
@@ -136,20 +136,23 @@ function renderModel(
   }
   if (model.rateLimit) {
     result['rate-limit'] = {
-      'window-duration-millis': uint64(model.rateLimit.windowDurationMillis),
-      'max-tokens-per-window': uint64(model.rateLimit.maxTokensPerWindow),
+      'window-duration-millis': int64JsonLiteral(model.rateLimit.windowDurationMillis, true),
+      'max-tokens-per-window': int64JsonLiteral(model.rateLimit.maxTokensPerWindow, false),
     }
   }
   return result
 }
 
-export function renderModelsResource(version: MarketplaceVersionRecord): RenderedResource {
+export function renderModelsResource(
+  version: MarketplaceVersionRecord,
+  configVersion = version.schemaVersion,
+): RenderedResource {
   const providerById = new Map(version.providers.map((provider) => [provider.id, provider]))
   return {
     group: 'LLM-SERVER',
     dataId: 'ploto.ai-llm.models',
     content: stringifyConfig({
-      version: version.schemaVersion,
+      version: configVersion,
       data: [...version.models]
         .filter((model) => !model.archivedAt)
         .sort((left, right) => left.logicalModelName.localeCompare(right.logicalModelName, 'en'))

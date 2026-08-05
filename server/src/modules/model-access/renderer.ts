@@ -12,7 +12,7 @@ export function renderAccessGroup(
 ): { dataId: string; content: string; md5: string } {
   const users = [...new Set(usernames.filter(Boolean))].sort(compareUtf8)
   const content = JSON.stringify({
-    version: group.revision,
+    version: group.revision + 1,
     data: { name: group.groupName, users },
   })
   return {

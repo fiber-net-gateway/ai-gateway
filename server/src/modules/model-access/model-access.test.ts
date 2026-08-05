@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
@@ -88,10 +89,21 @@ class PublishedMarketplaceStore implements MarketplaceStore {
   finishRelease(input: Parameters<MarketplaceStore['finishRelease']>[0]) {
     return this.delegate.finishRelease(input)
   }
+
+  recordReleaseActivation(input: Parameters<MarketplaceStore['recordReleaseActivation']>[0]) {
+    return this.delegate.recordReleaseActivation(input)
+  }
 }
 
 class FailOncePublisher implements AccessGroupPublisher {
   calls: Array<{ dataId: string; content: string; expectedMd5: string }> = []
+  private content: string | null = null
+
+  async read(): Promise<{ state: 'PRESENT' | 'NOT_FOUND'; md5: string | null }> {
+    return this.content === null
+      ? { state: 'NOT_FOUND', md5: null }
+      : { state: 'PRESENT', md5: createHash('md5').update(this.content, 'utf8').digest('hex') }
+  }
 
   async publish(input: {
     environmentId: string
@@ -99,6 +111,7 @@ class FailOncePublisher implements AccessGroupPublisher {
     dataId: string
     content: string
     expectedMd5: string
+    expectedOldMd5: string | null
   }): Promise<{ readbackMd5: string }> {
     this.calls.push({
       dataId: input.dataId,
@@ -108,6 +121,7 @@ class FailOncePublisher implements AccessGroupPublisher {
     if (this.calls.length === 1) {
       throw new AccessGroupPublisherError('RNACOS_UNAVAILABLE', 'rnacos 暂时不可用')
     }
+    this.content = input.content
     return { readbackMd5: input.expectedMd5 }
   }
 }
@@ -371,7 +385,7 @@ test('access group renderer is byte-stable and MySQL SQL stays single-table', as
   )
   assert.equal(
     rendered.content,
-    '{"version":7,"data":{"name":"ma_controlled_chat_0123456789","users":["alice","zoe"]}}',
+    '{"version":8,"data":{"name":"ma_controlled_chat_0123456789","users":["alice","zoe"]}}',
   )
   const source = await readFile(new URL('./mysql-store.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /\bJOIN\b|\bUNION\b|\bWITH\s+[A-Za-z_]/u)

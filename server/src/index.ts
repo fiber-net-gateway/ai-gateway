@@ -13,6 +13,7 @@ import { MySqlModelAccessStore } from './modules/model-access/mysql-store.js'
 import { MySqlLlmCallAuditStore } from './modules/llm-call-audit/mysql-store.js'
 import { RnacosAccessGroupPublisher } from './modules/model-access/rnacos-publisher.js'
 import { RnacosConfigClient } from './modules/rnacos/config-client.js'
+import { HttpAiServerConfigStatusReader } from './modules/model-marketplace/ai-server-status.js'
 
 const config = loadConfig()
 const pool = config.dataMode === 'mysql' ? createMySqlPool(config.mysql) : null
@@ -44,6 +45,9 @@ const app = buildApp({
   llmCallAuditStore,
   accessGroupPublisher,
   marketplacePublisher: rnacosClient,
+  aiServerConfigStatusReader: pool
+    ? new HttpAiServerConfigStatusReader(config.aiServer.baseUrl)
+    : undefined,
   logger: true,
   closeInfrastructure: pool ? () => pool.end() : undefined,
 })

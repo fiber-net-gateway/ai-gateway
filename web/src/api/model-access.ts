@@ -45,6 +45,19 @@ function queryString(values: Record<string, string | number | undefined>) {
 }
 
 export const modelAccessApi = {
+  publishGroup: (groupId: string, revision: number) =>
+    request<{
+      groupId: string
+      groupName: string
+      revision: number
+      publishedRevision: number
+      publicationId: string
+      publicationState: 'PUBLISHED' | 'FAILED'
+      readbackMd5: string | null
+    }>(`/api/admin/model-access-groups/${groupId}/publish`, {
+      method: 'POST',
+      headers: { 'If-Match': `"${revision}"` },
+    }),
   mine: (filters: { environmentId?: string; status?: ModelAccessRequestStatus } = {}) =>
     request<{ items: ApplicantAccessRequest[]; nextCursor: string | null }>(
       `/api/me/model-access-requests?${queryString(filters)}`,

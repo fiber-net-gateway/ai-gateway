@@ -11,6 +11,7 @@ import { registerModelAccessRoutes } from './modules/model-access/routes.js'
 import { ModelAccessService } from './modules/model-access/service.js'
 import type { AccessGroupPublisher, ModelAccessStore } from './modules/model-access/types.js'
 import { MemoryMarketplaceStore } from './modules/model-marketplace/memory-store.js'
+import type { AiServerConfigStatusReader } from './modules/model-marketplace/ai-server-status.js'
 import { registerModelMarketplaceRoutes } from './modules/model-marketplace/routes.js'
 import { MemoryMarketplaceSecretService } from './modules/model-marketplace/secret-service.js'
 import { ModelMarketplaceService } from './modules/model-marketplace/service.js'
@@ -41,6 +42,7 @@ export interface BuildAppOptions {
   llmCallAuditStore?: LlmCallAuditStore
   accessGroupPublisher?: AccessGroupPublisher | null
   marketplacePublisher?: MarketplaceConfigPublisher | null
+  aiServerConfigStatusReader?: AiServerConfigStatusReader | null
   clock?: Clock
   random?: RandomSource
   closeInfrastructure?: () => Promise<void>
@@ -120,6 +122,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     config.security.encryptionKey,
     modelAccess,
     options.marketplacePublisher ?? null,
+    options.aiServerConfigStatusReader ?? null,
   )
   const llmCallAudit = new LlmCallAuditService(
     llmCallAuditStore,

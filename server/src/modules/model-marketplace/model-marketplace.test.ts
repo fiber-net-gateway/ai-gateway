@@ -31,6 +31,26 @@ class FakeMarketplacePublisher implements MarketplaceConfigPublisher {
     this.configs.set(dataId, content)
   }
 
+  configStatus() {
+    return {
+      schemaVersion: 1 as const,
+      state: 'ACTIVE' as const,
+      generation: this.writes.length + 1,
+      workerIndex: 0,
+      workers: {
+        count: 2,
+        converged: true,
+        generations: [this.writes.length + 1, this.writes.length + 1],
+      },
+      resources: [...this.configs].map(([dataId, content]) => ({
+        dataId,
+        group: 'LLM-SERVER' as const,
+        md5: md5(content),
+        version: 1,
+      })),
+    }
+  }
+
   async read(input: {
     environmentId: string
     group: 'LLM-SERVER'
@@ -555,12 +575,17 @@ test('release preflight stops every write when a later Data ID has drifted', asy
   assert.equal(detail?.body.includes('DRIFT_TEST_SECRET_MUST_NOT_LEAK'), false)
 })
 
-test('approval-required model publishes its empty access group before Provider resources', async (context) => {
+test('approval-required model needs an explicitly published exact access group', async (context) => {
   const publisher = new FakeMarketplacePublisher()
   const app = buildApp({
     marketplacePublisher: publisher,
     accessGroupPublisher: {
-      publish: (input) => publisher.publish({ ...input, expectedOldMd5: null }),
+      read: (input) => publisher.read(input),
+      publish: (input) => publisher.publish(input),
+    },
+    aiServerConfigStatusReader: {
+      instanceId: 'http://ai-server.test',
+      read: async () => publisher.configStatus(),
     },
   })
   context.after(() => app.close())
@@ -610,6 +635,14 @@ test('approval-required model publishes its empty access group before Provider r
   })
   assert.equal(created.statusCode, 201, created.body)
   const providerName = created.json().providers[0].providerName as string
+  const accessGroup = created.json().allowUserGroups[0] as { id: string }
+  const publishedGroup = await app.inject({
+    method: 'POST',
+    url: `/api/admin/model-access-groups/${accessGroup.id}/publish`,
+    headers: { cookie, 'x-csrf-token': csrf, 'if-match': '"0"' },
+  })
+  assert.equal(publishedGroup.statusCode, 200, publishedGroup.body)
+  assert.equal(publishedGroup.json().publicationState, 'PUBLISHED')
   const submitted = await app.inject({
     method: 'POST',
     url: `/api/environments/${environmentId}/drafts/${draftId}/submit`,
@@ -634,6 +667,9 @@ test('approval-required model publishes its empty access group before Provider r
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
   assert.equal(detail?.json().state, 'COMPLETED')
+  assert.equal(detail?.json().activationState, 'EFFECTIVE')
+  assert.equal(detail?.json().activationResults[0].instanceId, 'http://ai-server.test')
+  assert.match(detail?.json().activationResults[0].acceptedIdentity, /^generation:/u)
   assert.equal(detail?.json().groupDependencies[0].state, 'READY')
   assert.equal(publisher.writes[0].dataId.startsWith('ploto.ai-llm.user-group.'), true)
   assert.deepEqual(
@@ -643,7 +679,7 @@ test('approval-required model publishes its empty access group before Provider r
   assert.equal(detail?.body.includes('ACCESS_GROUP_SECRET_MUST_NOT_LEAK'), false)
 })
 
-test('renderer uses fixed Data IDs, deterministic ordering and exact uint64 JSON integers', async () => {
+test('renderer uses fixed Data IDs, deterministic ordering and exact int64 JSON integers', async () => {
   const encryptionKey = Buffer.alloc(32, 7)
   const secrets = new MemoryMarketplaceSecretService(new ValueCipher(encryptionKey), encryptionKey)
   const now = '2026-08-03T00:00:00.000Z'
@@ -720,7 +756,7 @@ test('renderer uses fixed Data IDs, deterministic ordering and exact uint64 JSON
         fallbackEnabled: true,
         retryableStatuses: [504, 429, 429],
         rateLimit: {
-          windowDurationMillis: '18446744073709551615',
+          windowDurationMillis: '9223372036854775807',
           maxTokensPerWindow: '9007199254740993',
         },
         allowUserGroups: [],
@@ -753,11 +789,18 @@ test('renderer uses fixed Data IDs, deterministic ordering and exact uint64 JSON
 
   const models = renderModelsResource(version)
   assert.equal(models.dataId, 'ploto.ai-llm.models')
-  assert.match(models.content, /"window-duration-millis":18446744073709551615/u)
+  assert.match(models.content, /"window-duration-millis":9223372036854775807/u)
   assert.match(models.content, /"max-tokens-per-window":9007199254740993/u)
   assert.deepEqual(
     JSON.parse(models.content).data[0]['load-balance']['retryable-status'],
     [429, 504],
+  )
+
+  const invalidRateLimitVersion = structuredClone(version)
+  invalidRateLimitVersion.models[0].rateLimit!.windowDurationMillis = '9223372036854775808'
+  assert.throws(
+    () => renderModelsResource(invalidRateLimitVersion),
+    /outside the ai-server int64 contract/u,
   )
 })
 
