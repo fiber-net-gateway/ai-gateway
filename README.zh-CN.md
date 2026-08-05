@@ -15,27 +15,42 @@
 - rnacos 写入状态与 `ai-server` 实例实际生效状态的分开展示；
 - 启动配置模板、实例健康、服务发现和配置快照状态。
 
-当前已实现用户与 Token 管理、独立的 Provider 与模型维护、模型专属授权组、不可变环境级
-Release，以及按 Provider → models 顺序向 rnacos 发布并恢复的编排。Release 详情保留逐
-Data ID 写入与回读证据；实例级生效证据和回滚执行仍是后续能力，因此当前明确显示为未知或
-不可用。
+当前已实现用户与 Token 管理、独立的 Provider 与模型维护、模型专属授权组及审批、不可变
+环境级 Release、按 Provider → models 顺序向 rnacos 发布并恢复的编排、LLM 调用审计接收
+接口和个人调用记录。Release 详情保留逐 Data ID 写入与回读证据；ai-server 审计发送器、实例
+健康与生效状态采集、NamingService 观察和回滚执行仍是后续能力，因此当前生效状态保持未知。
 
 ## 技术架构
 
 ```mermaid
 flowchart LR
     B[浏览器] --> W[React + TypeScript<br/>web]
-    W --> A[Node.js + TypeScript<br/>server]
-    A --> D[(MySQL<br/>草稿/发布/审计)]
-    A --> N[rnacos<br/>配置与服务发现]
-    A --> S[ai-server<br/>健康与生效状态]
+    W -->|/api| A[Node.js + TypeScript<br/>server]
+    A -->|MySQL 模式<br/>领域数据、草稿、Release、审计| D[(MySQL)]
+    A -->|固定 Data ID<br/>发布与 MD5 回读| C[rnacos<br/>ConfigService]
+    C -->|动态配置订阅| S[ai-server]
+    S -->|实例注册与服务发现| N[rnacos<br/>NamingService]
+    S -.->|调用审计上报<br/>ai-server 发送端待实现| A
+    A -.->|健康、就绪与生效状态<br/>采集端待实现| S
+    A -.->|实例观察待实现| N
 ```
 
 - `web/`：React、TypeScript 和 Vite 前端；开发时将 `/api` 代理到本地后端。
-- `server/`：Fastify API；MySQL 使用 `mysql2`，rnacos 和 `ai-server` 通过环境配置接入。
-- MySQL：保存环境元数据、规范化配置、草稿、不可变发布记录和审计数据。
-- rnacos：作为 Nacos 兼容的配置中心与 NamingService，承载 `ai-server` 动态配置。
-- `ai-server`：控制台管理的目标服务；提供代理能力、健康探针和后续的配置生效证据。
+- `server/`：Fastify API；MySQL 模式使用 `mysql2`，并启用 rnacos 配置发布器；默认 memory
+  模式使用进程内 Store，不向 rnacos 发布。
+- MySQL：保存环境元数据、用户与会话、规范化配置、草稿、不可变发布记录、访问申请和审计
+  数据。
+- rnacos ConfigService：只接收控制台发布的固定 `LLM-SERVER` Data ID，`ai-server` 从中订阅
+  动态配置。
+- rnacos NamingService：承载 `ai-server` 实例注册和服务发现；控制台当前尚未连接
+  NamingService，也没有从中采集实例状态。
+- `ai-server`：继续承担 LLM 代理；当前提供健康与就绪探针，但尚不能向控制台证明某个 Release
+  或指定 Data ID MD5 已生效。
+- 调用审计：控制台接收接口和个人白名单投影已经实现，但 `ai-server` HTTP 发送器尚未实现，
+  因此图中将这条链路标为待完成。
+
+实线表示控制台当前已实现的集成或现有运行时关系；虚线表示虽然可能已经存在接收契约或配置，
+但端到端运行链路尚未完成的集成。
 
 动态配置固定使用 rnacos group `LLM-SERVER`，主要 Data ID 为：
 
@@ -51,7 +66,7 @@ rnacos 的写入成功只表示“已发布”，不能直接表示所有 `ai-se
 
 ```text
 .
-├── web/                    # React 用户与 Token 管理控制台
+├── web/                    # React 管理控制台
 │   ├── src/
 │   ├── index.html
 │   ├── package.json
@@ -60,7 +75,7 @@ rnacos 的写入成功只表示“已发布”，不能直接表示所有 `ai-se
 │   ├── src/
 │   │   ├── config/         # 环境变量解析
 │   │   ├── database/       # MySQL 连接、确定性迁移
-│   │   ├── modules/        # 用户、Session、BT1 Token 与 OIDC
+│   │   ├── modules/        # 用户、模型广场、访问审批、rnacos 与调用审计
 │   │   ├── app.ts          # Fastify 应用与路由注册
 │   │   └── index.ts        # 进程入口
 │   └── .env.example
@@ -134,9 +149,10 @@ MYSQL_DATABASE=ai_server_console
 
 - `MYSQL_*`：控制台数据库；
 - `RNACOS_*`：rnacos 地址、绑定环境、namespace、tenant、认证信息和固定配置 group；
-- `AI_SERVER_BASE_URL`：目标 `ai-server` 管理地址；
-- `AUDIT_INGEST_TOKEN`、`AUDIT_INGEST_BODY_LIMIT_BYTES`：可选的 ai-server 调用审计内部上报
-  Bearer 凭据与请求体上限；token 为空时关闭入口；
+- `AI_SERVER_BASE_URL`：为后续 `ai-server` 状态客户端预留的目标地址；启动时会校验，但当前后端
+  不会调用该地址；
+- `AUDIT_INGEST_TOKEN`、`AUDIT_INGEST_BODY_LIMIT_BYTES`：控制台内部调用审计接收接口的可选
+  Bearer 凭据与请求体上限；token 为空时关闭入口，对应的 `ai-server` 发送器尚未实现；
 - `AUTH_MODE`、`OIDC_*`：本地开发认证或企业 OIDC + PKCE；
 - `APP_ENCRYPTION_KEY`：Token 短期交付与本地 secret 封装密钥；
 - `BOOTSTRAP_*`：初始管理员、环境和 BT1 签名 key；

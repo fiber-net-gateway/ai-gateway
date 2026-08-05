@@ -17,32 +17,45 @@ The console is intended to provide:
   snapshot status.
 
 The console currently implements user and token management, separate Provider and model
-maintenance, model-owned access groups, immutable environment releases, and recoverable
-Provider-to-models publication to rnacos. Release details retain per-Data-ID write and readback
-evidence. Instance-level activation evidence and rollback execution remain future work and are
-therefore reported as unknown or unavailable.
+maintenance, model-owned access groups and approval, immutable environment releases, recoverable
+Provider-to-models publication to rnacos, an LLM call-audit ingest endpoint, and personal call
+history. Release details retain per-Data-ID write and readback evidence. The `ai-server` audit
+sender, instance health and activation observation, NamingService observation, and rollback
+execution remain future work; activation is therefore reported as unknown.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     B[Browser] --> W[React + TypeScript<br/>web]
-    W --> A[Node.js + TypeScript<br/>server]
-    A --> D[(MySQL<br/>drafts/releases/audits)]
-    A --> N[rnacos<br/>configuration and discovery]
-    A --> S[ai-server<br/>health and activation status]
+    W -->|/api| A[Node.js + TypeScript<br/>server]
+    A -->|MySQL mode<br/>domain data, drafts, releases, audits| D[(MySQL)]
+    A -->|fixed Data IDs<br/>publish and MD5 readback| C[rnacos<br/>ConfigService]
+    C -->|dynamic configuration subscription| S[ai-server]
+    S -->|registration and service discovery| N[rnacos<br/>NamingService]
+    S -.->|call-audit delivery<br/>ai-server sender pending| A
+    A -.->|health, readiness, and activation<br/>observer pending| S
+    A -.->|instance observation pending| N
 ```
 
 - `web/`: A React, TypeScript, and Vite frontend. In development, it proxies `/api` to the local
   backend.
-- `server/`: A Fastify API. It uses `mysql2` for MySQL and environment-based configuration for
-  rnacos and `ai-server` connections.
-- MySQL: Stores environment metadata, normalized configuration, drafts, immutable release records,
-  and audit data.
-- rnacos: Provides Nacos-compatible configuration and naming services for dynamic `ai-server`
-  configuration.
-- `ai-server`: The service managed by the console. It provides LLM proxying, health probes, and,
-  in future modules, evidence that released configuration is active.
+- `server/`: A Fastify API. In MySQL mode, it uses `mysql2` and enables the rnacos configuration
+  publisher. The default memory mode uses in-process stores and does not publish to rnacos.
+- MySQL: Stores environment metadata, users and sessions, normalized configuration, drafts,
+  immutable release records, access requests, and audit data.
+- rnacos ConfigService: Receives only the fixed `LLM-SERVER` Data IDs published by the console;
+  `ai-server` subscribes to those dynamic configurations.
+- rnacos NamingService: Supports `ai-server` registration and service discovery. The console does
+  not currently connect to NamingService or collect instance state from it.
+- `ai-server`: Remains the LLM proxy. It exposes health and readiness probes, but it does not yet
+  provide the console with evidence that a specific release or Data ID MD5 is active.
+- Call audits: The console ingest endpoint and per-user projection are implemented, but the
+  `ai-server` HTTP sender is not. The diagram therefore shows this integration as pending.
+
+Solid arrows show currently implemented console integrations or existing runtime relationships.
+Dashed arrows show integrations whose receiving contract or configuration may exist but whose
+end-to-end runtime path is not yet implemented.
 
 Dynamic configuration always uses the rnacos group `LLM-SERVER`. Its primary Data IDs are:
 
@@ -59,7 +72,7 @@ rnacos write results separately and keeps activation `UNKNOWN` until instance ev
 
 ```text
 .
-├── web/                    # React user and token management console
+├── web/                    # React management console
 │   ├── src/
 │   ├── index.html
 │   ├── package.json
@@ -68,7 +81,7 @@ rnacos write results separately and keeps activation `UNKNOWN` until instance ev
 │   ├── src/
 │   │   ├── config/         # Environment variable parsing
 │   │   ├── database/       # MySQL connection and deterministic migrations
-│   │   ├── modules/        # Users, sessions, BT1 tokens, and OIDC
+│   │   ├── modules/        # Users, marketplace, access, rnacos, and call audits
 │   │   ├── app.ts          # Fastify application and route registration
 │   │   └── index.ts        # Process entry point
 │   └── .env.example
@@ -147,9 +160,11 @@ After copying `server/.env.example`, configure these connections and settings as
 - `MYSQL_*`: Console database settings.
 - `RNACOS_*`: rnacos address, bound environment, namespace, tenant, credentials, and fixed
   configuration group.
-- `AI_SERVER_BASE_URL`: Address of the target `ai-server` management endpoint.
+- `AI_SERVER_BASE_URL`: Reserved target address for a future `ai-server` status client. It is
+  validated at startup but the current backend does not call it.
 - `AUDIT_INGEST_TOKEN` and `AUDIT_INGEST_BODY_LIMIT_BYTES`: Optional Bearer credential and body
-  limit for the internal ai-server call-audit ingest endpoint. An empty token disables ingestion.
+  limit for the console's internal call-audit ingest endpoint. An empty token disables ingestion;
+  the corresponding `ai-server` sender is not implemented yet.
 - `AUTH_MODE` and `OIDC_*`: Local development authentication or enterprise OIDC with PKCE.
 - `APP_ENCRYPTION_KEY`: Encryption key for short-lived token delivery and local secret wrapping.
 - `BOOTSTRAP_*`: Initial administrator, environment, and BT1 signing key settings.
