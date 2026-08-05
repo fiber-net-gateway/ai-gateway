@@ -89,10 +89,6 @@ class PublishedMarketplaceStore implements MarketplaceStore {
   finishRelease(input: Parameters<MarketplaceStore['finishRelease']>[0]) {
     return this.delegate.finishRelease(input)
   }
-
-  recordReleaseActivation(input: Parameters<MarketplaceStore['recordReleaseActivation']>[0]) {
-    return this.delegate.recordReleaseActivation(input)
-  }
 }
 
 class FailOncePublisher implements AccessGroupPublisher {

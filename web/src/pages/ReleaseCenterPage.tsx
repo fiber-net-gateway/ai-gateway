@@ -181,21 +181,6 @@ export function ReleaseCenterPage({
     }
   }
 
-  const refreshActivation = async () => {
-    if (!detail) return
-    setBusy(true)
-    try {
-      const next = await modelMarketplaceApi.refreshActivation(environmentId, detail.id)
-      setDetail(next)
-      setReleases((current) => current.map((release) => (release.id === next.id ? next : release)))
-      onInfo(`Release #${detail.releaseNumber} 实例生效证据已刷新。`)
-    } catch (error) {
-      onError(error instanceof Error ? error.message : '实例生效证据刷新失败')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const activeRelease = releases.some(
     (release) => release.state === 'PENDING' || release.state === 'PUBLISHING',
   )
@@ -206,7 +191,7 @@ export function ReleaseCenterPage({
         <div>
           <span className="eyebrow">ENVIRONMENT RELEASE ORCHESTRATION</span>
           <h1>发布中心</h1>
-          <p>冻结 MySQL 草稿，逐项核对 rnacos 写入，并从 ai-server 回收实例生效证据。</p>
+          <p>冻结 MySQL 草稿，并逐项核对 rnacos 写入与回读；实例生效不由控制台推断。</p>
         </div>
         <button
           className="primary-button"
@@ -303,16 +288,6 @@ export function ReleaseCenterPage({
                     {detail.state === 'FAILED' ? '重试失败项' : '执行 rnacos 发布'}
                   </button>
                 )}
-                {detail.state === 'COMPLETED' && (
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void refreshActivation()}
-                  >
-                    <RefreshCw size={15} /> 刷新实例证据
-                  </button>
-                )}
               </div>
 
               <div className="release-evidence-grid">
@@ -338,9 +313,7 @@ export function ReleaseCenterPage({
                   <AlertTriangle size={16} />
                   <span>
                     <small>实例证据</small>
-                    <code>
-                      {detail.activationState} / {detail.activationResults.length} INSTANCE
-                    </code>
+                    <code>UNKNOWN / NONE</code>
                   </span>
                 </div>
               </div>
@@ -369,23 +342,6 @@ export function ReleaseCenterPage({
                           显式发布
                         </button>
                       )}
-                    </div>
-                  ))}
-                </section>
-              )}
-
-              {detail.activationResults.length > 0 && (
-                <section className="release-dependencies">
-                  <h3>ai-server 实例证据</h3>
-                  {detail.activationResults.map((result) => (
-                    <div key={result.instanceId}>
-                      {result.activationState === 'EFFECTIVE' ? (
-                        <CheckCircle2 size={15} />
-                      ) : (
-                        <AlertTriangle size={15} />
-                      )}
-                      <span>{result.instanceId}</span>
-                      <code>{result.acceptedIdentity ?? result.safeErrorCode ?? '无证据'}</code>
                     </div>
                   ))}
                 </section>

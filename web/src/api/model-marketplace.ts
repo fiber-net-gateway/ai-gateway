@@ -43,14 +43,6 @@ export interface MarketplaceRelease {
   finishedAt: string | null
   updatedAt: string
   resources: MarketplaceReleaseResource[]
-  activationResults: Array<{
-    instanceId: string
-    activationState: 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'REJECTED'
-    evidenceKind: 'CONFIG_STATUS_MD5'
-    acceptedIdentity: string | null
-    safeErrorCode: string | null
-    observedAt: string | null
-  }>
 }
 
 export interface MarketplaceReleaseDetail extends MarketplaceRelease {
@@ -361,11 +353,6 @@ export const modelMarketplaceApi = {
   retryRelease: (environmentId: string, releaseId: string) =>
     request<MarketplaceReleaseDetail>(
       `/api/environments/${environmentId}/releases/${releaseId}/retry`,
-      { method: 'POST' },
-    ),
-  refreshActivation: (environmentId: string, releaseId: string) =>
-    request<MarketplaceReleaseDetail>(
-      `/api/environments/${environmentId}/releases/${releaseId}/refresh-activation`,
       { method: 'POST' },
     ),
 }

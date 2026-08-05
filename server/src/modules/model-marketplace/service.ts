@@ -3,7 +3,6 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import type { Clock, RandomSource } from '../users/crypto.js'
 import { DomainError } from '../users/errors.js'
 import type { AuthenticatedActor } from '../users/services.js'
-import { AiServerConfigStatusError, type AiServerConfigStatusReader } from './ai-server-status.js'
 import type { UserStore } from '../users/types.js'
 import type { ModelAccessDirectory } from '../model-access/types.js'
 import {
@@ -125,7 +124,6 @@ export class ModelMarketplaceService {
     private readonly cursorKey: Buffer,
     private readonly accessDirectory: ModelAccessDirectory,
     private readonly publisher: MarketplaceConfigPublisher | null,
-    private readonly configStatusReader: AiServerConfigStatusReader | null,
   ) {}
 
   parseRevision(etag: string | undefined): number {
@@ -991,33 +989,6 @@ export class ModelMarketplaceService {
     return this.releaseView(started)
   }
 
-  async refreshReleaseActivation(input: {
-    environmentId: string
-    releaseId: string
-    actor: AuthenticatedActor
-    correlationId: string
-  }) {
-    const release = await this.store.getRelease(input.environmentId, input.releaseId)
-    if (!release) throw new DomainError('RELEASE_NOT_FOUND', 404, 'Release 不存在')
-    if (release.state !== 'COMPLETED' || release.publicationState !== 'PUBLISHED') {
-      throw new DomainError('ACTIVATION_CHECK_NOT_ALLOWED', 409, '只能校验已发布的 Release')
-    }
-    const version = await this.store.getVersion(release.versionId)
-    const checked = await this.checkReleaseActivation(release, version)
-    await this.audit(
-      input.actor,
-      input.correlationId,
-      'marketplace.release.activation_checked',
-      release.id,
-      release.environmentId,
-      {
-        activationState: checked.activationState,
-        instanceCount: checked.activationResults.length,
-      },
-    )
-    return this.releaseView(checked)
-  }
-
   async resumePublishingReleases(): Promise<void> {
     if (!this.publisher) return
     for (const release of await this.store.listPublishingReleases()) {
@@ -1099,7 +1070,6 @@ export class ModelMarketplaceService {
         publicationState: 'PUBLISHED',
         now: this.clock.now().toISOString(),
       })
-      const activated = await this.checkReleaseActivation(finished, version)
       await this.audit(
         actor,
         correlationId,
@@ -1109,8 +1079,8 @@ export class ModelMarketplaceService {
         {
           releaseNumber: release.releaseNumber,
           resourceCount: release.resources.length,
-          revision: activated.revision,
-          activationState: activated.activationState,
+          revision: finished.revision,
+          activationState: 'UNKNOWN',
         },
       )
     } catch (error) {
@@ -1194,62 +1164,6 @@ export class ModelMarketplaceService {
       }
     }
     return targetMd5ByDataId
-  }
-
-  private async checkReleaseActivation(
-    release: MarketplaceReleaseRecord,
-    version: Awaited<ReturnType<MarketplaceStore['getVersion']>>,
-  ): Promise<MarketplaceReleaseRecord> {
-    if (!this.configStatusReader) return release
-    const now = this.clock.now().toISOString()
-    let result: MarketplaceReleaseRecord['activationResults'][number]
-    let activationState: MarketplaceReleaseRecord['activationState']
-    try {
-      const status = await this.configStatusReader.read()
-      const expected = new Map(
-        release.resources.flatMap((resource) =>
-          resource.newMd5 ? [[resource.dataId, resource.newMd5] as const] : [],
-        ),
-      )
-      const groupIds = [
-        ...new Set(
-          version.models.flatMap((model) => model.allowUserGroups.map((group) => group.id)),
-        ),
-      ]
-      for (const target of await this.accessDirectory.getGroupPublicationTargets(groupIds)) {
-        expected.set(target.dataId, target.targetMd5)
-      }
-      const active = new Map(status.resources.map((resource) => [resource.dataId, resource.md5]))
-      const exact = [...expected].every(([dataId, md5]) => active.get(dataId) === md5)
-      const effective = status.state === 'ACTIVE' && status.workers.converged && exact
-      activationState = effective ? 'EFFECTIVE' : 'PENDING'
-      result = {
-        instanceId: this.configStatusReader.instanceId,
-        activationState,
-        evidenceKind: 'CONFIG_STATUS_MD5',
-        acceptedIdentity: `generation:${status.generation};workers:${status.workers.generations.join(',')}`,
-        safeErrorCode: effective ? null : 'CONFIG_NOT_YET_ACTIVE',
-        observedAt: now,
-      }
-    } catch (error) {
-      const code =
-        error instanceof AiServerConfigStatusError ? error.code : 'AI_SERVER_STATUS_UNAVAILABLE'
-      activationState = 'UNKNOWN'
-      result = {
-        instanceId: this.configStatusReader.instanceId,
-        activationState,
-        evidenceKind: 'CONFIG_STATUS_MD5',
-        acceptedIdentity: null,
-        safeErrorCode: code,
-        observedAt: now,
-      }
-    }
-    return this.store.recordReleaseActivation({
-      releaseId: release.id,
-      activationState,
-      result,
-      now,
-    })
   }
 
   private async preflightResources(

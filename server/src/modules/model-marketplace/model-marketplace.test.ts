@@ -31,26 +31,6 @@ class FakeMarketplacePublisher implements MarketplaceConfigPublisher {
     this.configs.set(dataId, content)
   }
 
-  configStatus() {
-    return {
-      schemaVersion: 1 as const,
-      state: 'ACTIVE' as const,
-      generation: this.writes.length + 1,
-      workerIndex: 0,
-      workers: {
-        count: 2,
-        converged: true,
-        generations: [this.writes.length + 1, this.writes.length + 1],
-      },
-      resources: [...this.configs].map(([dataId, content]) => ({
-        dataId,
-        group: 'LLM-SERVER' as const,
-        md5: md5(content),
-        version: 1,
-      })),
-    }
-  }
-
   async read(input: {
     environmentId: string
     group: 'LLM-SERVER'
@@ -583,10 +563,6 @@ test('approval-required model needs an explicitly published exact access group',
       read: (input) => publisher.read(input),
       publish: (input) => publisher.publish(input),
     },
-    aiServerConfigStatusReader: {
-      instanceId: 'http://ai-server.test',
-      read: async () => publisher.configStatus(),
-    },
   })
   context.after(() => app.close())
   const login = await app.inject({
@@ -667,9 +643,7 @@ test('approval-required model needs an explicitly published exact access group',
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
   assert.equal(detail?.json().state, 'COMPLETED')
-  assert.equal(detail?.json().activationState, 'EFFECTIVE')
-  assert.equal(detail?.json().activationResults[0].instanceId, 'http://ai-server.test')
-  assert.match(detail?.json().activationResults[0].acceptedIdentity, /^generation:/u)
+  assert.equal(detail?.json().activationState, 'UNKNOWN')
   assert.equal(detail?.json().groupDependencies[0].state, 'READY')
   assert.equal(publisher.writes[0].dataId.startsWith('ploto.ai-llm.user-group.'), true)
   assert.deepEqual(

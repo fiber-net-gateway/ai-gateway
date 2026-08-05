@@ -356,9 +356,8 @@ Token 池不是简单轮询列表。ai-server 会基于 route key、Provider 名
 | 实例生效    | 每个 ai-server 实例报告的接受证据         | 已生效/部分生效/未知 |
 
 “保存成功”的 Toast 只能表示草稿已保存。“发布成功”只表示目标 rnacos 资源写入并回读一致。
-ai-server 的 `/internal/config/status` 只返回当前活跃 Data ID/MD5 与 worker generation；
-控制台只有在直连端点全部精确匹配时才显示“已生效”。缺少该证据时必须显示
-“待生效”或“生效未知”，不能以 `/ready` 或健康检查代替。
+后续通知和应用由 ai-server 的 Nacos 订阅负责；控制台不主动查询 ai-server，实例状态保持
+“生效未知”，不能以 rnacos 发布成功、`/ready` 或健康检查代替实例接受证据。
 
 ### 7.2 保存草稿
 
@@ -385,7 +384,7 @@ ai-server 的 `/internal/config/status` 只返回当前活跃 Data ID/MD5 与 wo
 
 1. 写入并回读所有新增或变更的 Provider Data ID。
 2. 写入并回读聚合的 `ploto.ai-llm.models`。
-3. 等待目标 ai-server 实例报告接受结果。
+3. 发布完成后由 ai-server 的 Nacos 订阅异步接收配置，控制台不等待实例状态。
 4. 在后续独立清理 release 中处理已无引用 Provider。
 
 用户组成员配置仍由模型访问模块拥有。模型 release 不自行拼接、发布或覆盖用户组成员，只把
@@ -411,9 +410,8 @@ rnacos Data ID 必须存在且回读 MD5 必须与目标 MD5 完全一致。新�
 3. “创建 Release”只冻结版本并创建资源步骤；成功后跳转 Release 详情页。
 4. “执行发布”单独触发后台编排，生产环境继续要求五分钟内的二次认证。
 5. 详情页刷新逐资源状态，失败后只允许“重试同一 Release”，不能用重复提交代替重试。
-6. rnacos 全部回读一致后独立拉取 ai-server 证据，分别显示“已发布 / 已生效”、
-   “已发布 / 待生效”或“已发布 / 生效未知”；成功、提示、警告和错误使用
-   不同 Toast 语义与视觉样式。
+6. rnacos 全部回读一致后显示“已发布 / 生效未知”；成功、提示、警告和错误使用不同
+   Toast 语义与视觉样式。
 
 ### 7.6 回滚
 
@@ -610,5 +608,5 @@ UTC 时间。Token 事件只能记录名称、动作和前后指纹后缀。
 
 - Provider 认证头策略，例如 Anthropic `x-api-key`。
 - `openai-embedding` 入站路由与广场协议徽标。
-- 基于服务发现冻结多实例集合，并为每个实例配置身份端点增加认证。
+- 若未来需要强生效证明，基于服务发现冻结多实例集合并设计受保护的状态上报。
 - 不暴露 secret 到 rnacos 明文配置的 secret 引用协议。

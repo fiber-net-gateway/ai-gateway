@@ -74,8 +74,7 @@ flowchart LR
     SVC --> PUB[Release Orchestrator]
     PUB --> RENDER[ai-server Config Renderer]
     RENDER --> RN[rnacos / LLM-SERVER]
-    PUB --> ACT[Activation Observer]
-    ACT --> AIS[ai-server Instances]
+    RN -. Nacos config notification .-> AIS[ai-server Instances]
 ```
 
 ### 3.1 边界
@@ -85,8 +84,8 @@ flowchart LR
 - Repository 每个方法只访问一张表，返回数据库行或写入结果。
 - Secret Service 负责加密、解密、指纹和销毁策略；调用方不接触加密实现。
 - Renderer 只接受冻结版本，生成确定性 JSON；它不知道 HTTP request 或数据库连接。
-- Release Orchestrator 创建不可变 release 后才调用 rnacos，保存逐资源、逐实例结果。
-- Activation Observer 只观察状态，不把 `/ready` 推断为接受本次 release。
+- Release Orchestrator 创建不可变 release 后才调用 rnacos，保存逐资源发布与回读结果。
+- ai-server 自行订阅 Nacos 配置；控制台不直连实例，也不把 `/ready` 推断为接受本次 release。
 - 控制台后端不提供通用 LLM proxy，也不使用供应商 Token 代用户发起聊天请求。
 
 ### 3.2 服务生命周期
@@ -244,7 +243,7 @@ type ActivationState = 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'PARTIAL' | 'REJECT
 
 - 草稿保存或校验完成时更新 `draftState`。
 - release 资源回读结果更新 `publicationState`。
-- 实例上报明确配置身份后更新 `activationState`。
+- 当前不采集实例接受证据，`activationState` 保持 `UNKNOWN`。
 - 投影 worker 不允许根据健康或 ready 状态写 `EFFECTIVE`。
 
 ## 6. 前端详细设计
@@ -1386,16 +1385,13 @@ release workflow 使用 `PENDING | PUBLISHING | COMPLETED | FAILED | CANCELLED`�
 
 ### 14.5 实例生效
 
-- ai-server 提供 `GET /internal/config/status`，只返回当前活跃配置的 Data ID、
-  MD5、包络版本、config generation 和各 HTTP worker generation，不返回配置正文。
-- `AI_SERVER_BASE_URL` 必须指向可识别的直连实例管理端点，不能使用会隐藏实例身份的
-  随机负载均衡地址。
-- 只有端点返回 `ACTIVE`、所有 worker generation 收敛，且 Release 资源与用户组
-  依赖的目标 MD5 全部匹配时才写 `EFFECTIVE`。可达但尚未匹配时写
-  `PENDING`，不可达或契约无效时写 `UNKNOWN`。
+- 控制台以 rnacos 写入和回读一致作为发布完成证据；后续配置通知和应用由 ai-server
+  的 Nacos 订阅负责，控制台不主动查询 ai-server。
+- 发布成功不等同于可观测的实例接受证据，因此当前 `activationState` 保持 `UNKNOWN`，
+  UI 不把“已发布”表述为“已生效”。
 - `/health`、`/ready`、进程存活或请求成功不能单独证明接受本 release。
-- 当前配置为单直连端点；扩展为多实例后必须冻结目标集合，保留实例矩阵，
-  部分接受时写 `PARTIAL`，不自动回滚。
+- 如果未来业务要求强实例证明，再单独设计受保护的状态上报或实例矩阵，不影响当前发布
+  主链路。
 
 ### 14.6 发布中心
 
@@ -1603,8 +1599,7 @@ Provider 原始内容。
 6. 实现普通用户 `PUBLISHED` 目录和用户组访问判断。
 7. 接入全局草稿提交、release 编排和逐资源结果。
 8. 实现前端模型列表、详情、编辑器和独立 Provider 管理页。
-9. 通过 ai-server 配置状态接口增加单直连实例生效观察；证据不足时保持
-   `PENDING` 或 `UNKNOWN`。
+9. 发布完成后保持实例生效状态 `UNKNOWN`；如未来需要强证明，再引入独立状态上报能力。
 10. 在开发环境用 MySQL/rnacos 做显式集成测试，再进入 staging。
 
 每一步都应保持 Fastify 可独立构造、单元测试无需外部服务。迁移确定性执行，不回写历史
@@ -1615,7 +1610,6 @@ release。上线前运行仓库规定的 typecheck、test、format check 和 bui
 - Provider 连接探测是否在 MVP 开放 UI；当前只校验配置契约与运行状态证据。
 - 普通用户是否能看到无访问权限模型；本文默认可见并给出申请指引。
 - Token 保留与销毁期限；必须由安全策略确定，不能早于回滚和事件调查窗口。
-- 多实例目标集合来源、实例稳定身份和鉴权方式；在此之前只对配置的单直连端点
-  出具 `EFFECTIVE` 证据。
+- 若未来引入实例生效证明，多实例目标集合来源、实例稳定身份和鉴权方式需要单独设计。
 - 是否需要供应商成本、上下文窗口和能力标签。这些不是当前 ai-server 路由契约，首版不参与
   发布，仅可作为后续控制台元数据扩展。
