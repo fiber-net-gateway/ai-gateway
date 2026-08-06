@@ -763,6 +763,47 @@ export class MySqlUserStore implements UserStore {
     )
   }
 
+  async listSigningKeys(environmentId: string): Promise<SigningKeyRecord[]> {
+    const [rows] = await this.pool.query<SigningKeyRow[]>(
+      `${signingKeySelect} WHERE environment_id = UUID_TO_BIN(?) ORDER BY kid`,
+      [environmentId],
+    )
+    const keys: SigningKeyRecord[] = []
+    for (const row of rows) {
+      const [secretRows] = await this.pool.query<SecretRow[]>(
+        `${secretSelect} WHERE id = UUID_TO_BIN(?) AND destroyed_at IS NULL`,
+        [row.secret_id],
+      )
+      const secretRow = secretRows[0]
+      if (!secretRow) continue
+      const secretBase64 = this.cipher.open(
+        { ciphertext: secretRow.ciphertext, nonce: secretRow.nonce },
+        `managed-secret:${secretRow.id}`,
+      )
+      keys.push({
+        id: row.id,
+        environmentId: row.environment_id,
+        kid: row.kid,
+        secret: Buffer.from(secretBase64, 'base64'),
+        keyState: row.key_state,
+        issuanceEnabled: Boolean(row.issuance_enabled),
+        clockSkewSeconds: row.clock_skew_seconds,
+        retireAfter: iso(row.retire_after),
+        revision: Number(row.revision),
+      })
+    }
+    return keys
+  }
+
+  async markSigningKeysPublished(environmentId: string, now: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE bt1_signing_keys
+          SET key_state = 'ACTIVE', revision = revision + 1, updated_at = ?
+        WHERE environment_id = UUID_TO_BIN(?) AND key_state = 'PUBLISHED_UNVERIFIED'`,
+      [date(now), environmentId],
+    )
+  }
+
   async getTokenIssuanceContext(
     userId: string,
     environmentId: string,

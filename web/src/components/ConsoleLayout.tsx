@@ -8,6 +8,7 @@ import {
   CloudUpload,
   FileClock,
   KeyRound,
+  KeySquare,
   LogOut,
   Menu,
   ShieldCheck,
@@ -24,6 +25,7 @@ export type Section =
   | 'providers'
   | 'releases'
   | 'tokens'
+  | 'key-ring'
   | 'calls'
   | 'my-access'
   | 'access-requests'
@@ -32,19 +34,23 @@ export type Section =
 
 interface LayoutProps {
   user: User
+  environments: EnvironmentAccess[]
   environment: EnvironmentAccess | null
   section: Section
   children: ReactNode
   onNavigate: (section: Section) => void
+  onEnvironmentChange: (environmentId: string) => void
   onLogout: () => void
 }
 
 export function ConsoleLayout({
   user,
+  environments,
   environment,
   section,
   children,
   onNavigate,
+  onEnvironmentChange,
   onLogout,
 }: LayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -75,11 +81,23 @@ export function ConsoleLayout({
         </div>
         <div className="environment-switcher">
           <span>当前环境</span>
-          <button type="button">
+          <label className="environment-select">
             <span className={`environment-dot stage-${environment?.environment.stage ?? 'none'}`} />
-            <b>{environment?.environment.name ?? '未授权环境'}</b>
+            <select
+              aria-label="当前环境"
+              value={environment?.environment.id ?? ''}
+              disabled={environments.length === 0}
+              onChange={(event) => onEnvironmentChange(event.target.value)}
+            >
+              {environments.length === 0 && <option value="">未授权环境</option>}
+              {environments.map((item) => (
+                <option value={item.environment.id} key={item.environment.id}>
+                  {item.environment.name}
+                </option>
+              ))}
+            </select>
             <ChevronDown size={15} />
-          </button>
+          </label>
           {environment && (
             <small>{environment.environment.stage.toUpperCase()} · MYSQL DRAFT</small>
           )}
@@ -142,6 +160,13 @@ export function ConsoleLayout({
                 onClick={() => navigate('access-requests')}
               >
                 <ClipboardCheck size={18} /> 权限审批
+              </button>
+              <button
+                className={section === 'key-ring' ? 'active' : ''}
+                type="button"
+                onClick={() => navigate('key-ring')}
+              >
+                <KeySquare size={18} /> BT1 Key Ring
               </button>
               <button
                 className={section === 'users' ? 'active' : ''}

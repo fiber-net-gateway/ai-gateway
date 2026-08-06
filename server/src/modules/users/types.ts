@@ -262,6 +262,8 @@ export interface UserStore {
   getSessionByTokenHash(hash: string, now: string): Promise<SessionRecord | null>
   revokeSession(id: string, userId: string, now: string): Promise<void>
   revokeAllSessions(userId: string, now: string): Promise<void>
+  listSigningKeys(environmentId: string): Promise<SigningKeyRecord[]>
+  markSigningKeysPublished(environmentId: string, now: string): Promise<void>
   getTokenIssuanceContext(
     userId: string,
     environmentId: string,

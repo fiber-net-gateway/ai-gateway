@@ -14,6 +14,7 @@ import { ConsoleLayout, type Section } from './components/ConsoleLayout'
 import { AuditPage } from './pages/AuditPage'
 import { AccessRequestsPage } from './pages/AccessRequestsPage'
 import { LoginPage } from './pages/LoginPage'
+import { KeyRingPage } from './pages/KeyRingPage'
 import { ModelDetailPage } from './pages/ModelDetailPage'
 import { ModelEditorPage } from './pages/ModelEditorPage'
 import { ModelMarketplacePage } from './pages/ModelMarketplacePage'
@@ -33,6 +34,7 @@ function initialSection(): Section {
     value === 'users' ||
     value === 'audit' ||
     value === 'tokens' ||
+    value === 'key-ring' ||
     value === 'calls' ||
     value === 'my-access' ||
     value === 'access-requests'
@@ -63,6 +65,9 @@ function App() {
   const [authMode, setAuthMode] = useState<'development' | 'oidc'>('development')
   const [user, setUser] = useState<User | null>(null)
   const [environments, setEnvironments] = useState<EnvironmentAccess[]>([])
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState(
+    () => window.localStorage.getItem('fiber-console.environment-id') ?? '',
+  )
   const [section, setSection] = useState<Section>(initialSection)
   const [modelRoute, setModelRoute] = useState(marketplaceRoute)
   const [releaseId, setReleaseId] = useState<string | null>(releaseRoute)
@@ -75,13 +80,22 @@ function App() {
   } | null>(null)
   const [issued, setIssued] = useState<IssuedToken | null>(null)
 
+  const updateEnvironments = useCallback((items: EnvironmentAccess[]) => {
+    setEnvironments(items)
+    setSelectedEnvironmentId((current) =>
+      items.some((item) => item.environment.id === current)
+        ? current
+        : (items[0]?.environment.id ?? ''),
+    )
+  }, [])
+
   const loadSession = async () => {
     try {
       const [status, me] = await Promise.all([api.authStatus(), api.me()])
       setAuthMode(status.mode)
       setUser(me.user)
       const access = await api.environments()
-      setEnvironments(access.items)
+      updateEnvironments(access.items)
     } catch (error) {
       const status = await api.authStatus().catch(() => ({ mode: 'development' as const }))
       setAuthMode(status.mode)
@@ -127,7 +141,7 @@ function App() {
     try {
       const result = await api.developmentLogin(username)
       setUser(result.user)
-      setEnvironments((await api.environments()).items)
+      updateEnvironments((await api.environments()).items)
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : '登录失败')
     } finally {
@@ -175,19 +189,33 @@ function App() {
           section === 'my-access'
         ? section
         : 'models'
-  const environmentId = environments[0]?.environment.id
+  const selectedEnvironment =
+    environments.find((item) => item.environment.id === selectedEnvironmentId) ??
+    environments[0] ??
+    null
+  const environmentId = selectedEnvironment?.environment.id
+  const selectEnvironment = (nextEnvironmentId: string) => {
+    if (!environments.some((item) => item.environment.id === nextEnvironmentId)) return
+    setSelectedEnvironmentId(nextEnvironmentId)
+    window.localStorage.setItem('fiber-console.environment-id', nextEnvironmentId)
+    const route = window.location.hash.replace(/^#\/?/u, '')
+    if (route.startsWith('models/')) window.location.hash = '/models'
+    if (route.startsWith('releases/')) window.location.hash = '/releases'
+  }
   return (
     <ConsoleLayout
       user={user}
-      environment={environments[0] ?? null}
+      environments={environments}
+      environment={selectedEnvironment}
       section={visibleSection}
+      onEnvironmentChange={selectEnvironment}
       onNavigate={navigate}
       onLogout={() => void logout()}
     >
       {visibleSection === 'tokens' && (
         <TokensPage
           environments={environments}
-          onEnvironmentsChange={setEnvironments}
+          onEnvironmentsChange={updateEnvironments}
           onError={showError}
         />
       )}
@@ -255,6 +283,9 @@ function App() {
           onError={showError}
           onIssued={setIssued}
         />
+      )}
+      {visibleSection === 'key-ring' && environmentId && user.systemRole === 'ADMIN' && (
+        <KeyRingPage environmentId={environmentId} onError={showError} onNotice={showSuccess} />
       )}
       {visibleSection === 'access-requests' && environmentId && (
         <AccessRequestsPage

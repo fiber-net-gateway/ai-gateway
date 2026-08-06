@@ -306,6 +306,21 @@ export class MemoryUserStore implements UserStore {
     }
   }
 
+  async listSigningKeys(environmentId: string): Promise<SigningKeyRecord[]> {
+    return [...this.signingKeys.values()]
+      .filter((key) => key.environmentId === environmentId)
+      .sort((left, right) => left.kid.localeCompare(right.kid, 'en'))
+      .map((key) => ({ ...copy(key), secret: Buffer.from(key.secret) }))
+  }
+
+  async markSigningKeysPublished(environmentId: string, _now: string): Promise<void> {
+    for (const key of this.signingKeys.values()) {
+      if (key.environmentId !== environmentId || key.keyState !== 'PUBLISHED_UNVERIFIED') continue
+      key.keyState = 'ACTIVE'
+      key.revision += 1
+    }
+  }
+
   async getTokenIssuanceContext(
     userId: string,
     environmentId: string,

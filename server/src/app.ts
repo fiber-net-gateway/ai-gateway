@@ -2,6 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify'
 
 import { type AppConfig, loadConfig } from './config/env.js'
 import { OidcService } from './modules/auth/oidc-service.js'
+import { registerKeyRingRoutes } from './modules/key-ring/routes.js'
+import { KeyRingService } from './modules/key-ring/service.js'
 import { MemoryLlmCallAuditStore } from './modules/llm-call-audit/memory-store.js'
 import { registerLlmCallAuditRoutes } from './modules/llm-call-audit/routes.js'
 import { LlmCallAuditService } from './modules/llm-call-audit/service.js'
@@ -128,6 +130,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     config.bootstrap.environmentId,
     config.auditIngest.token,
   )
+  const keyRing = new KeyRingService(store, clock, options.marketplacePublisher ?? null)
 
   app.addHook('onReady', async () => {
     await store.bootstrap(createBootstrapInput(config, clock.now()))
@@ -179,6 +182,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     sessions,
     bodyLimitBytes: config.auditIngest.bodyLimitBytes,
   })
+  registerKeyRingRoutes(app, { keyRing, sessions, users, userStore: store })
 
   return app
 }

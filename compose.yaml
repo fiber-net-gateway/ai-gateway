@@ -1,0 +1,246 @@
+name: fiber-ai-demo
+
+services:
+  mysql:
+    build:
+      context: .
+      dockerfile: deploy/mysql/Dockerfile
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Run ./scripts/init-demo-env.sh first}
+      MYSQL_DATABASE: ai_server_console
+      MYSQL_USER: ai_server_console
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Run ./scripts/init-demo-env.sh first}
+    ports:
+      - 127.0.0.1:${MYSQL_EXPOSE_PORT:-3306}:3306
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -uroot -p"$${MYSQL_ROOT_PASSWORD}" --silent
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      demo:
+        ipv4_address: 172.28.0.5
+
+  rnacos:
+    image: qingpan/rnacos:v0.8.4
+    environment:
+      RNACOS_INIT_ADMIN_USERNAME: ${RNACOS_USERNAME:?Run ./scripts/init-demo-env.sh first}
+      RNACOS_INIT_ADMIN_PASSWORD: ${RNACOS_PASSWORD:?Run ./scripts/init-demo-env.sh first}
+      RNACOS_ENABLE_OPEN_API_AUTH: 'true'
+      RNACOS_DATA_DIR: /io/data
+      RUST_LOG: warn
+    ports:
+      - 127.0.0.1:${RNACOS_HTTP_PORT:-8848}:8848
+      - 127.0.0.1:${RNACOS_CONSOLE_PORT:-10848}:10848
+    volumes:
+      - rnacos-data:/io/data
+    networks:
+      demo:
+        ipv4_address: 172.28.0.10
+
+  cat:
+    build:
+      context: .
+      dockerfile: deploy/cat/Dockerfile
+    environment:
+      MYSQL_URL: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USERNAME: root
+      MYSQL_PASSWD: ${MYSQL_ROOT_PASSWORD:?Run ./scripts/init-demo-env.sh first}
+      MYSQL_SCHEMA: cat
+      SERVER_IP: 172.28.0.20
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:${CAT_UI_PORT:-8082}:8080
+    networks:
+      demo:
+        ipv4_address: 172.28.0.20
+
+  console-api:
+    build:
+      context: .
+      target: server
+    environment:
+      NODE_ENV: production
+      APP_HOST: 0.0.0.0
+      APP_PORT: 3000
+      APP_PUBLIC_URL: http://localhost:${CONSOLE_PORT:-5173}
+      APP_DATA_MODE: mysql
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?Run ./scripts/init-demo-env.sh first}
+      AUTH_MODE: development
+      AUTH_COOKIE_SECURE: 'false'
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ai_server_console
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Run ./scripts/init-demo-env.sh first}
+      MYSQL_DATABASE: ai_server_console
+      RNACOS_BASE_URL: http://rnacos:8848
+      RNACOS_NAMESPACE_ID: public
+      RNACOS_TENANT: ''
+      RNACOS_USERNAME: ${RNACOS_USERNAME:?Run ./scripts/init-demo-env.sh first}
+      RNACOS_PASSWORD: ${RNACOS_PASSWORD:?Run ./scripts/init-demo-env.sh first}
+      AI_SERVER_BASE_URL: http://ai-server:8080
+      AUDIT_INGEST_TOKEN: ${AUDIT_INGEST_TOKEN:?Run ./scripts/init-demo-env.sh first}
+      BOOTSTRAP_ADMIN_USERNAME: admin
+      BOOTSTRAP_ENVIRONMENT_NAME: Docker Demo
+      BOOTSTRAP_ENVIRONMENT_STAGE: development
+      BOOTSTRAP_BT1_KID: demo-key
+      BOOTSTRAP_BT1_SECRET_BASE64: ${BOOTSTRAP_BT1_SECRET_BASE64:?Run ./scripts/init-demo-env.sh first}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rnacos:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/api/hello').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - demo
+
+  console-web:
+    build:
+      context: .
+      target: web
+    depends_on:
+      console-api:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:${CONSOLE_PORT:-5173}:80
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1/healthz]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - demo
+
+  demo-provider:
+    build:
+      context: .
+      target: tools
+    command: [node, server/dist/demo-provider.js]
+    environment:
+      DEMO_PROVIDER_HOST: 0.0.0.0
+      DEMO_PROVIDER_PORT: 8081
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8081/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - demo
+
+  demo-bootstrap:
+    build:
+      context: .
+      target: tools
+    command: [node, server/dist/demo-bootstrap.js]
+    environment:
+      DEMO_CONSOLE_URL: http://console-api:3000
+      DEMO_ADMIN_USERNAME: admin
+      DEMO_PROVIDER_BASE_URL: http://demo-provider:8081
+      DEMO_BOOTSTRAP_TIMEOUT_MS: 180000
+    depends_on:
+      console-api:
+        condition: service_healthy
+      demo-provider:
+        condition: service_healthy
+    restart: 'no'
+    networks:
+      - demo
+
+  ai-server:
+    build:
+      context: .
+      dockerfile: deploy/ai-server/Dockerfile
+      args:
+        FIBER_GATEWAY_REF: 465dc942bf05eda6cdfef5855c03964d436ff9f0
+    environment:
+      AI_SERVER_ADVERTISE_ADDRESS: 172.28.0.30
+      NACOS_SERVER_ADDRESSES: 172.28.0.10
+      NACOS_USERNAME: ${RNACOS_USERNAME:?Run ./scripts/init-demo-env.sh first}
+      NACOS_PASSWORD: ${RNACOS_PASSWORD:?Run ./scripts/init-demo-env.sh first}
+      CAT_COLLECTOR_ADDRESSES: 172.28.0.20:2280
+    depends_on:
+      cat:
+        condition: service_started
+      demo-bootstrap:
+        condition: service_completed_successfully
+      rnacos:
+        condition: service_started
+    ports:
+      - 127.0.0.1:${AI_SERVER_PORT:-8080}:8080
+    volumes:
+      - ai-server-audit:/var/log/ai-server
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8080/ready]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      demo:
+        ipv4_address: 172.28.0.30
+
+  audit-forwarder:
+    build:
+      context: .
+      target: tools
+    command: [node, server/dist/audit-forwarder.js]
+    user: '10001:10001'
+    environment:
+      AUDIT_FORWARDER_CONSOLE_URL: http://console-api:3000
+      AUDIT_INGEST_TOKEN: ${AUDIT_INGEST_TOKEN:?Run ./scripts/init-demo-env.sh first}
+      AUDIT_FORWARDER_FILE: /var/log/ai-server/audit.ndjson
+      AUDIT_FORWARDER_STATE_FILE: /var/lib/audit-forwarder/state.json
+      AUDIT_FORWARDER_INSTANCE_ID: ai-server-demo-1
+      AUDIT_FORWARDER_MAX_READ_BYTES: 16777216
+    depends_on:
+      ai-server:
+        condition: service_healthy
+      console-api:
+        condition: service_healthy
+    volumes:
+      - ai-server-audit:/var/log/ai-server:ro
+      - audit-forwarder-state:/var/lib/audit-forwarder
+    restart: unless-stopped
+    networks:
+      - demo
+
+volumes:
+  ai-server-audit:
+  audit-forwarder-state:
+  mysql-data:
+  rnacos-data:
+
+networks:
+  demo:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

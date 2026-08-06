@@ -16,9 +16,10 @@
 - 启动配置模板、实例健康、服务发现和配置快照状态。
 
 当前已实现用户与 Token 管理、独立的 Provider 与模型维护、模型专属授权组及审批、不可变
-环境级 Release、按 Provider → models 顺序向 rnacos 发布并恢复的编排、LLM 调用审计接收
-接口和个人调用记录。Release 详情保留逐 Data ID 写入与回读证据；ai-server 审计发送器、实例
-健康与生效状态采集、NamingService 观察和回滚执行仍是后续能力，因此当前生效状态保持未知。
+环境级 Release、可恢复的 Provider → models 发布编排、BT1 Key Ring 发布、rnacos MD5 回读、
+环境切换、LLM 调用审计接收接口和个人调用记录。Docker 演示栈还提供最小化 NDJSON 审计
+sidecar，以及可重复的 Provider、模型和 Release 初始化。实例健康与生效状态采集、NamingService
+观察、Release 审批/驳回/取消和人工回滚仍是后续能力，因此当前生效状态保持未知。
 
 ## 技术架构
 
@@ -30,7 +31,9 @@ flowchart LR
     A -->|固定 Data ID<br/>发布与 MD5 回读| C[rnacos<br/>ConfigService]
     C -->|动态配置订阅| S[ai-server]
     S -->|实例注册与服务发现| N[rnacos<br/>NamingService]
-    S -.->|调用审计上报<br/>ai-server 发送端待实现| A
+    S -->|演示：审计 NDJSON| F[演示审计转发器]
+    F -->|最小化批次| A
+    S -.->|生产审计发送器待实现| A
     A -.->|健康、就绪与生效状态<br/>采集端待实现| S
     A -.->|实例观察待实现| N
 ```
@@ -46,8 +49,8 @@ flowchart LR
   NamingService，也没有从中采集实例状态。
 - `ai-server`：继续承担 LLM 代理；当前提供健康与就绪探针，但尚不能向控制台证明某个 Release
   或指定 Data ID MD5 已生效。
-- 调用审计：控制台接收接口和个人白名单投影已经实现，但 `ai-server` HTTP 发送器尚未实现，
-  因此图中将这条链路标为待完成。
+- 调用审计：控制台接收接口和个人白名单投影已经实现。演示 sidecar 跟随 `ai-server` NDJSON，
+  删除原始请求体、响应体与网络地址后转发最小投影；`ai-server` 内生产级发送器仍待实现。
 
 实线表示控制台当前已实现的集成或现有运行时关系；虚线表示虽然可能已经存在接收契约或配置，
 但端到端运行链路尚未完成的集成。
@@ -79,6 +82,9 @@ rnacos 的写入成功只表示“已发布”，不能直接表示所有 `ai-se
 │   │   ├── app.ts          # Fastify 应用与路由注册
 │   │   └── index.ts        # 进程入口
 │   └── .env.example
+├── deploy/                 # Nginx、ai-server、MySQL/CAT 镜像输入
+├── scripts/                # 本地演示凭据初始化
+├── compose.yaml            # 可重复的端到端演示栈
 ├── .temp/fiber-gateway-cpp # 仅用于源码研究的上游本地副本
 └── package.json            # npm workspaces 与全仓库命令
 ```
@@ -128,6 +134,44 @@ curl http://localhost:3000/api/hello
 
 该接口不依赖 MySQL、rnacos 或 `ai-server` 在线，因此可用于确认本地链路。
 
+## Docker 演示
+
+Docker Compose 会同时启动 MySQL、rnacos、CAT、控制台 API 与 Web、`ai-server`、本地
+OpenAI-compatible 演示 Provider、一次性配置初始化器和审计转发器。第一次构建 `ai-server`
+镜像需要编译固定版本的 C++ 上游源码，可能需要数分钟。
+
+先生成不纳入版本控制的凭据，再构建并启动：
+
+```bash
+./scripts/init-demo-env.sh
+docker compose --env-file .env.docker up --build
+```
+
+可访问：
+
+- 控制台：`http://localhost:5173`，使用 `admin` 登录；
+- `ai-server`：`http://localhost:8080`，接受 rnacos 快照后 `/ready` 返回成功；
+- CAT：`http://localhost:8082/cat/r`；
+- rnacos：`http://localhost:10848/rnacos/`，随机登录信息只保存在 `.env.docker`。
+
+初始化器会发布 BT1 Key Ring，并创建指向本地 Provider 的 `fiber-demo` 模型。在控制台签发
+BT1 Token 后，即可调用真实代理：
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <BT1 token>' \
+  -d '{"model":"fiber-demo","messages":[{"role":"user","content":"hello"}]}'
+```
+
+调用会显示在 CAT 中；sidecar 转发最小化审计记录后，也会进入当前用户的调用记录。
+`/ready` 健康是本演示实例的运行时证据，但控制台仍会把 Release 生效状态保持为 `UNKNOWN`，
+直到实现带类型的逐实例生效观察器。
+
+使用 `docker compose --env-file .env.docker down` 停止。只有在确认要删除全部演示 MySQL、
+rnacos 和审计数据时才添加 `--volumes`。生成的环境文件权限为 `0600` 且被 Git 忽略；不要在
+共享部署中复用演示凭据。
+
 ### 使用 MySQL
 
 先创建数据库和最小权限账号，然后在 `server/.env` 中设置：
@@ -152,7 +196,8 @@ MYSQL_DATABASE=ai_server_console
 - `AI_SERVER_BASE_URL`：为后续 `ai-server` 状态客户端预留的目标地址；启动时会校验，但当前后端
   不会调用该地址；
 - `AUDIT_INGEST_TOKEN`、`AUDIT_INGEST_BODY_LIMIT_BYTES`：控制台内部调用审计接收接口的可选
-  Bearer 凭据与请求体上限；token 为空时关闭入口，对应的 `ai-server` 发送器尚未实现；
+  Bearer 凭据与请求体上限；token 为空时关闭入口；Compose 会把同一随机值提供给演示审计
+  sidecar；
 - `AUTH_MODE`、`OIDC_*`：本地开发认证或企业 OIDC + PKCE；
 - `APP_ENCRYPTION_KEY`：Token 短期交付与本地 secret 封装密钥；
 - `BOOTSTRAP_*`：初始管理员、环境和 BT1 签名 key；
@@ -173,8 +218,8 @@ npm run format:check
 npm run build
 ```
 
-构建结果分别生成在 `web/dist/` 和 `server/dist/`。生产部署应由同一入口提供前端静态
-资源，并把 `/api` 反向代理到后端。
+构建结果分别生成在 `web/dist/` 和 `server/dist/`。根 `Dockerfile` 提供 `server`、`tools`
+和 `web` 三个 target；Web target 通过 Nginx 提供静态资源，并把 `/api` 反向代理到后端。
 
 ## 上游依据
 
