@@ -87,8 +87,7 @@ rnacos 的写入成功只表示“已发布”，不能直接表示所有 `ai-se
 │   └── .env.example
 ├── native/                 # C++ 数据面与固定 Fiber 集成
 │   ├── CMakeLists.txt      # 原生顶层构建与审计传输选择
-│   ├── ai-server/          # 本仓库维护的网关运行时、文档与测试
-│   └── patches/            # 针对固定 Fiber revision 的隔离兼容补丁
+│   └── ai-server/          # 本仓库维护的网关运行时、文档与测试
 ├── deploy/                 # Nginx、ai-server、MySQL/CAT 镜像输入
 ├── scripts/                # 本地演示凭据初始化
 ├── compose.yaml            # 可重复的端到端演示栈
@@ -246,7 +245,8 @@ npm run test:native
 `native/ai-server/` 由本仓库维护和构建，迁移来源记录在
 [`native/ai-server/UPSTREAM.md`](native/ai-server/UPSTREAM.md)。构建只从固定的
 `fiber-gateway-cpp` revision 引入可复用的 runtime 与基础设施模块，不构建或导入上游
-`apps/ai-server` 源码。
+`apps/ai-server` 源码。集成使用 Fiber 正式支持的 `FIBER_BUILD_NACOS`、
+`FIBER_BUILD_CAT` 和 `FIBER_BUILD_PROMETHEUS` 组件开关，当前不再需要本地兼容补丁。
 
 被忽略的上游副本仍可用于源码研究：
 

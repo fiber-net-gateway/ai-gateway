@@ -16,9 +16,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(FetchContent)
 
 set(AI_GATEWAY_FIBER_GATEWAY_REF
-    "465dc942bf05eda6cdfef5855c03964d436ff9f0"
+    "0fda7764bf94944aca4b674ab5ab311184703118"
     CACHE STRING
     "Pinned fiber-gateway-cpp revision")
+set(AI_GATEWAY_FIBER_GATEWAY_SHA256
+    "0326a0aa1b45931d34d49b3355ac1c35e65aa13adb132f313b560430e1e3d2a3"
+    CACHE STRING
+    "SHA-256 of the pinned fiber-gateway-cpp source archive")
 set(AI_SERVER_AUDIT_TRANSPORT
     "HTTP"
     CACHE STRING
@@ -32,35 +36,22 @@ endif()
 
 set(FIBER_BUILD_APPS OFF CACHE BOOL "" FORCE)
 set(FIBER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(FIBER_BUILD_NACOS ON CACHE BOOL "" FORCE)
+set(FIBER_BUILD_CAT ON CACHE BOOL "" FORCE)
+set(FIBER_BUILD_PROMETHEUS ON CACHE BOOL "" FORCE)
+set(FIBER_BUILD_CAT_DEMO OFF CACHE BOOL "" FORCE)
+set(FIBER_BUILD_PROMETHEUS_BENCHMARK OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     fiber_gateway_cpp
     URL
         "https://codeload.github.com/fiber-net-gateway/fiber-gateway-cpp/tar.gz/${AI_GATEWAY_FIBER_GATEWAY_REF}"
     URL_HASH
-        SHA256=905199acb1424bdddc9e5056b2a231113e3d7824cdca059305fdead2b85b15a8
-    PATCH_COMMAND
-        git apply --no-index --whitespace=nowarn
-        "${CMAKE_CURRENT_SOURCE_DIR}/patches/fiber-gateway-cpp-gcc13-json-constexpr.patch"
-        COMMAND
-        git apply --no-index --whitespace=nowarn
-        "${CMAKE_CURRENT_SOURCE_DIR}/patches/fiber-gateway-cpp-codeload-urls.patch")
+        SHA256=${AI_GATEWAY_FIBER_GATEWAY_SHA256})
 FetchContent_MakeAvailable(fiber_gateway_cpp)
 
 if (FIBER_BUILD_TESTS)
     enable_testing()
 endif()
-
-# ai-server is owned by this repository. Pull in only the upstream libraries it
-# consumes instead of building the upstream copy of apps/ai-server.
-add_subdirectory(
-    "${fiber_gateway_cpp_SOURCE_DIR}/apps/nacos"
-    "${CMAKE_BINARY_DIR}/fiber-apps/nacos")
-add_subdirectory(
-    "${fiber_gateway_cpp_SOURCE_DIR}/apps/cat"
-    "${CMAKE_BINARY_DIR}/fiber-apps/cat")
-add_subdirectory(
-    "${fiber_gateway_cpp_SOURCE_DIR}/apps/prometheus"
-    "${CMAKE_BINARY_DIR}/fiber-apps/prometheus")
 
 add_subdirectory(ai-server)

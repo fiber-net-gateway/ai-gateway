@@ -13,12 +13,12 @@
 #include <string>
 #include <string_view>
 
-#include <async/Spawn.h>
-#include <async/Task.h>
-#include <async/WaitGroup.h>
-#include <common/NonCopyable.h>
-#include <common/NonMovable.h>
-#include <common/mem/BufPool.h>
+#include <fiber/async/Spawn.h>
+#include <fiber/async/Task.h>
+#include <fiber/async/WaitGroup.h>
+#include <fiber/common/NonCopyable.h>
+#include <fiber/common/NonMovable.h>
+#include <fiber/common/mem/BufPool.h>
 #include <fiber/cat/MessageTrace.h>
 #include <fiber/cat/Transaction.h>
 

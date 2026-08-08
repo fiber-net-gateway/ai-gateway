@@ -11,8 +11,8 @@
 
 #include <fiber/cat/CatClientConfig.h>
 #include <fiber/nacos/NacosClientConfig.h>
-#include <net/LocalAddress.h>
-#include <net/SocketAddress.h>
+#include <fiber/net/LocalAddress.h>
+#include <fiber/net/SocketAddress.h>
 
 #include "audit/LlmAuditHttpSender.h"
 

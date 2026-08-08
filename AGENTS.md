@@ -28,9 +28,9 @@ successful rnacos write is not evidence that every instance accepted the configu
   source revision.
 - `.temp/fiber-gateway-cpp/` is an ignored research checkout. Never import from it, edit it as part
   of this repository, or commit any of its contents.
-- Keep compatibility patches under `native/patches/` narrow, reviewable, and tied to a pinned Fiber
-  revision. Prefer upstream fixes, record the related upstream Issue or PR, and remove local patches
-  once the pinned revision contains the fix.
+- If a Fiber compatibility patch is unavoidable, keep it under `native/patches/`, narrow,
+  reviewable, and tied to the pinned revision. Prefer upstream fixes, record the related Issue or
+  PR, and remove the local patch once the pin contains the fix.
 
 ## Project Structure and Module Organization
 
@@ -160,6 +160,8 @@ Follow the migrated Fiber C++ conventions in `native/ai-server/`:
   methods, and variables. Header guards use `FIBER_AI_SERVER_<NAME>_H`.
 - Keep includes explicit and local. Keep focused headers and `.cpp` implementations together by
   module; do not create broad convenience headers.
+- Include reusable Fiber headers through their public `<fiber/...>` paths. Do not expose upstream
+  `src/` or add compatibility include roots for legacy unprefixed paths.
 - Do not use C++ exceptions or write `throw`. Prefer `noexcept` for callback-style and internal
   functions whose contract is non-throwing, and propagate expected failures through the existing
   result/status types.

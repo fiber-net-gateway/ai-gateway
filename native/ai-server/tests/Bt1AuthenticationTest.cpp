@@ -15,7 +15,7 @@
 #include "auth/LlmRequestAuthenticator.h"
 #include "config/LlmConfigCodec.h"
 #include "config/LlmConfigSnapshot.h"
-#include "http/HttpHeaders.h"
+#include "fiber/http/HttpHeaders.h"
 
 namespace {
 

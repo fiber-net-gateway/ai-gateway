@@ -6,8 +6,8 @@
 #include <optional>
 #include <string_view>
 
-#include <common/NonCopyable.h>
-#include <common/NonMovable.h>
+#include <fiber/common/NonCopyable.h>
+#include <fiber/common/NonMovable.h>
 #include <fiber/cat/Event.h>
 #include <fiber/cat/MessageTrace.h>
 #include <fiber/cat/Transaction.h>

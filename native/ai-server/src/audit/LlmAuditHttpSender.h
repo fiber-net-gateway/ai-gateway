@@ -7,8 +7,8 @@
 #include <memory>
 #include <string>
 
-#include <common/NonCopyable.h>
-#include <common/NonMovable.h>
+#include <fiber/common/NonCopyable.h>
+#include <fiber/common/NonMovable.h>
 #include <fiber/nacos/NamingService.h>
 
 namespace fiber::ai_server {

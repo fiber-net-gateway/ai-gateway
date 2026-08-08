@@ -97,8 +97,7 @@ rnacos write results separately and keeps activation `UNKNOWN` until instance ev
 │   └── .env.example
 ├── native/                 # C++ data plane and pinned Fiber integration
 │   ├── CMakeLists.txt      # Top-level native build and audit transport selection
-│   ├── ai-server/          # Repository-owned gateway runtime, docs, and tests
-│   └── patches/            # Isolated compatibility patches for the pinned Fiber revision
+│   └── ai-server/          # Repository-owned gateway runtime, docs, and tests
 ├── deploy/                 # Nginx, ai-server, MySQL/CAT image inputs
 ├── scripts/                # Local demo credential initialization
 ├── compose.yaml            # Reproducible end-to-end demonstration stack
@@ -268,7 +267,9 @@ NDJSON audit files instead of HTTP delivery.
 `native/ai-server/` is owned and built by this repository. Its migration provenance is recorded in
 [`native/ai-server/UPSTREAM.md`](native/ai-server/UPSTREAM.md). The build fetches a pinned
 `fiber-gateway-cpp` revision only for its reusable runtime and infrastructure modules; it does not
-build or import the upstream `apps/ai-server` source.
+build or import the upstream `apps/ai-server` source. The integration uses Fiber's supported
+`FIBER_BUILD_NACOS`, `FIBER_BUILD_CAT`, and `FIBER_BUILD_PROMETHEUS` component options; no local
+compatibility patch is currently required.
 
 The ignored checkout remains available for source research:
 

@@ -2,7 +2,8 @@
 
 FROM ubuntu:24.04 AS build
 ARG DEBIAN_FRONTEND=noninteractive
-ARG FIBER_GATEWAY_REF=465dc942bf05eda6cdfef5855c03964d436ff9f0
+ARG FIBER_GATEWAY_REF=0fda7764bf94944aca4b674ab5ab311184703118
+ARG FIBER_GATEWAY_SHA256=0326a0aa1b45931d34d49b3355ac1c35e65aa13adb132f313b560430e1e3d2a3
 ARG AI_SERVER_AUDIT_TRANSPORT=HTTP
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -13,13 +14,17 @@ RUN apt-get update \
       perl \
       python3 \
       python3-pip \
-    && python3 -m pip install --break-system-packages --no-cache-dir cmake==4.1.2 \
+    && python3 -m pip install --break-system-packages --no-cache-dir \
+      --timeout 120 \
+      --retries 5 \
+      cmake==4.1.2 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY native /src/native
 RUN cmake -S native -B native/build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DAI_GATEWAY_FIBER_GATEWAY_REF="${FIBER_GATEWAY_REF}" \
+      -DAI_GATEWAY_FIBER_GATEWAY_SHA256="${FIBER_GATEWAY_SHA256}" \
       -DAI_SERVER_AUDIT_TRANSPORT="${AI_SERVER_AUDIT_TRANSPORT}" \
       -DFIBER_BUILD_EXAMPLES=OFF \
       -DFIBER_BUILD_TESTS=OFF \
