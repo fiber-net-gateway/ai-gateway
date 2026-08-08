@@ -17,6 +17,11 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
+    "configure:native": "cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAI_SERVER_AUDIT_TRANSPORT=HTTP -DFIBER_BUILD_TESTS=OFF",
+    "build:native": "cmake --build native/build --target fiber_app_ai_server --parallel",
+    "test:native": "npm run test:native:file && npm run test:native:http",
+    "test:native:http": "cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAI_SERVER_AUDIT_TRANSPORT=HTTP -DFIBER_BUILD_TESTS=ON && cmake --build native/build --target fiber_ai_server_tests --parallel && ctest --test-dir native/build --output-on-failure -E '_NOT_BUILT$'",
+    "test:native:file": "cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAI_SERVER_AUDIT_TRANSPORT=FILE -DFIBER_BUILD_TESTS=ON && cmake --build native/build --target fiber_ai_server_tests --parallel && ctest --test-dir native/build --output-on-failure -E '_NOT_BUILT$'",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

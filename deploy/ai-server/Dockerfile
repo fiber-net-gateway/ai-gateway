@@ -3,6 +3,7 @@
 FROM ubuntu:24.04 AS build
 ARG DEBIAN_FRONTEND=noninteractive
 ARG FIBER_GATEWAY_REF=465dc942bf05eda6cdfef5855c03964d436ff9f0
+ARG AI_SERVER_AUDIT_TRANSPORT=HTTP
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       build-essential \
@@ -15,23 +16,30 @@ RUN apt-get update \
     && python3 -m pip install --break-system-packages --no-cache-dir cmake==4.1.2 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-RUN git clone --filter=blob:none https://github.com/fiber-net-gateway/fiber-gateway-cpp.git . \
-    && git checkout --detach "${FIBER_GATEWAY_REF}"
-RUN cmake -S . -B build -G Ninja \
+COPY native /src/native
+RUN cmake -S native -B native/build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
+      -DAI_GATEWAY_FIBER_GATEWAY_REF="${FIBER_GATEWAY_REF}" \
+      -DAI_SERVER_AUDIT_TRANSPORT="${AI_SERVER_AUDIT_TRANSPORT}" \
       -DFIBER_BUILD_EXAMPLES=OFF \
       -DFIBER_BUILD_TESTS=OFF \
       -DFIBER_ENABLE_LTO=OFF \
-    && cmake --build build --target ai_server --parallel
+      -DFIBER_USE_LIBCXX=OFF
+RUN cmake --build native/build --target fiber_app_ai_server --parallel
 
 FROM ubuntu:24.04
 ARG DEBIAN_FRONTEND=noninteractive
+ARG AI_SERVER_AUDIT_TRANSPORT=HTTP
+ENV AI_SERVER_AUDIT_TRANSPORT=${AI_SERVER_AUDIT_TRANSPORT}
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl gettext-base \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      gettext-base \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin ai-server \
     && install -d -o ai-server -g ai-server /etc/ai-server /var/log/ai-server
-COPY --from=build /src/build/apps/ai-server /usr/local/bin/ai-server
+COPY --from=build /src/native/build/apps/ai-server /usr/local/bin/ai-server
 COPY deploy/ai-server/ai-server.env.template /etc/ai-server/ai-server.env.template
 COPY deploy/ai-server/logging.json /etc/ai-server/logging.json
 COPY deploy/ai-server/entrypoint.sh /usr/local/bin/ai-server-entrypoint

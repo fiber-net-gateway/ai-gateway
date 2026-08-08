@@ -19,7 +19,7 @@ export const accessGroupPublicationEvidenceMigration = {
        ADD CONSTRAINT chk_access_publication_kind CHECK (
          publication_kind IN ('ACCESS_APPROVAL', 'MANUAL_SYNC')
        ),
-       ADD CONSTRAINT fk_access_publication_request
+       ADD CONSTRAINT fk_access_group_publication_request
          FOREIGN KEY (request_id) REFERENCES model_access_requests (id)`,
   ],
 } as const

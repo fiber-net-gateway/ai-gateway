@@ -11,4 +11,7 @@ if [ ! -e /lib/ld-linux-x86-64.so.2 ]; then
   ln -s /lib/libc.musl-x86_64.so.1 /lib/ld-linux-x86-64.so.2
 fi
 /usr/local/tomcat/datasources.sh
+sed -i \
+  -e 's#socketTimeout=120000#socketTimeout=120000\&useSSL=false\&serverTimezone=UTC#' \
+  /data/appdatas/cat/datasources.xml
 exec catalina.sh run

@@ -19,6 +19,8 @@ rnacos_password=$(openssl rand -hex 24)
 app_encryption_key=$(openssl rand -base64 32 | tr -d '\n')
 bootstrap_bt1_secret=$(openssl rand -base64 32 | tr -d '\n')
 audit_ingest_token=$(openssl rand -hex 32)
+demo_bind_address=${DEMO_BIND_ADDRESS:-127.0.0.1}
+console_public_host=${CONSOLE_PUBLIC_HOST:-localhost}
 
 {
   printf 'MYSQL_ROOT_PASSWORD=%s\n' "$mysql_root_password"
@@ -28,8 +30,11 @@ audit_ingest_token=$(openssl rand -hex 32)
   printf 'APP_ENCRYPTION_KEY=%s\n' "$app_encryption_key"
   printf 'BOOTSTRAP_BT1_SECRET_BASE64=%s\n' "$bootstrap_bt1_secret"
   printf 'AUDIT_INGEST_TOKEN=%s\n' "$audit_ingest_token"
+  printf 'DEMO_BIND_ADDRESS=%s\n' "$demo_bind_address"
+  printf 'CONSOLE_PUBLIC_HOST=%s\n' "$console_public_host"
   printf 'CONSOLE_PORT=5173\n'
   printf 'AI_SERVER_PORT=8080\n'
+  printf 'DEMO_PROVIDER_PORT=8081\n'
   printf 'CAT_UI_PORT=8082\n'
   printf 'RNACOS_CONSOLE_PORT=10848\n'
   printf 'RNACOS_HTTP_PORT=8848\n'

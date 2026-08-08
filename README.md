@@ -19,8 +19,8 @@ The console is intended to provide:
 The console currently implements user and token management, separate Provider and model
 maintenance, model-owned access groups and approval, immutable environment releases, recoverable
 Provider-to-models publication, BT1 Key Ring publication, rnacos MD5 readback, environment
-switching, an LLM call-audit ingest endpoint, and personal call history. The Docker demo adds a
-minimized NDJSON audit sidecar and a deterministic Provider/model/release bootstrap. Instance
+switching, an LLM call-audit ingest endpoint, and personal call history. The Docker demo adds
+direct asynchronous audit delivery from `ai-server` and a deterministic Provider/model/release bootstrap. Instance
 health and activation observation, NamingService observation, release approval/rejection/cancel,
 and operator-driven rollback remain future work; activation is therefore reported as unknown.
 
@@ -28,15 +28,15 @@ and operator-driven rollback remain future work; activation is therefore reporte
 
 ```mermaid
 flowchart LR
-    B[Browser] --> W[React + TypeScript<br/>web]
-    W -->|/api| A[Node.js + TypeScript<br/>server]
+    B[Browser] --> W[console container<br/>Nginx + React]
+    W -->|localhost /api| A[Fastify in the same container]
     A -->|MySQL mode<br/>domain data, drafts, releases, audits| D[(MySQL)]
     A -->|fixed Data IDs<br/>publish and MD5 readback| C[rnacos<br/>ConfigService]
     C -->|dynamic configuration subscription| S[ai-server]
-    S -->|registration and service discovery| N[rnacos<br/>NamingService]
-    S -->|demo: audit NDJSON| F[demo audit forwarder]
-    F -->|minimized batch| A
-    S -.->|production audit sender pending| A
+    S -->|registration and discovery| N[rnacos<br/>NamingService]
+    A -->|register fixed console API service| N
+    N -->|discover healthy console API endpoints| S
+    S -->|bounded asynchronous audit batches| A
     A -.->|health, readiness, and activation<br/>observer pending| S
     A -.->|instance observation pending| N
 ```
@@ -49,13 +49,14 @@ flowchart LR
   immutable release records, access requests, and audit data.
 - rnacos ConfigService: Receives only the fixed `LLM-SERVER` Data IDs published by the console;
   `ai-server` subscribes to those dynamic configurations.
-- rnacos NamingService: Supports `ai-server` registration and service discovery. The console does
-  not currently connect to NamingService or collect instance state from it.
+- rnacos NamingService: Supports `ai-server` registration and service discovery. The console API
+  registers the fixed `AI-GATEWAY@@ai-server-console-api` service; HTTP-audit builds of `ai-server`
+  subscribe to it. Instance-state collection is still pending.
 - `ai-server`: Remains the LLM proxy. It exposes health and readiness probes, but it does not yet
   provide the console with evidence that a specific release or Data ID MD5 is active.
-- Call audits: The console ingest endpoint and per-user projection are implemented. The demo
-  sidecar tails `ai-server` NDJSON, removes raw bodies and network addresses, and forwards a
-  minimized projection. A production-grade sender in `ai-server` is still pending.
+- Call audits: The console ingest endpoint and per-user projection are implemented. In the default
+  `HTTP` build, `ai-server` creates only the minimized projection and submits it through a bounded
+  background queue. A `FILE` build retains the original full NDJSON audit behavior.
 
 Solid arrows show currently implemented console integrations or existing runtime relationships.
 Dashed arrows show integrations whose receiving contract or configuration may exist but whose
@@ -89,6 +90,7 @@ rnacos write results separately and keeps activation `UNKNOWN` until instance ev
 │   │   ├── app.ts          # Fastify application and route registration
 │   │   └── index.ts        # Process entry point
 │   └── .env.example
+├── native/                 # Repository-owned ai-server source and pinned CMake integration
 ├── deploy/                 # Nginx, ai-server, MySQL/CAT image inputs
 ├── scripts/                # Local demo credential initialization
 ├── compose.yaml            # Reproducible end-to-end demonstration stack
@@ -146,25 +148,29 @@ frontend-to-backend path.
 
 ## Docker Demonstration
 
-Docker Compose starts MySQL, rnacos, CAT, the console API and web UI, `ai-server`, a local
-OpenAI-compatible demo Provider, a one-shot configuration bootstrap, and the audit forwarder.
-The first `ai-server` image build compiles the pinned C++ upstream revision and can take several
-minutes.
+Docker Compose starts MySQL, rnacos, CAT, one combined console container, `ai-server`, a local
+OpenAI-compatible demo Provider, and a one-shot configuration bootstrap. The first `ai-server`
+image build compiles the repository-owned application against pinned Fiber modules and can take
+several minutes.
 
-Generate untracked credentials, then build and start the stack:
+Generate untracked credentials, then build and start the stack. Services are loopback-only by
+default. To access them from a trusted LAN, provide the shared bind address and this machine's LAN
+address while generating the environment file:
 
 ```bash
-./scripts/init-demo-env.sh
+DEMO_BIND_ADDRESS=0.0.0.0 CONSOLE_PUBLIC_HOST=172.23.222.82 ./scripts/init-demo-env.sh
 docker compose --env-file .env.docker up --build
 ```
 
 Open:
 
-- Console: `http://localhost:5173`; sign in as `admin`.
-- `ai-server`: `http://localhost:8080`; `/ready` becomes successful after it accepts the rnacos
+- Console: `http://172.23.222.82:5173`; sign in as `admin`.
+- `ai-server`: `http://172.23.222.82:8080`; `/ready` becomes successful after it accepts the rnacos
   snapshot.
-- CAT: `http://localhost:8082/cat/r`.
-- rnacos: `http://localhost:10848/rnacos/`; its generated login is stored only in
+- Demo Provider: `http://172.23.222.82:8081/health`.
+- CAT: `http://172.23.222.82:8082/cat/r`.
+- rnacos API: `http://172.23.222.82:8848`.
+- rnacos console: `http://172.23.222.82:10848/rnacos/`; its generated login is stored only in
   `.env.docker`.
 
 The bootstrap publishes the BT1 Key Ring and a `fiber-demo` model routed to the local Provider.
@@ -177,10 +183,15 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{"model":"fiber-demo","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-The call appears in CAT and in the signed-in user's call history after the sidecar forwards the
+The call appears in CAT and in the signed-in user's call history after `ai-server` submits the
 minimized audit record. A healthy `/ready` endpoint is runtime evidence for this demo instance, but
 the console deliberately keeps Release activation `UNKNOWN` until a typed per-instance activation
 observer is implemented.
+
+LAN publishing exposes the console, `ai-server`, demo Provider, CAT, and rnacos. MySQL always
+remains bound to loopback. The demo includes passwordless development authentication and testing
+endpoints, so it must be exposed only on a trusted network. Use production authentication and a
+firewall on shared or untrusted networks.
 
 Stop the stack with `docker compose --env-file .env.docker down`. Add `--volumes` only when you
 intend to delete all demo MySQL, rnacos, and audit data. The generated environment file is mode
@@ -207,13 +218,13 @@ explicit, randomly generated `APP_ENCRYPTION_KEY`.
 After copying `server/.env.example`, configure these connections and settings as needed:
 
 - `MYSQL_*`: Console database settings.
-- `RNACOS_*`: rnacos address, bound environment, namespace, tenant, credentials, and fixed
-  configuration group.
+- `RNACOS_*`: rnacos address, bound environment, namespace, tenant, credentials, fixed
+  configuration group, and optional console API service registration.
 - `AI_SERVER_BASE_URL`: Reserved target address for a future `ai-server` status client. It is
   validated at startup but the current backend does not call it.
 - `AUDIT_INGEST_TOKEN` and `AUDIT_INGEST_BODY_LIMIT_BYTES`: Optional Bearer credential and body
   limit for the console's internal call-audit ingest endpoint. An empty token disables ingestion;
-  Compose supplies the same generated value to its demo audit sidecar.
+  Compose supplies the same generated value to `ai-server`.
 - `AUTH_MODE` and `OIDC_*`: Local development authentication or enterprise OIDC with PKCE.
 - `APP_ENCRYPTION_KEY`: Encryption key for short-lived token delivery and local secret wrapping.
 - `BOOTSTRAP_*`: Initial administrator, environment, and BT1 signing key settings.
@@ -233,11 +244,15 @@ npm run typecheck
 npm test
 npm run format:check
 npm run build
+npm run configure:native
+npm run build:native
+npm run test:native
 ```
 
 Build output is generated in `web/dist/` and `server/dist/`. The root `Dockerfile` provides
-`server`, `tools`, and `web` targets; the web target serves the frontend through Nginx and
-reverse-proxies `/api` to the backend.
+`server`, `tools`, and `console` targets; the console target runs Nginx and Fastify together.
+Native builds default to `-DAI_SERVER_AUDIT_TRANSPORT=HTTP`; configure with `FILE` to retain
+NDJSON audit files instead of HTTP delivery.
 
 ## Upstream References
 

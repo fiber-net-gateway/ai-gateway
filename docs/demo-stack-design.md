@@ -4,17 +4,17 @@
 
 ```mermaid
 flowchart LR
-    B[Browser] --> W[console-web / nginx]
-    W -->|/api| A[console-api / Fastify]
+    B[Browser] --> W[console / nginx]
+    W -->|容器内 /api| A[console / Fastify]
     A --> M[(MySQL 8.0)]
     A -->|ConfigService| N[rnacos]
     I[demo-bootstrap] -->|公开 API + session/CSRF| A
     N -->|BT1 keys + Provider + models| S[ai-server]
     S -->|OpenAI compatible| P[demo-provider]
     S -->|CAT NT1| C[CAT 3.0]
-    S -->|audit NDJSON| V[(audit volume)]
-    F[audit-forwarder] -->|schema-v1 batch envelope| A
-    V --> F
+    A -->|注册 AI-GATEWAY 固定服务| N
+    N -->|NamingService 发现| S
+    S -->|schema-v1 最小审计批次| A
     C --> M
 ```
 
@@ -32,11 +32,11 @@ ai-server 的 Nacos/CAT 启动契约只接受 IP literal，不在这些字段中
 根 `Dockerfile` 使用多阶段构建并提供三个 target：
 
 - `server`：Node.js production 依赖与 `server/dist`；
-- `web`：Nginx 提供 `web/dist`，并把 `/api` 反向代理到 `console-api:3000`；
-- `tools`：与 server 相同，供 demo bootstrap、Provider 和 audit forwarder 使用。
+- `console`：同一容器内由 Nginx 提供 `web/dist`，并把 `/api` 反向代理到本机 Fastify 3000；
+- `tools`：与 server 相同，供 demo bootstrap 和 Provider 使用。
 
 构建阶段运行 workspaces build；运行阶段不包含 TypeScript 编译器和源码。API 以非 root
-`node` 用户运行，Nginx 使用官方 Alpine 镜像的标准 master/worker 模型。
+`node` 用户运行，Nginx master 负责 80 端口，worker 使用其发行版低权限用户。
 
 `scripts/init-demo-env.sh` 以 `umask 077` 生成 `.env.docker`。Compose 对 MySQL、rnacos、
 BT1、应用加密和审计凭据全部使用 required interpolation，不提供仓库内默认 secret；管理端口
@@ -95,18 +95,20 @@ MD5、字节数和安全 key 视图。
 
 每一步都重新读取 ETag，不复用可能过期的 revision。初始化器日志只输出阶段和资源安全 ID。
 
-## 6. 审计转发器
+## 6. 审计传输
 
-转发器以字节 offset 读取活动 NDJSON：
+`AI_SERVER_AUDIT_TRANSPORT` 是 CMake cache 变量，只允许 `FILE` 或 `HTTP`：
 
-- 只消费最后一个换行之前的完整内容；
-- 每个 JSON 对象包装为 `{ occurredAt, audit }`；
-- 成功收到 202 后以原子 rename 更新 state JSON；
-- 失败时退避并从原 offset 重试；
-- 文件 size 小于 offset 时视为截断，offset 归零。
+- `FILE`：保留上游 schema-v5 完整 NDJSON、文件轮转和文件 appender 指标；
+- `HTTP`：不创建审计文件，只生成控制台白名单所需的最小字段；
+- HTTP sender 使用按字节限制的内存队列、最多 100 条的批次和后台线程；无健康端点、网络失败、
+  队列满或进程关闭时都不能阻塞 LLM 请求线程；
+- console API 以固定 service/group/cluster 注册到 rnacos，ai-server 从 NamingService 快照选择
+  healthy/enabled 的 IP literal 与端口；
+- 只有 202 才从队列确认，临时失败指数退避，认证/校验/过大等永久错误丢弃该批并计数。
 
-`occurredAt` 采用 sidecar 观察时间减去记录 `duration_ms`；这是演示近似值。生产发送器应在
-ai-server 生成记录时携带墙钟时间，并直接使用有界队列/重试上报。
+`occurredAt` 在 ai-server 生成记录时取墙钟时间。请求/响应正文、网络地址、Provider token、
+BT1 secret 和 rnacos 凭据都不会进入 HTTP 投影。
 
 ## 7. MySQL 与 CAT
 
@@ -126,4 +128,5 @@ CAT 使用官方 `meituaninc/cat:3.0.1`，只在演示网络内接收 2280/TCP�
 - rnacos 发布/回读失败：Key Ring 或 Release 明确失败，不能推进为已发布；
 - ai-server 未就绪：Compose healthcheck 失败，但不修改控制台 activation 状态；
 - CAT 不可用：CAT 客户端重试/丢弃观测，LLM 业务响应不受影响；
-- audit forwarder 不可用：NDJSON 保留，offset 不推进；代理请求不受影响。
+- console API 或 rnacos NamingService 不可用：HTTP 审计在容量内排队并重试，容量耗尽后丢弃并
+  计数；代理请求不受影响。

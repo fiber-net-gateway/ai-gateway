@@ -157,6 +157,10 @@ function iso(value: Date | null): string | null {
   return value?.toISOString() ?? null
 }
 
+function date(value: string | null): Date | null {
+  return value === null ? null : new Date(value)
+}
+
 function integer(value: string | number): number {
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed)) throw new Error('database revision exceeds safe integer range')
@@ -205,7 +209,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
              schema_version, revision, created_by, created_at, updated_at, frozen_at, abandoned_at)
            VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), 'DRAFT', 'OPEN', NULL,
                    1, 1, UUID_TO_BIN(?), ?, ?, NULL, NULL)`,
-          [randomUUID(), input.environmentId, input.actorId, input.now, input.now],
+          [randomUUID(), input.environmentId, input.actorId, date(input.now), date(input.now)],
         )
       }
       await connection.commit()
@@ -294,7 +298,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
         `UPDATE configuration_versions
          SET revision = revision + 1, updated_at = ?
          WHERE id = UUID_TO_BIN(?) AND revision = ? AND version_state = 'OPEN'`,
-        [input.now, environment.draft.id, input.expectedRevision],
+        [date(input.now), environment.draft.id, input.expectedRevision],
       )
       if (update.affectedRows !== 1) throw revisionConflict(input.expectedRevision)
       await refreshProjection(connection, {
@@ -376,9 +380,9 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
             : null,
           environment.draft.schemaVersion,
           input.actorId,
-          input.now,
-          input.now,
-          input.now,
+          date(input.now),
+          date(input.now),
+          date(input.now),
         ],
       )
       await persistSnapshot(connection, {
@@ -402,8 +406,8 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
           frozenId,
           releaseNumber,
           input.actorId,
-          input.now,
-          input.now,
+          date(input.now),
+          date(input.now),
         ],
       )
       for (const resource of releaseResources) {
@@ -428,7 +432,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
         `UPDATE configuration_versions
          SET revision = revision + 1, updated_at = ?
          WHERE id = UUID_TO_BIN(?) AND revision = ? AND version_state = 'OPEN'`,
-        [input.now, environment.draft.id, input.expectedRevision],
+        [date(input.now), environment.draft.id, input.expectedRevision],
       )
       if (draftUpdate.affectedRows !== 1) throw revisionConflict(input.expectedRevision)
       await connection.commit()
@@ -537,7 +541,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
           SET workflow_state = 'PUBLISHING', started_at = COALESCE(started_at, ?),
               finished_at = NULL, revision = revision + 1, updated_at = ?
         WHERE id = UUID_TO_BIN(?) AND workflow_state IN ('PENDING', 'FAILED')`,
-      [input.now, input.now, input.releaseId],
+      [date(input.now), date(input.now), input.releaseId],
     )
     if (result.affectedRows !== 1) {
       throw new DomainError('RELEASE_EXECUTION_NOT_ALLOWED', 409, '当前 Release 状态不能执行')
@@ -584,8 +588,8 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
         input.errorCode === undefined ? current.errorCode : input.errorCode,
         input.safeErrorMessage === undefined ? current.safeErrorMessage : input.safeErrorMessage,
         current.retryCount + (input.incrementRetry ? 1 : 0),
-        input.state === 'WRITING' ? (current.startedAt ?? input.now) : current.startedAt,
-        input.state === 'WRITING' ? null : terminal ? input.now : current.finishedAt,
+        date(input.state === 'WRITING' ? (current.startedAt ?? input.now) : current.startedAt),
+        date(input.state === 'WRITING' ? null : terminal ? input.now : current.finishedAt),
         input.resourceId,
         input.releaseId,
       ],
@@ -593,7 +597,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
     await this.pool.query(
       `UPDATE marketplace_releases SET revision = revision + 1, updated_at = ?
         WHERE id = UUID_TO_BIN(?)`,
-      [input.now, input.releaseId],
+      [date(input.now), input.releaseId],
     )
   }
 
@@ -617,7 +621,13 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
             SET workflow_state = ?, publication_state = ?, finished_at = ?,
                 revision = revision + 1, updated_at = ?
           WHERE id = UUID_TO_BIN(?)`,
-        [input.workflowState, input.publicationState, input.now, input.now, input.releaseId],
+        [
+          input.workflowState,
+          input.publicationState,
+          date(input.now),
+          date(input.now),
+          input.releaseId,
+        ],
       )
       if (input.workflowState === 'COMPLETED' && input.publicationState === 'PUBLISHED') {
         await connection.query(
@@ -625,7 +635,7 @@ export class MySqlMarketplaceStore implements MarketplaceStore {
               SET base_release_version_id = UUID_TO_BIN(?), revision = revision + 1, updated_at = ?
             WHERE environment_id = UUID_TO_BIN(?) AND version_kind = 'DRAFT'
               AND version_state = 'OPEN'`,
-          [release.version_id, input.now, release.environment_id],
+          [release.version_id, date(input.now), release.environment_id],
         )
       }
       await connection.commit()
@@ -1058,9 +1068,9 @@ async function persistSnapshot(
         input.environmentId,
         model.logicalModelName,
         model.createdBy,
-        model.createdAt,
+        date(model.createdAt),
         model.archivedAt ? Buffer.from(input.actorId.replaceAll('-', ''), 'hex') : null,
-        model.archivedAt,
+        date(model.archivedAt),
       ],
     )
   }
@@ -1082,9 +1092,9 @@ async function persistSnapshot(
           ? Buffer.from(provider.ownerModelId.replaceAll('-', ''), 'hex')
           : null,
         provider.createdBy,
-        provider.createdAt,
+        date(provider.createdAt),
         provider.archivedAt ? Buffer.from(input.actorId.replaceAll('-', ''), 'hex') : null,
-        provider.archivedAt,
+        date(provider.archivedAt),
       ],
     )
   }
@@ -1099,7 +1109,14 @@ async function persistSnapshot(
         (id, environment_id, provider_id, token_name, created_by, created_at, retired_by, retired_at)
        VALUES (UUID_TO_BIN(?), UUID_TO_BIN(?), UUID_TO_BIN(?), ?, UUID_TO_BIN(?), ?, NULL, NULL)
        ON DUPLICATE KEY UPDATE token_name = token_name`,
-      [token.id, input.environmentId, token.providerId, token.name, input.actorId, token.updatedAt],
+      [
+        token.id,
+        input.environmentId,
+        token.providerId,
+        token.name,
+        input.actorId,
+        date(token.updatedAt),
+      ],
     )
   }
   for (const table of [
@@ -1135,7 +1152,7 @@ async function persistSnapshot(
         model.rateLimit?.windowDurationMillis ?? null,
         model.rateLimit?.maxTokensPerWindow ?? null,
         model.updatedBy,
-        model.updatedAt,
+        date(model.updatedAt),
       ],
     )
     for (const [sortOrder, tag] of model.tags.entries()) {
@@ -1173,7 +1190,7 @@ async function persistSnapshot(
         provider.displayName,
         provider.baseUrl,
         provider.updatedBy,
-        provider.updatedAt,
+        date(provider.updatedAt),
       ],
     )
     for (const protocol of provider.protocols) {
@@ -1189,7 +1206,7 @@ async function persistSnapshot(
           protocol.path,
           protocol.upstreamModelName,
           provider.updatedBy,
-          provider.updatedAt,
+          date(provider.updatedAt),
         ],
       )
     }
@@ -1206,7 +1223,7 @@ async function persistSnapshot(
           token.secretId,
           token.fingerprintSuffix,
           input.actorId,
-          token.updatedAt,
+          date(token.updatedAt),
         ],
       )
     }
@@ -1271,10 +1288,10 @@ async function refreshProjection(
         input.publicationState,
         input.activationState,
         input.latestRelease ? Buffer.from(input.latestRelease.id.replaceAll('-', ''), 'hex') : null,
-        input.latestRelease?.createdAt ?? null,
+        date(input.latestRelease?.createdAt ?? null),
         issues.filter((issue) => issue.severity === 'ERROR').length,
         issues.filter((issue) => issue.severity === 'WARNING').length,
-        input.now,
+        date(input.now),
       ],
     )
   }

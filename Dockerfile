@@ -16,7 +16,6 @@ RUN npm prune --omit=dev
 FROM node:22-bookworm-slim AS server
 ENV NODE_ENV=production
 WORKDIR /app
-RUN mkdir -p /var/lib/audit-forwarder && chown 10001:10001 /var/lib/audit-forwarder
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/server/package.json ./server/package.json
@@ -27,7 +26,20 @@ CMD ["node", "server/dist/index.js"]
 
 FROM server AS tools
 
-FROM nginx:1.28-alpine AS web
-COPY deploy/nginx/default.conf /etc/nginx/conf.d/default.conf
+FROM node:22-bookworm-slim AS console
+ENV NODE_ENV=production
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nginx util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/nginx/sites-enabled/default
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/package.json ./package.json
+COPY --from=build --chown=node:node /app/server/package.json ./server/package.json
+COPY --from=build --chown=node:node /app/server/dist ./server/dist
 COPY --from=build /app/web/dist /usr/share/nginx/html
-EXPOSE 80
+COPY deploy/nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY deploy/console/entrypoint.sh /usr/local/bin/console-entrypoint
+RUN chmod 0755 /usr/local/bin/console-entrypoint
+EXPOSE 80 3000
+ENTRYPOINT ["/usr/local/bin/console-entrypoint"]

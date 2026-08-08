@@ -1,10 +1,12 @@
+import { isIP } from 'node:net'
+
 export interface AppConfig {
   host: string
   port: number
   publicUrl: string
   dataMode: 'memory' | 'mysql'
   mysql: MySqlConfig
-  rnacos: RnacosConfig
+  rnacos: RnacosConfig & { registration: RnacosRegistrationConfig }
   aiServer: AiServerConfig
   auditIngest: AuditIngestConfig
   auth: AuthConfig
@@ -29,6 +31,16 @@ export interface RnacosConfig {
   username: string
   password: string
   configGroup: string
+}
+
+export interface RnacosRegistrationConfig {
+  enabled: boolean
+  advertiseAddress: string
+  advertisePort: number
+  serviceName: 'ai-server-console-api'
+  serviceGroup: 'AI-GATEWAY'
+  clusterName: string
+  heartbeatIntervalMillis: number
 }
 
 export interface AiServerConfig {
@@ -103,6 +115,25 @@ function readBoolean(name: string, fallback: boolean): boolean {
   if (rawValue === 'true' || rawValue === '1') return true
   if (rawValue === 'false' || rawValue === '0') return false
   throw new Error(`${name} must be true or false`)
+}
+
+function readAdvertiseAddress(name: string, fallback: string): string {
+  const value = readString(name, fallback)
+  const version = isIP(value)
+  const ipv4FirstOctet = version === 4 ? Number(value.split('.', 1)[0]) : 0
+  const multicast =
+    (version === 4 && ipv4FirstOctet >= 224 && ipv4FirstOctet <= 239) ||
+    (version === 6 && value.toLowerCase().startsWith('ff'))
+  if (
+    version === 0 ||
+    value === '0.0.0.0' ||
+    value === '255.255.255.255' ||
+    value === '::' ||
+    multicast
+  ) {
+    throw new Error(`${name} must be a specified unicast IP address`)
+  }
+  return value
 }
 
 function readEnum<const T extends readonly string[]>(
@@ -190,6 +221,25 @@ export function loadConfig(): AppConfig {
       username: process.env.RNACOS_USERNAME?.trim() ?? '',
       password: process.env.RNACOS_PASSWORD ?? '',
       configGroup: readString('RNACOS_CONFIG_GROUP', 'LLM-SERVER'),
+      registration: {
+        enabled: readBoolean('RNACOS_REGISTRATION_ENABLED', false),
+        advertiseAddress: readAdvertiseAddress('CONSOLE_API_ADVERTISE_ADDRESS', '127.0.0.1'),
+        advertisePort: readInteger(
+          'CONSOLE_API_ADVERTISE_PORT',
+          readInteger('APP_PORT', 3000, 1, 65_535),
+          1,
+          65_535,
+        ),
+        serviceName: 'ai-server-console-api',
+        serviceGroup: 'AI-GATEWAY',
+        clusterName: readString('CONSOLE_API_NACOS_CLUSTER', 'DEFAULT'),
+        heartbeatIntervalMillis: readInteger(
+          'RNACOS_REGISTRATION_HEARTBEAT_MS',
+          5_000,
+          1_000,
+          60_000,
+        ),
+      },
     },
     aiServer: {
       baseUrl: readHttpUrl('AI_SERVER_BASE_URL', 'http://127.0.0.1:8080'),

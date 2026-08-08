@@ -13,6 +13,7 @@ import { MySqlModelAccessStore } from './modules/model-access/mysql-store.js'
 import { MySqlLlmCallAuditStore } from './modules/llm-call-audit/mysql-store.js'
 import { RnacosAccessGroupPublisher } from './modules/model-access/rnacos-publisher.js'
 import { RnacosConfigClient } from './modules/rnacos/config-client.js'
+import { RnacosNamingHttpClient, RnacosNamingRegistrar } from './modules/rnacos/naming-registrar.js'
 
 const config = loadConfig()
 const pool = config.dataMode === 'mysql' ? createMySqlPool(config.mysql) : null
@@ -47,15 +48,21 @@ const app = buildApp({
   logger: true,
   closeInfrastructure: pool ? () => pool.end() : undefined,
 })
+const namingRegistrar = new RnacosNamingRegistrar(
+  config.rnacos.registration,
+  new RnacosNamingHttpClient(config.rnacos),
+  app.log,
+)
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
-    void app.close()
+    void namingRegistrar.close().finally(() => app.close())
   })
 }
 
 try {
   await app.listen({ host: config.host, port: config.port })
+  namingRegistrar.start()
 } catch (error) {
   app.log.error(error)
   await app.close()

@@ -8,7 +8,7 @@
 - BT1 bootstrap key 保存在 MySQL，却没有控制台内的 Key Ring 发布入口；
 - 左侧环境切换器没有改变业务页实际使用的环境；
 - ai-server 没有可直接使用的演示 Provider 和初始模型；
-- ai-server 审计只写 NDJSON 文件，没有到控制台接收接口的发送链路；
+- ai-server 审计需要在文件与直接 HTTP 提交之间提供编译期选择；
 - 仓库没有生产镜像、反向代理和多服务编排。
 
 本需求以“本地、单机、可重复演示”为边界。它不会把 rnacos 发布成功描述为 ai-server
@@ -25,7 +25,7 @@
 4. 控制台 API 与静态 Web 入口；
 5. 一个 ai-server 实例；
 6. 一个只用于演示的本地 OpenAI-compatible Provider；
-7. 一次性初始化任务和审计转发 sidecar。
+7. 一次性初始化任务，以及 ai-server 到 console API 的直接审计链路。
 
 首次启动应自动完成以下安全、幂等的初始化：
 
@@ -67,14 +67,15 @@
   不直接改业务表。
 - 初始化器必须等待每个异步 Release 到达终态，并在失败时以非零状态退出。
 
-### 3.4 审计转发
+### 3.4 审计传输
 
-- sidecar 只读挂载 ai-server 审计 NDJSON 文件，并批量调用
-  `/api/internal/llm-call-audits/batches`。
-- 单批最多 100 条；只发送完整且可解析的 schema-v5 行。
-- offset 必须持久化；网络失败不得推进 offset，重发由服务端幂等键去重。
-- 不记录原始审计行或请求/响应正文。
-- 文件被截断或重新创建后，从新文件开头继续；演示配置关闭审计文件轮转以避免跨归档游标问题。
+- CMake 宏必须在 `FILE` 和 `HTTP` 两种处理方式间选择；两种方式不能同时写同一条记录。
+- `FILE` 保留完整 schema-v5 NDJSON 和原有轮转能力。
+- `HTTP` 单批最多 100 条，通过有界后台队列调用
+  `/api/internal/llm-call-audits/batches`，不得阻塞代理请求线程。
+- HTTP 投影不得包含原始请求/响应正文、网络地址或任何 secret。
+- console API 使用固定 service/group 注册 rnacos；ai-server 必须只采用健康、启用的发现结果。
+- 网络失败不得确认队列记录，重发由服务端幂等键去重；队列容量耗尽必须丢弃并暴露指标。
 
 ## 4. 状态与证据边界
 
@@ -102,6 +103,6 @@ Release，也不能代替逐实例 Data ID/MD5 接受矩阵。
 - `npm run typecheck`、`npm test`、`npm run format:check`、`npm run build` 通过；
 - Compose 文件可以被 YAML 解析，所有 build context、挂载文件和依赖目标存在；
 - 控制台单元测试覆盖 Key Ring secret 不出现在响应、发布目标固定、MD5 回读和状态晋升；
-- 审计转发器单元覆盖完整行、残缺行、批次 offset 边界和敏感字段剥离；
+- rnacos 注册客户端测试覆盖固定服务目标；C++ 两种审计模式都必须能够编译；
 - 在具备 Docker 的环境中，按 README 的 smoke test 可以验证 Web、API、rnacos、CAT、
   ai-server health/ready、代理调用和个人调用记录。
