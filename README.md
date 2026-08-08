@@ -1,66 +1,71 @@
-# Fiber AI Server Console
+# AI Gateway
 
 English | [简体中文](README.zh-CN.md)
 
-This repository contains the management console for `ai-server` in
-[`fiber-gateway-cpp`](https://github.com/fiber-net-gateway/fiber-gateway-cpp). It is designed for
-platform administrators and operators, not as an end-user LLM chat interface.
+AI Gateway is a complete LLM gateway system with a C++ data plane, a web management control plane,
+dynamic configuration and service discovery, release workflows, auditing, and observability. The
+repository owns both `ai-server` and its console; it is no longer only a management console for an
+external `fiber-gateway-cpp/apps/ai-server` application.
 
-The console is intended to provide:
+The product is intended for platform administrators, application developers, and operators. It
+proxies application LLM traffic but is not an end-user chat interface.
 
-- Documentation for `ai-server` capabilities, protocols, routing, and configuration models.
-- Structured configuration for models, providers, user groups, and BT1 keys.
-- Draft, validation, approval, release, rollback, and audit workflows.
-- Separate visibility into rnacos write status and configuration activation on `ai-server`
-  instances.
-- Bootstrap configuration templates, instance health, service discovery, and configuration
-  snapshot status.
+## Capabilities
 
-The console currently implements user and token management, separate Provider and model
-maintenance, model-owned access groups and approval, immutable environment releases, recoverable
-Provider-to-models publication, BT1 Key Ring publication, rnacos MD5 readback, environment
-switching, an LLM call-audit ingest endpoint, and personal call history. The Docker demo adds
-direct asynchronous audit delivery from `ai-server` and a deterministic Provider/model/release bootstrap. Instance
-health and activation observation, NamingService observation, release approval/rejection/cancel,
-and operator-driven rollback remain future work; activation is therefore reported as unknown.
+The data plane in `native/ai-server/` provides:
+
+- OpenAI Chat Completions and Anthropic Messages compatible endpoints.
+- BT1 authentication, model authorization, deterministic Provider and token selection, routing,
+  retry, fallback, circuit breaking, and SSE streaming.
+- rnacos-backed dynamic configuration, `service://` discovery, instance registration, and
+  immutable runtime snapshots.
+- Cluster token rate limiting with owner selection and check/settle coordination.
+- Prometheus metrics, CAT tracing, structured logs, and compile-time `HTTP` or `FILE` audit
+  delivery.
+
+The control plane in `web/` and `server/` provides:
+
+- User administration, BT1 token issuance, environment switching, and personal call history.
+- Structured Provider, model, access-group, and BT1 Key Ring management with write-only secrets.
+- Draft validation, immutable releases, fixed-Data-ID rnacos publication, CAS protection, MD5
+  readback, access requests, and publication evidence.
+- A registered console API service that receives bounded asynchronous audit batches discovered by
+  `ai-server` through rnacos NamingService.
+
+The system already runs end to end. Per-instance configuration activation collection, release
+approval/rejection/cancel actions, and operator-driven rollback remain control-plane roadmap items;
+until typed instance evidence exists, activation is deliberately reported as `UNKNOWN`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    B[Browser] --> W[console container<br/>Nginx + React]
-    W -->|localhost /api| A[Fastify in the same container]
-    A -->|MySQL mode<br/>domain data, drafts, releases, audits| D[(MySQL)]
-    A -->|fixed Data IDs<br/>publish and MD5 readback| C[rnacos<br/>ConfigService]
-    C -->|dynamic configuration subscription| S[ai-server]
-    S -->|registration and discovery| N[rnacos<br/>NamingService]
-    A -->|register fixed console API service| N
-    N -->|discover healthy console API endpoints| S
-    S -->|bounded asynchronous audit batches| A
-    A -.->|health, readiness, and activation<br/>observer pending| S
-    A -.->|instance observation pending| N
+    U[Application] -->|OpenAI or Anthropic API<br/>BT1| S[C++ ai-server data plane]
+    S -->|route, retry, fallback, stream| P[LLM Providers]
+    B[Operator browser] --> W[console container<br/>Nginx + React]
+    W -->|container-local /api| A[Fastify control plane]
+    A -->|users, drafts, releases, audits| D[(MySQL)]
+    A -->|publish fixed Data IDs<br/>register console API| R[rnacos<br/>Config + Naming]
+    R -->|snapshots and discovered instances| S
+    S -->|register instance| R
+    S -->|minimized asynchronous audits| A
+    S --> O[CAT + Prometheus + logs]
+    A -.->|activation observer pending| S
 ```
 
-- `web/`: A React, TypeScript, and Vite frontend. In development, it proxies `/api` to the local
-  backend.
-- `server/`: A Fastify API. In MySQL mode, it uses `mysql2` and enables the rnacos configuration
-  publisher. The default memory mode uses in-process stores and does not publish to rnacos.
+- `native/ai-server/`: The repository-owned C++23 LLM proxy and data plane. It is built against a
+  pinned set of Fiber runtime, HTTP, Nacos, CAT, and Prometheus modules through CMake.
+- `web/`: The React, TypeScript, and Vite control-plane frontend. In development, it proxies `/api`
+  to the local backend.
+- `server/`: The Fastify control-plane API. MySQL mode enables persistent domain stores, rnacos
+  publication, console service registration, and audit ingestion. Memory mode is for isolated UI
+  and API development and does not publish to rnacos.
 - MySQL: Stores environment metadata, users and sessions, normalized configuration, drafts,
   immutable release records, access requests, and audit data.
-- rnacos ConfigService: Receives only the fixed `LLM-SERVER` Data IDs published by the console;
-  `ai-server` subscribes to those dynamic configurations.
-- rnacos NamingService: Supports `ai-server` registration and service discovery. The console API
-  registers the fixed `AI-GATEWAY@@ai-server-console-api` service; HTTP-audit builds of `ai-server`
-  subscribe to it. Instance-state collection is still pending.
-- `ai-server`: Remains the LLM proxy. It exposes health and readiness probes, but it does not yet
-  provide the console with evidence that a specific release or Data ID MD5 is active.
-- Call audits: The console ingest endpoint and per-user projection are implemented. In the default
-  `HTTP` build, `ai-server` creates only the minimized projection and submits it through a bounded
-  background queue. A `FILE` build retains the original full NDJSON audit behavior.
-
-Solid arrows show currently implemented console integrations or existing runtime relationships.
-Dashed arrows show integrations whose receiving contract or configuration may exist but whose
-end-to-end runtime path is not yet implemented.
+- rnacos: Carries the fixed `LLM-SERVER` configuration Data IDs and NamingService registrations for
+  `ai-server`, Provider discovery, rate-limit membership, and the console audit endpoint.
+- Observability: CAT records request and Provider-attempt traces, Prometheus exposes stable metrics,
+  and the audit pipeline feeds the per-user call-history projection.
 
 Dynamic configuration always uses the rnacos group `LLM-SERVER`. Its primary Data IDs are:
 
@@ -90,7 +95,10 @@ rnacos write results separately and keeps activation `UNKNOWN` until instance ev
 │   │   ├── app.ts          # Fastify application and route registration
 │   │   └── index.ts        # Process entry point
 │   └── .env.example
-├── native/                 # Repository-owned ai-server source and pinned CMake integration
+├── native/                 # C++ data plane and pinned Fiber integration
+│   ├── CMakeLists.txt      # Top-level native build and audit transport selection
+│   ├── ai-server/          # Repository-owned gateway runtime, docs, and tests
+│   └── patches/            # Isolated compatibility patches for the pinned Fiber revision
 ├── deploy/                 # Nginx, ai-server, MySQL/CAT image inputs
 ├── scripts/                # Local demo credential initialization
 ├── compose.yaml            # Reproducible end-to-end demonstration stack
@@ -101,7 +109,7 @@ rnacos write results separately and keeps activation `UNKNOWN` until instance ev
 `.temp/` and all `dist/` directories are ignored. Application code must not import from them, and
 they must not be committed.
 
-## Local Development
+## Control-plane Development
 
 Node.js 20 or later is required. Install dependencies and create a local environment file:
 
@@ -144,14 +152,15 @@ Response:
 ```
 
 This endpoint does not require MySQL, rnacos, or `ai-server`, so it can be used to verify the local
-frontend-to-backend path.
+frontend-to-backend path. These commands start the control plane only; use the native build commands
+below or the Compose stack for the complete gateway.
 
-## Docker Demonstration
+## End-to-End Docker Deployment
 
-Docker Compose starts MySQL, rnacos, CAT, one combined console container, `ai-server`, a local
-OpenAI-compatible demo Provider, and a one-shot configuration bootstrap. The first `ai-server`
-image build compiles the repository-owned application against pinned Fiber modules and can take
-several minutes.
+Docker Compose starts a complete runnable gateway: MySQL, rnacos, CAT, the combined console,
+`ai-server`, a deterministic OpenAI-compatible test Provider, and a one-shot configuration
+bootstrap. The first `ai-server` image build compiles the repository-owned C++ data plane against
+pinned Fiber modules and can take several minutes.
 
 Generate untracked credentials, then build and start the stack. Services are loopback-only by
 default. To access them from a trusted LAN, provide the shared bind address and this machine's LAN
@@ -177,7 +186,7 @@ The bootstrap publishes the BT1 Key Ring and a `fiber-demo` model routed to the 
 Create a BT1 token in the console, then call the real proxy:
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://172.23.222.82:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <BT1 token>' \
   -d '{"model":"fiber-demo","messages":[{"role":"user","content":"hello"}]}'
@@ -254,11 +263,14 @@ Build output is generated in `web/dist/` and `server/dist/`. The root `Dockerfil
 Native builds default to `-DAI_SERVER_AUDIT_TRANSPORT=HTTP`; configure with `FILE` to retain
 NDJSON audit files instead of HTTP delivery.
 
-## Upstream References
+## Fiber Dependency and Provenance
 
-The console domain model follows the current implementation in
-`fiber-gateway-cpp/apps/ai-server`, together with `docs/product-requirements.md` and
-`docs/user-module-design.md`. Update the local research checkout with:
+`native/ai-server/` is owned and built by this repository. Its migration provenance is recorded in
+[`native/ai-server/UPSTREAM.md`](native/ai-server/UPSTREAM.md). The build fetches a pinned
+`fiber-gateway-cpp` revision only for its reusable runtime and infrastructure modules; it does not
+build or import the upstream `apps/ai-server` source.
+
+The ignored checkout remains available for source research:
 
 ```bash
 git -C .temp/fiber-gateway-cpp pull --ff-only

@@ -1,59 +1,62 @@
-# Fiber AI Server Console
+# AI Gateway
 
 [English](README.md) | 简体中文
 
-本项目是
-[`fiber-gateway-cpp`](https://github.com/fiber-net-gateway/fiber-gateway-cpp) 中
-`ai-server` 的管理控制台。它面向平台管理员和运维人员，而不是终端用户使用的 LLM
-聊天页面。
+AI Gateway 是完整的 LLM 网关系统，包含 C++ 数据面、Web 管理控制面、动态配置与服务发现、
+发布流程、审计和可观测性。本仓库同时维护 `ai-server` 与管理控制台，不再只是外部
+`fiber-gateway-cpp/apps/ai-server` 的控制台。
 
-控制台的目标是同时提供：
+项目面向平台管理员、应用开发者和运维人员，为应用代理 LLM 流量，但不是终端用户聊天页面。
 
-- `ai-server` 的能力、协议、路由和配置模型介绍；
-- 模型、Provider、用户组和 BT1 密钥的结构化配置；
-- 草稿、校验、审批、发布、回滚和审计；
-- rnacos 写入状态与 `ai-server` 实例实际生效状态的分开展示；
-- 启动配置模板、实例健康、服务发现和配置快照状态。
+## 核心能力
 
-当前已实现用户与 Token 管理、独立的 Provider 与模型维护、模型专属授权组及审批、不可变
-环境级 Release、可恢复的 Provider → models 发布编排、BT1 Key Ring 发布、rnacos MD5 回读、
-环境切换、LLM 调用审计接收接口和个人调用记录。Docker 演示栈还提供 `ai-server` 直接异步
-提交的最小化审计，以及可重复的 Provider、模型和 Release 初始化。实例健康与生效状态采集、NamingService
-观察、Release 审批/驳回/取消和人工回滚仍是后续能力，因此当前生效状态保持未知。
+`native/ai-server/` 数据面提供：
+
+- OpenAI Chat Completions 和 Anthropic Messages 兼容接口；
+- BT1 认证、模型授权、确定性 Provider/token 选择、路由、重试、fallback、熔断与 SSE 流式
+  透传；
+- 基于 rnacos 的动态配置、`service://` 发现、实例注册与不可变运行时快照；
+- 通过 owner 选择和 check/settle 协调实现的集群 token 限流；
+- Prometheus 指标、CAT 链路、结构化日志，以及编译期选择的 `HTTP` 或 `FILE` 审计传输。
+
+`web/` 与 `server/` 控制面提供：
+
+- 用户管理、BT1 Token 签发、环境切换和个人调用记录；
+- Provider、模型、授权组和 BT1 Key Ring 的结构化管理，secret 保持只写；
+- 草稿校验、不可变 Release、固定 Data ID 发布、CAS 保护、MD5 回读、访问申请和发布证据；
+- 向 rnacos 注册 console API 服务，接收 `ai-server` 通过服务发现提交的有界异步审计批次。
+
+系统已经可以端到端运行。逐实例配置生效采集、Release 审批/驳回/取消操作和人工回滚仍是
+控制面后续能力；在取得带类型的实例证据前，生效状态会有意保持为 `UNKNOWN`。
 
 ## 技术架构
 
 ```mermaid
 flowchart LR
-    B[浏览器] --> W[console 容器<br/>Nginx + React]
-    W -->|容器内 /api| A[同容器 Fastify]
-    A -->|MySQL 模式<br/>领域数据、草稿、Release、审计| D[(MySQL)]
-    A -->|固定 Data ID<br/>发布与 MD5 回读| C[rnacos<br/>ConfigService]
-    C -->|动态配置订阅| S[ai-server]
-    S -->|实例注册与服务发现| N[rnacos<br/>NamingService]
-    A -->|注册固定 console API 服务| N
-    N -->|发现健康 console API 端点| S
-    S -->|有界队列异步审计批次| A
-    A -.->|健康、就绪与生效状态<br/>采集端待实现| S
-    A -.->|实例观察待实现| N
+    U[业务应用] -->|OpenAI 或 Anthropic API<br/>BT1| S[C++ ai-server 数据面]
+    S -->|路由、重试、fallback、流式透传| P[LLM Provider]
+    B[运维浏览器] --> W[console 容器<br/>Nginx + React]
+    W -->|容器内 /api| A[Fastify 控制面]
+    A -->|用户、草稿、Release、审计| D[(MySQL)]
+    A -->|发布固定 Data ID<br/>注册 console API| R[rnacos<br/>配置 + 服务发现]
+    R -->|配置快照与发现实例| S
+    S -->|注册实例| R
+    S -->|最小化异步审计| A
+    S --> O[CAT + Prometheus + 日志]
+    A -.->|生效状态采集待实现| S
 ```
 
-- `web/`：React、TypeScript 和 Vite 前端；开发时将 `/api` 代理到本地后端。
-- `server/`：Fastify API；MySQL 模式使用 `mysql2`，并启用 rnacos 配置发布器；默认 memory
-  模式使用进程内 Store，不向 rnacos 发布。
+- `native/ai-server/`：本仓库维护的 C++23 LLM 代理和数据面，通过 CMake 使用固定版本的
+  Fiber runtime、HTTP、Nacos、CAT 和 Prometheus 模块；
+- `web/`：React、TypeScript 和 Vite 控制面前端；开发时将 `/api` 代理到本地后端；
+- `server/`：Fastify 控制面 API；MySQL 模式启用持久化领域 Store、rnacos 发布、console
+  服务注册和审计接收；memory 模式仅用于隔离的 UI/API 开发，不向 rnacos 发布；
 - MySQL：保存环境元数据、用户与会话、规范化配置、草稿、不可变发布记录、访问申请和审计
-  数据。
-- rnacos ConfigService：只接收控制台发布的固定 `LLM-SERVER` Data ID，`ai-server` 从中订阅
-  动态配置。
-- rnacos NamingService：承载实例注册和服务发现；console API 注册固定服务
-  `AI-GATEWAY@@ai-server-console-api`，HTTP 审计模式的 `ai-server` 订阅该服务。实例状态采集仍待实现。
-- `ai-server`：继续承担 LLM 代理；当前提供健康与就绪探针，但尚不能向控制台证明某个 Release
-  或指定 Data ID MD5 已生效。
-- 调用审计：控制台接收接口和个人白名单投影已经实现。默认 `HTTP` 构建只生成最小投影，
-  通过后台有界队列提交；`FILE` 构建保留原有完整 NDJSON 审计行为。
-
-实线表示控制台当前已实现的集成或现有运行时关系；虚线表示虽然可能已经存在接收契约或配置，
-但端到端运行链路尚未完成的集成。
+  数据；
+- rnacos：承载固定 `LLM-SERVER` 配置 Data ID，以及 `ai-server`、Provider、限流成员和
+  console 审计端点的 NamingService 注册；
+- 可观测性：CAT 记录请求与 Provider attempt 链路，Prometheus 暴露稳定指标，审计管线生成
+  每用户调用记录投影。
 
 动态配置固定使用 rnacos group `LLM-SERVER`，主要 Data ID 为：
 
@@ -82,7 +85,10 @@ rnacos 的写入成功只表示“已发布”，不能直接表示所有 `ai-se
 │   │   ├── app.ts          # Fastify 应用与路由注册
 │   │   └── index.ts        # 进程入口
 │   └── .env.example
-├── native/                 # 本仓库维护的 ai-server 源码与固定 CMake 依赖
+├── native/                 # C++ 数据面与固定 Fiber 集成
+│   ├── CMakeLists.txt      # 原生顶层构建与审计传输选择
+│   ├── ai-server/          # 本仓库维护的网关运行时、文档与测试
+│   └── patches/            # 针对固定 Fiber revision 的隔离兼容补丁
 ├── deploy/                 # Nginx、ai-server、MySQL/CAT 镜像输入
 ├── scripts/                # 本地演示凭据初始化
 ├── compose.yaml            # 可重复的端到端演示栈
@@ -92,7 +98,7 @@ rnacos 的写入成功只表示“已发布”，不能直接表示所有 `ai-se
 
 `.temp/` 和所有 `dist/` 都是忽略目录，不能被业务代码导入或提交。
 
-## 本地开发
+## 控制面本地开发
 
 要求 Node.js 20 或更高版本。首次安装依赖：
 
@@ -133,13 +139,14 @@ curl http://localhost:3000/api/hello
 }
 ```
 
-该接口不依赖 MySQL、rnacos 或 `ai-server` 在线，因此可用于确认本地链路。
+该接口不依赖 MySQL、rnacos 或 `ai-server` 在线，因此可用于确认本地链路。以上命令只启动
+控制面；完整网关请使用下文原生构建命令或 Compose 栈。
 
-## Docker 演示
+## Docker 端到端部署
 
-Docker Compose 会同时启动 MySQL、rnacos、CAT、合并后的控制台容器、`ai-server`、本地
-OpenAI-compatible 演示 Provider和一次性配置初始化器。第一次构建 `ai-server`
-镜像会用固定版本的 Fiber 模块编译仓库内 C++ 源码，可能需要数分钟。
+Docker Compose 会启动完整可运行的网关：MySQL、rnacos、CAT、合并后的控制台、`ai-server`、
+确定性的 OpenAI-compatible 测试 Provider 和一次性配置初始化器。第一次构建 `ai-server`
+镜像会用固定版本的 Fiber 模块编译本仓库 C++ 数据面，可能需要数分钟。
 
 先生成不纳入版本控制的凭据，再构建并启动。默认只允许本机访问各服务；如需从可信
 局域网访问，生成环境文件时同时指定统一监听地址和本机局域网地址：
@@ -163,7 +170,7 @@ docker compose --env-file .env.docker up --build
 BT1 Token 后，即可调用真实代理：
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://172.23.222.82:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <BT1 token>' \
   -d '{"model":"fiber-demo","messages":[{"role":"user","content":"hello"}]}'
@@ -234,10 +241,14 @@ npm run test:native
 和 `console` 三个 target；console target 在同一个容器内运行 Nginx 与 Fastify。原生构建默认使用
 `-DAI_SERVER_AUDIT_TRANSPORT=HTTP`；改为 `FILE` 可保留 NDJSON 文件审计。
 
-## 上游依据
+## Fiber 依赖与源码沿革
 
-控制台领域设计以 `fiber-gateway-cpp/apps/ai-server` 的当前实现和
-`docs/product-requirements.md` 与 `docs/user-module-design.md` 为基线。本地研究副本可更新为：
+`native/ai-server/` 由本仓库维护和构建，迁移来源记录在
+[`native/ai-server/UPSTREAM.md`](native/ai-server/UPSTREAM.md)。构建只从固定的
+`fiber-gateway-cpp` revision 引入可复用的 runtime 与基础设施模块，不构建或导入上游
+`apps/ai-server` 源码。
+
+被忽略的上游副本仍可用于源码研究：
 
 ```bash
 git -C .temp/fiber-gateway-cpp pull --ff-only
