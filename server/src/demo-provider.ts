@@ -27,15 +27,29 @@ function lastUserText(body: Record<string, unknown>): string {
     const message = body.messages[index]
     if (typeof message !== 'object' || message === null) continue
     const candidate = message as Record<string, unknown>
-    if (candidate.role === 'user' && typeof candidate.content === 'string') {
-      return candidate.content.slice(0, 120)
-    }
+    if (candidate.role !== 'user') continue
+    if (typeof candidate.content === 'string') return candidate.content.slice(0, 120)
+    if (!Array.isArray(candidate.content)) continue
+    const text = candidate.content
+      .flatMap((block) => {
+        if (typeof block !== 'object' || block === null) return []
+        const contentBlock = block as Record<string, unknown>
+        return contentBlock.type === 'text' && typeof contentBlock.text === 'string'
+          ? [contentBlock.text]
+          : []
+      })
+      .join(' ')
+    if (text) return text.slice(0, 120)
   }
   return 'demo request'
 }
 
-function usage(text: string) {
-  const promptTokens = Math.max(1, Math.ceil(Buffer.byteLength(text, 'utf8') / 4))
+function inputTokens(text: string): number {
+  return Math.max(1, Math.ceil(Buffer.byteLength(text, 'utf8') / 4))
+}
+
+function openAiUsage(text: string) {
+  const promptTokens = inputTokens(text)
   return { prompt_tokens: promptTokens, completion_tokens: 12, total_tokens: promptTokens + 12 }
 }
 
@@ -54,7 +68,7 @@ async function chat(request: IncomingMessage, reply: ServerResponse): Promise<vo
   const input = lastUserText(body)
   const content = `Fiber demo provider received: ${input}`
   const id = `chatcmpl-demo-${randomUUID()}`
-  const tokenUsage = usage(input)
+  const tokenUsage = openAiUsage(input)
   if (body.stream === true) {
     reply.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -83,6 +97,68 @@ async function chat(request: IncomingMessage, reply: ServerResponse): Promise<vo
   })
 }
 
+function anthropicEvent(reply: ServerResponse, event: string, data: unknown): void {
+  reply.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+}
+
+async function messages(request: IncomingMessage, reply: ServerResponse): Promise<void> {
+  const body = await readJson(request)
+  const model = typeof body.model === 'string' ? body.model : 'fiber-demo-upstream'
+  const input = lastUserText(body)
+  const content = `Fiber demo provider received: ${input}`
+  const id = `msg_demo_${randomUUID().replaceAll('-', '')}`
+  const tokenUsage = { input_tokens: inputTokens(input), output_tokens: 12 }
+  if (body.stream === true) {
+    reply.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    })
+    anthropicEvent(reply, 'message_start', {
+      type: 'message_start',
+      message: {
+        id,
+        type: 'message',
+        role: 'assistant',
+        model,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: tokenUsage.input_tokens, output_tokens: 0 },
+      },
+    })
+    anthropicEvent(reply, 'content_block_start', {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    })
+    anthropicEvent(reply, 'content_block_delta', {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: content },
+    })
+    anthropicEvent(reply, 'content_block_stop', { type: 'content_block_stop', index: 0 })
+    anthropicEvent(reply, 'message_delta', {
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: tokenUsage.output_tokens },
+    })
+    anthropicEvent(reply, 'message_stop', { type: 'message_stop' })
+    reply.end()
+    return
+  }
+  json(reply, 200, {
+    id,
+    type: 'message',
+    role: 'assistant',
+    model,
+    content: [{ type: 'text', text: content }],
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    usage: tokenUsage,
+  })
+}
+
 const server = createServer((request, reply) => {
   if (request.method === 'GET' && request.url === '/health') {
     json(reply, 200, { status: 'ok', service: 'fiber-demo-provider' })
@@ -90,6 +166,13 @@ const server = createServer((request, reply) => {
   }
   if (request.method === 'POST' && request.url === '/v1/chat/completions') {
     void chat(request, reply).catch(() => {
+      if (!reply.headersSent) json(reply, 400, { error: { message: 'invalid demo request' } })
+      else reply.destroy()
+    })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/v1/messages') {
+    void messages(request, reply).catch(() => {
       if (!reply.headersSent) json(reply, 400, { error: { message: 'invalid demo request' } })
       else reply.destroy()
     })

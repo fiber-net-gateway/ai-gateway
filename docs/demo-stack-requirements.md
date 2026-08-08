@@ -24,14 +24,14 @@
 3. 一个 CAT 3.x 服务端，接收 ai-server 的 CAT transaction；
 4. 控制台 API 与静态 Web 入口；
 5. 一个 ai-server 实例；
-6. 一个只用于演示的本地 OpenAI-compatible Provider；
+6. 一个只用于演示的本地 OpenAI/Anthropic-compatible Provider；
 7. 一次性初始化任务，以及 ai-server 到 console API 的直接审计链路。
 
 首次启动应自动完成以下安全、幂等的初始化：
 
 - 使用控制台 API 发布 bootstrap BT1 Key Ring，并进行 rnacos MD5 回读；
-- 当演示 Provider/模型不存在时创建草稿，冻结为 Release 并执行发布；
-- 已有相同演示资源或已发布 Release 时不得重复创建；
+- 当演示 Provider/模型不存在时创建草稿；Provider 已存在但协议映射过时时原地更新；
+- 资源有变化时冻结为新 Release 并执行发布；配置未变化时不得重复创建资源或 Release；
 - 不向日志打印 BT1 secret、Provider token、MySQL/rnacos 密码或审计上报 token。
 
 ## 3. 功能需求
@@ -59,9 +59,9 @@
 
 ### 3.3 演示 Provider 与自动初始化
 
-- 演示 Provider 只在内部 Docker 网络监听，提供 `/health` 与
-  `/v1/chat/completions`。
-- Provider 返回固定、可辨识的 OpenAI-compatible 同步响应，供验证代理、CAT 和审计链路；
+- 演示 Provider 在容器内监听，Compose 可按 `DEMO_BIND_ADDRESS` 发布到可信局域网，并提供
+  `/health`、`/v1/chat/completions` 与 `/v1/messages`。
+- Provider 返回固定、可辨识的 OpenAI/Anthropic-compatible 同步或流式响应，供验证代理、CAT 和审计链路；
   它不连接公网，也不模拟真实模型质量。
 - 初始化器只能在开发认证模式的演示 Compose 中使用；它通过公开控制台 API 完成操作，
   不直接改业务表。

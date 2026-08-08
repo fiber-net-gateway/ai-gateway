@@ -157,7 +157,7 @@ below or the Compose stack for the complete gateway.
 ## End-to-End Docker Deployment
 
 Docker Compose starts a complete runnable gateway: MySQL, rnacos, CAT, the combined console,
-`ai-server`, a deterministic OpenAI-compatible test Provider, and a one-shot configuration
+`ai-server`, a deterministic OpenAI/Anthropic-compatible test Provider, and a one-shot configuration
 bootstrap. The first `ai-server` image build compiles the repository-owned C++ data plane against
 pinned Fiber modules and can take several minutes.
 
@@ -181,15 +181,76 @@ Open:
 - rnacos console: `http://172.23.222.82:10848/rnacos/`; its generated login is stored only in
   `.env.docker`.
 
-The bootstrap publishes the BT1 Key Ring and a `fiber-demo` model routed to the local Provider.
-Create a BT1 token in the console, then call the real proxy:
+### Calling ai-server from another application
+
+Applications send LLM traffic directly to `ai-server`. They must not send inference requests to
+the console, rnacos, or a Provider address. Before integrating an application:
+
+1. Check that `GET http://172.23.222.82:8080/ready` returns `200`.
+2. Sign in to the console, open **Token 管理**, select **生成 Token**, and copy the BT1 token from
+   its one-time delivery window. Store it as a secret.
+3. Use a logical model name published by the console, such as the Compose demo model
+   `fiber-demo`. Do not send a Provider's upstream model name.
+
+Choose the base URL according to where the application runs:
+
+| Application location                               | ai-server base URL          |
+| -------------------------------------------------- | --------------------------- |
+| Another host on the trusted LAN                    | `http://172.23.222.82:8080` |
+| The same host                                      | `http://127.0.0.1:8080`     |
+| A container attached to the Compose `demo` network | `http://ai-server:8080`     |
+
+The examples below use environment variables so the BT1 token is not embedded in application
+source code:
 
 ```bash
-curl http://172.23.222.82:8080/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <BT1 token>' \
-  -d '{"model":"fiber-demo","messages":[{"role":"user","content":"hello"}]}'
+export AI_SERVER_BASE_URL=http://172.23.222.82:8080
+export AI_SERVER_BT1_TOKEN='<token copied from the console>'
+export AI_SERVER_MODEL=fiber-demo
 ```
+
+For an OpenAI Chat Completions request, call `POST /v1/chat/completions`:
+
+```bash
+curl --fail-with-body "$AI_SERVER_BASE_URL/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $AI_SERVER_BT1_TOKEN" \
+  -d "{\"model\":\"$AI_SERVER_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+```
+
+OpenAI-compatible SDKs should use `${AI_SERVER_BASE_URL}/v1` as their base URL, the BT1 token as
+their API key, and the logical model name as `model`. Such SDKs normally generate the required
+`Authorization: Bearer ...` header automatically.
+
+For an Anthropic Messages request, call `POST /v1/messages`. Anthropic requests also use the BT1
+Bearer header; `x-api-key` is not accepted as gateway authentication:
+
+```bash
+curl --fail-with-body "$AI_SERVER_BASE_URL/v1/messages" \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $AI_SERVER_BT1_TOKEN" \
+  -d "{\"model\":\"$AI_SERVER_MODEL\",\"max_tokens\":128,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+```
+
+When using an Anthropic SDK, configure `AI_SERVER_BASE_URL` as its base URL and ensure its HTTP
+transport adds `Authorization: Bearer <BT1 token>`. If the SDK supports only `x-api-key`, call the
+Messages HTTP endpoint directly or provide a custom transport.
+
+Both endpoints support SSE streaming. Set `"stream": true`; command-line clients should also
+disable response buffering:
+
+```bash
+curl --no-buffer --fail-with-body "$AI_SERVER_BASE_URL/v1/messages" \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $AI_SERVER_BT1_TOKEN" \
+  -d "{\"model\":\"$AI_SERVER_MODEL\",\"max_tokens\":128,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+```
+
+`ai-server` does not translate between OpenAI and Anthropic protocols. The selected logical model
+must have a Provider mapping for the same protocol used by the application. A missing or expired
+BT1 token returns `401`, insufficient model access returns `403`, and no usable same-protocol
+Provider returns `503`. Applications should log the response `HI-TRACE-ID` for CAT troubleshooting,
+but must never log the BT1 token or request bodies containing sensitive data.
 
 The call appears in CAT and in the signed-in user's call history after `ai-server` submits the
 minimized audit record. A healthy `/ready` endpoint is runtime evidence for this demo instance, but

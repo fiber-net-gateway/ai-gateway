@@ -88,9 +88,10 @@ MD5、字节数和安全 key 视图。
 1. `POST /api/auth/development-login`；
 2. `GET /api/me/environments` 取得环境；
 3. `POST /api/environments/:env/bt1-key-ring/publish`；
-4. 查询 Provider；不存在 `Fiber Demo Provider` 时，以当前 ETag 创建无凭据 Provider；
+4. 查询 Provider；不存在 `Fiber Demo Provider` 时，以当前 ETag 创建无凭据 Provider；若已存在但
+   缺少 OpenAI 或 Anthropic 协议映射，则原地更新；
 5. 查询模型；不存在逻辑模型 `fiber-demo` 时，以新 ETag 创建模型；
-6. 若还没有包含演示模型的已发布版本，则 validate、submit、execute；
+6. 若演示资源发生变化或还没有已发布版本，则 validate、submit、execute；
 7. 轮询 Release，直到 `COMPLETED/PUBLISHED` 或失败/超时。
 
 每一步都重新读取 ETag，不复用可能过期的 revision。初始化器日志只输出阶段和资源安全 ID。

@@ -9,6 +9,14 @@ interface EnvironmentAccess {
 interface ProviderSummary {
   id: string
   displayName: string
+  baseUrl: string
+  protocols: ProviderProtocol[]
+}
+
+interface ProviderProtocol {
+  type: 'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES'
+  path: string
+  upstreamModelName: string
 }
 
 interface ModelSummary {
@@ -77,6 +85,47 @@ class ConsoleClient {
 const config = loadDemoBootstrapConfig()
 const client = new ConsoleClient(config.consoleUrl)
 const deadline = Date.now() + config.timeoutMillis
+const demoProviderProtocols: ProviderProtocol[] = [
+  {
+    type: 'OPENAI_CHAT_COMPLETIONS',
+    path: '/v1/chat/completions',
+    upstreamModelName: 'fiber-demo-upstream',
+  },
+  {
+    type: 'ANTHROPIC_MESSAGES',
+    path: '/v1/messages',
+    upstreamModelName: 'fiber-demo-upstream',
+  },
+]
+
+function demoProviderMutation() {
+  return {
+    displayName: 'Fiber Demo Provider',
+    baseUrl: config.providerBaseUrl,
+    protocols: demoProviderProtocols,
+    authentication: {
+      mode: 'NO_CREDENTIALS',
+      tokens: [],
+      confirmUnauthenticated: true,
+    },
+    confirmProviderImpact: true,
+  }
+}
+
+function demoProviderIsCurrent(provider: ProviderSummary): boolean {
+  return (
+    provider.baseUrl === config.providerBaseUrl &&
+    provider.protocols.length === demoProviderProtocols.length &&
+    demoProviderProtocols.every((expected) =>
+      provider.protocols.some(
+        (actual) =>
+          actual.type === expected.type &&
+          actual.path === expected.path &&
+          actual.upstreamModelName === expected.upstreamModelName,
+      ),
+    )
+  )
+}
 
 function log(message: string): void {
   process.stdout.write(`[demo-bootstrap] ${message}\n`)
@@ -168,27 +217,25 @@ async function main(): Promise<void> {
             'If-Match': providers.etag ?? `"${providers.data.draft.revision}"`,
             'Idempotency-Key': randomUUID(),
           },
-          body: JSON.stringify({
-            displayName: 'Fiber Demo Provider',
-            baseUrl: config.providerBaseUrl,
-            protocols: [
-              {
-                type: 'OPENAI_CHAT_COMPLETIONS',
-                path: '/v1/chat/completions',
-                upstreamModelName: 'fiber-demo-upstream',
-              },
-            ],
-            authentication: {
-              mode: 'NO_CREDENTIALS',
-              tokens: [],
-              confirmUnauthenticated: true,
-            },
-          }),
+          body: JSON.stringify(demoProviderMutation()),
         },
       )
     ).data
     changed = true
     log(`created demo Provider ${provider.id}`)
+  } else if (!demoProviderIsCurrent(provider)) {
+    provider = (
+      await client.request<{ provider: ProviderSummary }>(
+        `/api/environments/${environmentId}/drafts/${providers.data.draft.id}/providers/${provider.id}`,
+        {
+          method: 'PATCH',
+          headers: { 'If-Match': providers.etag ?? `"${providers.data.draft.revision}"` },
+          body: JSON.stringify(demoProviderMutation()),
+        },
+      )
+    ).data.provider
+    changed = true
+    log(`updated demo Provider ${provider.id}`)
   }
 
   let models = await client.request<{
@@ -209,7 +256,7 @@ async function main(): Promise<void> {
           body: JSON.stringify({
             displayName: 'Fiber Demo Model',
             logicalModelName: 'fiber-demo',
-            description: 'Docker Compose 内置的 OpenAI-compatible 演示模型',
+            description: 'Docker Compose 内置的 OpenAI/Anthropic-compatible 演示模型',
             tags: ['demo', 'local'],
             providers: [{ providerId: provider.id, routeRole: 'PRIMARY', sortOrder: 0 }],
             accessMode: 'ALL_AUTHENTICATED',
