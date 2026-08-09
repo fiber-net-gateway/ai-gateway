@@ -9,6 +9,7 @@ import {
 import { useCallback, useEffect, useState } from 'react'
 
 import { keyRingApi, type KeyRingView } from '../api/key-ring'
+import { confirmLocalized } from '../i18n'
 
 function short(value: string | null, size = 16): string {
   if (!value) return '—'
@@ -48,7 +49,7 @@ export function KeyRingPage({
   }, [load])
 
   const publish = async () => {
-    if (!window.confirm('发布当前 BT1 Key Ring 到 rnacos 并执行精确 MD5 回读？')) return
+    if (!confirmLocalized('发布当前 BT1 Key Ring 到 rnacos 并执行精确 MD5 回读？')) return
     setBusy(true)
     try {
       const result = await keyRingApi.publish(environmentId)

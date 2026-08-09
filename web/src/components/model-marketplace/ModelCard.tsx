@@ -1,6 +1,7 @@
 import { ArrowUpRight, KeyRound, Network } from 'lucide-react'
 
 import type { AvailableModelSummary, MarketplaceModelSummary } from '../../api/model-marketplace'
+import { formatDateTime } from '../../i18n'
 import { ModelStateStrip } from './ModelStateStrip'
 import { ProtocolBadge } from './ProtocolBadge'
 
@@ -55,7 +56,7 @@ export function AdminModelCard({
             ? `${model.validationErrorCount} 个错误`
             : `${model.validationWarningCount} 个提醒`}
         </span>
-        <time dateTime={model.updatedAt}>{new Date(model.updatedAt).toLocaleString('zh-CN')}</time>
+        <time dateTime={model.updatedAt}>{formatDateTime(model.updatedAt)}</time>
       </footer>
     </article>
   )
@@ -96,9 +97,7 @@ export function AvailableModelCard({
       </div>
       <footer>
         <span>实例生效：{model.activationState}</span>
-        <time>
-          {model.publishedAt ? new Date(model.publishedAt).toLocaleString('zh-CN') : '无发布证据'}
-        </time>
+        <time>{model.publishedAt ? formatDateTime(model.publishedAt) : '无发布证据'}</time>
       </footer>
     </article>
   )

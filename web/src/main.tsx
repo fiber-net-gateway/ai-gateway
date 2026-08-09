@@ -11,6 +11,7 @@ import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from 'lucide-react'
 
 import { api, ApiError, type EnvironmentAccess, type IssuedToken, type User } from './api/client'
 import { ConsoleLayout, type Section } from './components/ConsoleLayout'
+import { I18nProvider, useI18n } from './i18n'
 import { AuditPage } from './pages/AuditPage'
 import { AccessRequestsPage } from './pages/AccessRequestsPage'
 import { LoginPage } from './pages/LoginPage'
@@ -62,6 +63,7 @@ function marketplaceRoute():
 }
 
 function App() {
+  useI18n()
   const [authMode, setAuthMode] = useState<'development' | 'oidc'>('development')
   const [user, setUser] = useState<User | null>(null)
   const [environments, setEnvironments] = useState<EnvironmentAccess[]>([])
@@ -334,6 +336,8 @@ function App() {
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <I18nProvider>
+      <App />
+    </I18nProvider>
   </React.StrictMode>,
 )

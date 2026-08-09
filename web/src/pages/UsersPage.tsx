@@ -21,14 +21,15 @@ import {
 } from '../api/client'
 import { Modal } from '../components/Modal'
 import { StatusBadge } from '../components/StatusBadge'
+import { formatDateTime } from '../i18n'
 
-const dateTime = new Intl.DateTimeFormat('zh-CN', {
+const dateTimeOptions: Intl.DateTimeFormatOptions = {
   year: 'numeric',
   month: '2-digit',
   day: '2-digit',
   hour: '2-digit',
   minute: '2-digit',
-})
+}
 
 interface UsersPageProps {
   environments: EnvironmentAccess[]
@@ -181,7 +182,9 @@ export function UsersPage({ environments, currentUser, onError, onIssued }: User
                     <code>{user.authProvider}</code>
                   </td>
                   <td>
-                    {user.lastLoginAt ? dateTime.format(new Date(user.lastLoginAt)) : '从未登录'}
+                    {user.lastLoginAt
+                      ? formatDateTime(user.lastLoginAt, dateTimeOptions)
+                      : '从未登录'}
                   </td>
                   <td>
                     <StatusBadge status={user.status} />
@@ -483,7 +486,7 @@ function UserDetailModal({
                   <dt>最后登录</dt>
                   <dd>
                     {detail.user.lastLoginAt
-                      ? dateTime.format(new Date(detail.user.lastLoginAt))
+                      ? formatDateTime(detail.user.lastLoginAt, dateTimeOptions)
                       : '从未登录'}
                   </dd>
                 </div>

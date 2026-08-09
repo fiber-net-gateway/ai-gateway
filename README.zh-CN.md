@@ -22,6 +22,7 @@ AI Gateway 是完整的 LLM 网关系统，包含 C++ 数据面、Web 管理控�
 `web/` 与 `server/` 控制面提供：
 
 - 用户管理、BT1 Token 签发、环境切换和个人调用记录；
+- 中文/英文控制台切换，自动识别浏览器语言并持久保存用户选择；
 - Provider、模型、授权组和 BT1 Key Ring 的结构化管理，secret 保持只写；
 - 草稿校验、不可变 Release、固定 Data ID 发布、CAS 保护、MD5 回读、访问申请和发布证据；
 - 向 rnacos 注册 console API 服务，接收 `ai-server` 通过服务发现提交的有界异步审计批次。

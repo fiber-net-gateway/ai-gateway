@@ -11,6 +11,7 @@ import { ProtocolEditor } from '../components/model-marketplace/ProtocolEditor'
 import { TokenPoolEditor, existingTokenRow } from '../components/model-marketplace/TokenPoolEditor'
 import type { ProtocolDraft, TokenDraftRow } from '../components/model-marketplace/types'
 import { modelProtocols } from '../data/model-protocols'
+import { confirmLocalized, formatDateTime } from '../i18n'
 
 interface ProviderEditorState {
   id?: string
@@ -172,7 +173,7 @@ export function ProvidersPage({
     }
     if (
       editor.referencedModelCount > 1 &&
-      !window.confirm(
+      !confirmLocalized(
         `此 Provider 被 ${editor.referencedModelCount} 个模型引用，确认保存并影响全部模型？`,
       )
     ) {
@@ -197,7 +198,7 @@ export function ProvidersPage({
   }
 
   const archive = async () => {
-    if (!editor?.id || !window.confirm(`归档 Provider“${editor.displayName}”？`)) return
+    if (!editor?.id || !confirmLocalized(`归档 Provider“${editor.displayName}”？`)) return
     setBusy(true)
     try {
       await modelMarketplaceApi.archiveProvider(environmentId, draftId, editor.id, etag)
@@ -387,9 +388,7 @@ export function ProvidersPage({
               </dl>
               <footer>
                 <span>发布：{provider.publicationState}</span>
-                <time dateTime={provider.updatedAt}>
-                  {new Date(provider.updatedAt).toLocaleString('zh-CN')}
-                </time>
+                <time dateTime={provider.updatedAt}>{formatDateTime(provider.updatedAt)}</time>
               </footer>
             </article>
           ))}

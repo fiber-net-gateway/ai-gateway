@@ -2,6 +2,7 @@ import { FileClock, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { api, type AuditEvent } from '../api/client'
+import { formatDateTime } from '../i18n'
 
 const eventLabels: Record<string, string> = {
   'session.created': '创建登录会话',
@@ -16,14 +17,14 @@ const eventLabels: Record<string, string> = {
   'model_access.group.publication_succeeded': '发布模型授权组',
   'model_access.group.publication_failed': '模型授权组发布失败',
 }
-const dateTime = new Intl.DateTimeFormat('zh-CN', {
+const dateTimeOptions: Intl.DateTimeFormatOptions = {
   year: 'numeric',
   month: '2-digit',
   day: '2-digit',
   hour: '2-digit',
   minute: '2-digit',
   second: '2-digit',
-})
+}
 
 export function AuditPage({ onError }: { onError: (message: string) => void }) {
   const [events, setEvents] = useState<AuditEvent[]>([])
@@ -99,7 +100,7 @@ export function AuditPage({ onError }: { onError: (message: string) => void }) {
                 {event.reason && <blockquote>{event.reason}</blockquote>}
               </div>
               <div className="audit-meta">
-                <time>{dateTime.format(new Date(event.occurredAt))}</time>
+                <time>{formatDateTime(event.occurredAt, dateTimeOptions)}</time>
                 <code title={event.correlationId}>{event.correlationId.slice(0, 12)}</code>
               </div>
             </article>

@@ -2,6 +2,7 @@ import { Clock3, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { modelAccessApi, type ApplicantAccessRequest } from '../api/model-access'
+import { confirmLocalized, formatDateTime } from '../i18n'
 
 function summary(request: ApplicantAccessRequest): string {
   if (request.status === 'PENDING') return '等待管理员审批，授权组尚未变化。'
@@ -39,7 +40,7 @@ export function MyAccessRequestsPage({
   }, [environmentId])
 
   const cancel = async (request: ApplicantAccessRequest) => {
-    if (!window.confirm('取消这条待审批申请？历史记录会保留。')) return
+    if (!confirmLocalized('取消这条待审批申请？历史记录会保留。')) return
     setBusyId(request.id)
     try {
       await modelAccessApi.cancel(request.id, request.revision)
@@ -88,7 +89,7 @@ export function MyAccessRequestsPage({
             <p className="my-access-summary">{summary(request)}</p>
             <footer>
               <time dateTime={request.createdAt}>
-                <Clock3 size={12} /> {new Date(request.createdAt).toLocaleString('zh-CN')}
+                <Clock3 size={12} /> {formatDateTime(request.createdAt)}
               </time>
               <div>
                 <button

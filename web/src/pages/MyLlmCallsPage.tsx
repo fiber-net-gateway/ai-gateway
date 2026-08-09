@@ -2,16 +2,16 @@ import { Activity, LoaderCircle, Search } from 'lucide-react'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 
 import { api, type LlmCallAudit, type LlmCallOutcome } from '../api/client'
+import { formatDateTime, formatInteger } from '../i18n'
 
-const dateTime = new Intl.DateTimeFormat('zh-CN', {
+const dateTimeOptions: Intl.DateTimeFormatOptions = {
   year: 'numeric',
   month: '2-digit',
   day: '2-digit',
   hour: '2-digit',
   minute: '2-digit',
   second: '2-digit',
-})
-const integer = new Intl.NumberFormat('zh-CN')
+}
 
 const outcomeLabels: Record<LlmCallOutcome, string> = {
   SUCCEEDED: '成功',
@@ -20,7 +20,7 @@ const outcomeLabels: Record<LlmCallOutcome, string> = {
 }
 
 function duration(value: number): string {
-  if (value < 1_000) return `${integer.format(value)} ms`
+  if (value < 1_000) return `${formatInteger(value)} ms`
   return `${(value / 1_000).toFixed(value < 10_000 ? 2 : 1)} s`
 }
 
@@ -202,7 +202,7 @@ export function MyLlmCallsPage({
               {items.map((call) => (
                 <tr key={call.id}>
                   <td className="date-stack call-time">
-                    <span>{dateTime.format(new Date(call.occurredAt))}</span>
+                    <span>{formatDateTime(call.occurredAt, dateTimeOptions)}</span>
                     <code title={call.requestId}>{call.requestId}</code>
                   </td>
                   <td className="primary-cell call-endpoint">
@@ -225,10 +225,10 @@ export function MyLlmCallsPage({
                   <td>{duration(call.durationMs)}</td>
                   <td className="call-usage">
                     <span>
-                      输入 {integer.format(call.usage.promptTokens)} · 输出{' '}
-                      {integer.format(call.usage.completionTokens)}
+                      输入 {formatInteger(call.usage.promptTokens)} · 输出{' '}
+                      {formatInteger(call.usage.completionTokens)}
                     </span>
-                    <small>合计 {integer.format(call.usage.totalTokens)}</small>
+                    <small>合计 {formatInteger(call.usage.totalTokens)}</small>
                   </td>
                 </tr>
               ))}

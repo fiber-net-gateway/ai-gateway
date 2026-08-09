@@ -13,6 +13,7 @@ import { ModelStateStrip } from '../components/model-marketplace/ModelStateStrip
 import { ProtocolBadge } from '../components/model-marketplace/ProtocolBadge'
 import { ProtocolCoverageMatrix } from '../components/model-marketplace/ProtocolCoverageMatrix'
 import { ValidationSummary } from '../components/model-marketplace/ValidationSummary'
+import { confirmLocalized, formatDateTime } from '../i18n'
 
 export function ModelDetailPage({
   environmentId,
@@ -102,7 +103,7 @@ export function ModelDetailPage({
             {available.accessible
               ? `请求体使用 model: "${available.logicalModelName}"，认证使用你的 BT1 Token。`
               : accessRequest?.status === 'PENDING'
-                ? `申请已于 ${new Date(accessRequest.createdAt).toLocaleString('zh-CN')} 提交。`
+                ? `申请已于 ${formatDateTime(accessRequest.createdAt)} 提交。`
                 : accessRequest?.status === 'APPROVED'
                   ? '审批、rnacos 发布和 ai-server 生效是三个独立状态；实例证据齐全前不能宣称已生效。'
                   : available.requestable
@@ -122,7 +123,7 @@ export function ModelDetailPage({
               type="button"
               disabled={busy}
               onClick={async () => {
-                if (!window.confirm('取消这条待审批申请？历史记录会保留。')) return
+                if (!confirmLocalized('取消这条待审批申请？历史记录会保留。')) return
                 setBusy(true)
                 try {
                   setAccessRequest(
@@ -181,7 +182,7 @@ export function ModelDetailPage({
     }
   }
   const archive = async () => {
-    if (!etag || !window.confirm(`归档模型 ${detail.logicalModelName}？这不会删除历史 release。`))
+    if (!etag || !confirmLocalized(`归档模型 ${detail.logicalModelName}？这不会删除历史 release。`))
       return
     setBusy(true)
     try {

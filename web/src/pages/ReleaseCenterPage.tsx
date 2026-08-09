@@ -18,6 +18,7 @@ import {
   type ReleaseWorkflowState,
 } from '../api/model-marketplace'
 import { modelAccessApi } from '../api/model-access'
+import { confirmLocalized, formatDateTime } from '../i18n'
 
 const workflowLabels: Record<ReleaseWorkflowState, string> = {
   PENDING: '待执行',
@@ -143,7 +144,7 @@ export function ReleaseCenterPage({
     if (!detail) return
     const verb = detail.state === 'FAILED' ? '重试' : '执行'
     if (
-      !window.confirm(
+      !confirmLocalized(
         `${verb} Release #${detail.releaseNumber}？编排器将按 Provider → models 的顺序写入 rnacos。`,
       )
     )
@@ -166,7 +167,7 @@ export function ReleaseCenterPage({
 
   const publishGroup = async (group: MarketplaceReleaseDetail['groupDependencies'][number]) => {
     if (group.revision === null) return
-    if (!window.confirm(`显式发布用户组 ${group.name} 修订 ${group.revision}？`)) return
+    if (!confirmLocalized(`显式发布用户组 ${group.name} 修订 ${group.revision}？`)) return
     setBusy(true)
     try {
       const result = await modelAccessApi.publishGroup(group.id, group.revision)
@@ -251,7 +252,7 @@ export function ReleaseCenterPage({
             >
               <span>
                 <b>Release #{release.releaseNumber}</b>
-                <small>{new Date(release.createdAt).toLocaleString('zh-CN')}</small>
+                <small>{formatDateTime(release.createdAt)}</small>
               </span>
               <ReleaseBadge state={release.state} />
             </button>

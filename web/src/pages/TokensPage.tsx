@@ -13,13 +13,14 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { api, type EnvironmentAccess, type IssuedToken, type TokenView } from '../api/client'
 import { Modal } from '../components/Modal'
 import { StatusBadge } from '../components/StatusBadge'
+import { formatDateTime } from '../i18n'
 
-const dateTime = new Intl.DateTimeFormat('zh-CN', {
+const dateTimeOptions: Intl.DateTimeFormatOptions = {
   month: '2-digit',
   day: '2-digit',
   hour: '2-digit',
   minute: '2-digit',
-})
+}
 
 interface TokensPageProps {
   environments: EnvironmentAccess[]
@@ -100,7 +101,7 @@ export function TokensPage({ environments, onEnvironmentsChange, onError }: Toke
           <p>
             最近过期
             <b className="metric-date">
-              {nextExpiry ? dateTime.format(new Date(nextExpiry.expiresAt)) : '—'}
+              {nextExpiry ? formatDateTime(nextExpiry.expiresAt, dateTimeOptions) : '—'}
             </b>
             <small>{nextExpiry?.name ?? '暂无有效 Token'}</small>
           </p>
@@ -182,8 +183,8 @@ export function TokensPage({ environments, onEnvironmentsChange, onError }: Toke
                   </td>
                   <td>
                     <div className="date-stack">
-                      <span>{dateTime.format(new Date(token.issuedAt))}</span>
-                      <small>至 {dateTime.format(new Date(token.expiresAt))}</small>
+                      <span>{formatDateTime(token.issuedAt, dateTimeOptions)}</span>
+                      <small>至 {formatDateTime(token.expiresAt, dateTimeOptions)}</small>
                     </div>
                   </td>
                   <td>
@@ -371,7 +372,7 @@ export function IssuedTokenModal({
           </div>
           <div>
             <dt>过期时间</dt>
-            <dd>{dateTime.format(new Date(token.expiresAt))}</dd>
+            <dd>{formatDateTime(token.expiresAt, dateTimeOptions)}</dd>
           </div>
           <div>
             <dt>Key 状态</dt>

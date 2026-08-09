@@ -7,6 +7,7 @@ import {
   type ModelAccessRequestStatus,
 } from '../api/model-access'
 import { Modal } from '../components/Modal'
+import { formatDateTime } from '../i18n'
 
 const statusLabel: Record<ModelAccessRequestStatus, string> = {
   PENDING: '待审批',
@@ -212,9 +213,7 @@ export function AccessRequestsPage({
               </span>
             </div>
             <footer>
-              <time dateTime={request.createdAt}>
-                申请于 {new Date(request.createdAt).toLocaleString('zh-CN')}
-              </time>
+              <time dateTime={request.createdAt}>申请于 {formatDateTime(request.createdAt)}</time>
               <div>
                 {request.status === 'PENDING' && (
                   <>

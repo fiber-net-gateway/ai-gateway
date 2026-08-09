@@ -12,6 +12,8 @@ import {
 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 
+import { LanguageSwitcher } from '../components/LanguageSwitcher'
+
 interface LoginPageProps {
   mode: 'development' | 'oidc'
   busy: boolean
@@ -136,6 +138,7 @@ export function LoginPage({ mode, busy, error, onDevelopmentLogin }: LoginPagePr
         </span>
       </section>
       <section className="login-action">
+        <LanguageSwitcher />
         <div className="login-card">
           <span className="eyebrow">SECURE ACCESS</span>
           <h2>登录管理控制台</h2>

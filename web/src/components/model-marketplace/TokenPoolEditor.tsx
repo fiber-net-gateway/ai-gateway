@@ -1,5 +1,6 @@
 import { KeyRound, Plus, RotateCcw, Trash2 } from 'lucide-react'
 
+import { confirmLocalized } from '../../i18n'
 import { SecretActionField } from './SecretActionField'
 import type { TokenDraftRow } from './types'
 
@@ -78,7 +79,9 @@ export function TokenPoolEditor({
               <button
                 type="button"
                 onClick={() =>
-                  window.confirm(`从当前草稿删除 Token“${row.name}”？历史 release 不会被改写。`) &&
+                  confirmLocalized(
+                    `从当前草稿删除 Token“${row.name}”？历史 release 不会被改写。`,
+                  ) &&
                   update(row.key, () => ({
                     key: row.key,
                     kind: 'existing',

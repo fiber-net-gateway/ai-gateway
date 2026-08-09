@@ -19,6 +19,7 @@ import {
 import { useState, type ReactNode } from 'react'
 
 import type { EnvironmentAccess, User } from '../api/client'
+import { LanguageSwitcher } from './LanguageSwitcher'
 
 export type Section =
   | 'models'
@@ -67,9 +68,10 @@ export function ConsoleLayout({
             <i />
             <i />
           </span>
-          <span>
+          <span className="console-wordmark">
             <strong>FIBER</strong> CONTROL
           </span>
+          <LanguageSwitcher dark />
           <button
             className="sidebar-close"
             type="button"

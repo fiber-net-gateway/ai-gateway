@@ -26,6 +26,8 @@ The data plane in `native/ai-server/` provides:
 The control plane in `web/` and `server/` provides:
 
 - User administration, BT1 token issuance, environment switching, and personal call history.
+- A Chinese/English console language switch with browser-language detection and a persisted
+  preference.
 - Structured Provider, model, access-group, and BT1 Key Ring management with write-only secrets.
 - Draft validation, immutable releases, fixed-Data-ID rnacos publication, CAS protection, MD5
   readback, access requests, and publication evidence.

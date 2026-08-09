@@ -106,6 +106,63 @@ code,
 .console-brand strong {
   font-weight: 800;
 }
+.language-switcher {
+  min-height: 29px;
+  padding: 3px 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #657068;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  box-shadow: 0 5px 16px rgba(25, 35, 26, 0.06);
+}
+.console-brand .language-switcher {
+  margin-left: auto;
+}
+.language-switcher-dark {
+  padding: 2px 4px;
+  gap: 2px;
+  color: #7f8c83;
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: none;
+}
+.language-switcher-dark > svg {
+  display: none;
+}
+.language-switcher-dark button {
+  min-width: 20px;
+  padding-inline: 2px;
+}
+.language-switcher button {
+  min-width: 24px;
+  height: 21px;
+  padding: 0 4px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 99px;
+  cursor: pointer;
+  font-family: 'DM Mono', monospace;
+  font-size: 8px;
+  font-weight: 600;
+}
+.language-switcher button.active {
+  color: #142013;
+  background: var(--lime);
+}
+.language-switcher button:focus-visible {
+  outline-color: rgba(185, 244, 93, 0.58);
+  outline-offset: 1px;
+}
+.language-switcher i {
+  width: 1px;
+  height: 12px;
+  background: currentColor;
+  opacity: 0.25;
+}
 .console-mark {
   width: 25px;
   height: 23px;
@@ -1673,6 +1730,7 @@ td code {
   letter-spacing: 0.12em;
 }
 .login-action {
+  position: relative;
   padding: 40px;
   display: grid;
   align-content: center;
@@ -1681,6 +1739,11 @@ td code {
     linear-gradient(rgba(21, 29, 22, 0.025) 1px, transparent 1px),
     linear-gradient(90deg, rgba(21, 29, 22, 0.025) 1px, transparent 1px), var(--paper);
   background-size: 42px 42px;
+}
+.login-action > .language-switcher {
+  position: absolute;
+  top: 28px;
+  right: 28px;
 }
 .login-card {
   width: min(410px, 100%);
@@ -3398,6 +3461,9 @@ td code {
 }
 
 @media (max-width: 980px) {
+  .console-brand .console-wordmark {
+    display: none;
+  }
   .sidebar {
     width: 246px;
     transform: translateX(-100%);
@@ -3622,6 +3688,10 @@ td code {
   }
   .login-action {
     padding: 40px 18px;
+  }
+  .login-action > .language-switcher {
+    top: 16px;
+    right: 18px;
   }
   .login-card {
     padding: 28px 23px;
