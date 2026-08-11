@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
                              << " cpu_period_us=" << cpu.period_us
                              << " cpu_concurrency_source=" << fiber::util::cpu_concurrency_source_name(cpu.source)
                              << " cgroup_probe_failed=" << cpu.cgroup_probe_failed
-                             << " nacos_servers=" << config.nacos_config().server_ips().size()
+                             << " nacos_servers=" << config.nacos_config().server_hosts().size()
                              << " zone=" << fiber::log::quoted(config.zone())
                              << " cluster=" << fiber::log::quoted(config.cluster())
                              << " audit_path=" << fiber::log::quoted(audit_path);
@@ -262,10 +262,10 @@ int main(int argc, char **argv) {
         LOG(LOG_LIFECYCLE, INFO) << "server listening scheme=http address="
                                  << fiber::log::quoted(bound_address.to_string())
                                  << " http_workers=" << http_workers.size()
-                                 << " nacos_servers=" << config.nacos_config().server_ips().size();
+                                 << " nacos_servers=" << config.nacos_config().server_hosts().size();
         std::cout << "ai-server listening on http://" << bound_address.to_string()
                   << ", http workers=" << http_workers.size()
-                  << ", nacos servers=" << config.nacos_config().server_ips().size() << std::endl;
+                  << ", nacos servers=" << config.nacos_config().server_hosts().size() << std::endl;
 
         auto signal = co_await fiber::async::when_any([]() { return fiber::async::wait_signal(SIGINT); },
                                                       []() { return fiber::async::wait_signal(SIGTERM); });

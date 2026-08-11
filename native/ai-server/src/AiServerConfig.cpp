@@ -391,9 +391,9 @@ bool parse_size(std::string_view text, std::size_t minimum, std::size_t maximum,
     return true;
 }
 
-std::expected<std::vector<net::IpAddress>, AiServerConfigError> parse_server_addresses(std::string_view value,
-                                                                                       std::size_t line) {
-    std::vector<net::IpAddress> addresses;
+std::expected<std::vector<std::string>, AiServerConfigError> parse_server_addresses(std::string_view value,
+                                                                                    std::size_t line) {
+    std::vector<std::string> addresses;
     while (true) {
         const std::size_t separator = value.find(',');
         const std::string_view item = trim(separator == std::string_view::npos ? value : value.substr(0, separator));
@@ -402,7 +402,7 @@ std::expected<std::vector<net::IpAddress>, AiServerConfigError> parse_server_add
             return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, line, kNacosServerAddressesKey,
                                               "expected comma-separated IP literals"));
         }
-        addresses.push_back(address);
+        addresses.push_back(address.to_string());
 
         if (separator == std::string_view::npos) {
             break;
@@ -481,7 +481,7 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
         if (!addresses) {
             return std::unexpected(std::move(addresses.error()));
         }
-        nacos_params.server_ips = std::move(*addresses);
+        nacos_params.server_hosts = std::move(*addresses);
         field_lines.server_addresses = entry.line;
         return {};
     }
@@ -644,7 +644,7 @@ AiServerConfigError from_nacos_error(const nacos::NacosConfigError &error, const
         case nacos::NacosConfigErrorCode::EmptyServerList:
             return make_error(AiServerConfigErrorCode::MissingRequiredKey, 0, kNacosServerAddressesKey,
                               "required setting is missing");
-        case nacos::NacosConfigErrorCode::InvalidServerAddress:
+        case nacos::NacosConfigErrorCode::InvalidServerHost:
             return make_error(AiServerConfigErrorCode::InvalidNacosConfig, lines.server_addresses,
                               kNacosServerAddressesKey, "Nacos server IP must be unicast and specified");
         case nacos::NacosConfigErrorCode::InvalidHttpPort:

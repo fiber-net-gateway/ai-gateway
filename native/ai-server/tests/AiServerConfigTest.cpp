@@ -77,9 +77,10 @@ AUDIT_HTTP_REQUEST_TIMEOUT_MS=7500
     EXPECT_EQ(result->cluster(), "gray");
     EXPECT_EQ(result->nacos_cluster(), "daily1-gray");
     const auto &nacos = result->nacos_config();
-    ASSERT_EQ(nacos.server_ips().size(), 2u);
-    EXPECT_EQ(nacos.server_ips()[0].to_string(), "127.0.0.1");
-    EXPECT_EQ(nacos.server_ips()[1].to_string(), "2001:db8::1");
+    ASSERT_EQ(nacos.server_hosts().size(), 2u);
+    EXPECT_EQ(nacos.server_hosts()[0].value(), "127.0.0.1");
+    EXPECT_EQ(nacos.server_hosts()[1].value(), "2001:db8::1");
+    EXPECT_FALSE(nacos.has_hostname_server());
     EXPECT_EQ(nacos.http_port(), 18848);
     EXPECT_EQ(nacos.grpc_port(), 19848);
     EXPECT_EQ(nacos.namespace_id(), "llm-dev");
@@ -240,6 +241,11 @@ TEST(AiServerConfigTest, RejectsConfigurableNacosContextPath) {
 }
 
 TEST(AiServerConfigTest, RejectsInvalidValuesAndPartialCredentials) {
+    auto hostname = AiServerConfig::load_from_string("NACOS_SERVER_ADDRESSES=nacos.internal\n");
+    ASSERT_FALSE(hostname);
+    EXPECT_EQ(hostname.error().code, AiServerConfigErrorCode::InvalidValue);
+    EXPECT_EQ(hostname.error().key, "NACOS_SERVER_ADDRESSES");
+
     auto invalid_port =
             AiServerConfig::load_from_string("NACOS_SERVER_ADDRESSES=127.0.0.1\nAI_SERVER_LISTEN_PORT=70000\n");
     ASSERT_FALSE(invalid_port);
@@ -317,8 +323,8 @@ TEST(AiServerConfigTest, LoadsExampleFile) {
 
     ASSERT_TRUE(result) << result.error().detail;
     EXPECT_EQ(result->listen_address().to_string(), "0.0.0.0:8080");
-    ASSERT_EQ(result->nacos_config().server_ips().size(), 1u);
-    EXPECT_EQ(result->nacos_config().server_ips()[0].to_string(), "127.0.0.1");
+    ASSERT_EQ(result->nacos_config().server_hosts().size(), 1u);
+    EXPECT_EQ(result->nacos_config().server_hosts()[0].value(), "127.0.0.1");
     EXPECT_EQ(result->initial_config_timeout(), std::chrono::milliseconds(60000));
     const auto expected_logging_path =
             (std::filesystem::path(FIBER_AI_SERVER_TEST_ENV_PATH).parent_path() / "ai-server.logging.json")
