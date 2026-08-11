@@ -3,6 +3,7 @@
 
 #include "../protocol/LlmBody.h"
 #include "../routing/ModelAuthorization.h"
+#include "../routing/ProviderRouteKey.h"
 #include "ProviderRuntime.h"
 
 #include <chrono>
@@ -37,17 +38,18 @@ struct ResolvedProviderAttempt {
 
 struct ResolvedExecutionPlan {
     LlmWireProtocol client_protocol = LlmWireProtocol::OpenAiChatCompletions;
-    std::string_view route_key;
+    ProviderRouteKey route_key;
     json::JsonArray<ResolvedProviderAttempt> attempts;
     LoadBalanceConfig load_balance;
 };
 
 [[nodiscard]] std::expected<ResolvedExecutionPlan, ExecutionPlanError>
-resolve_execution_plan(const AuthorizedModel &model, LlmWireProtocol protocol, std::string_view route_key,
+resolve_execution_plan(const AuthorizedModel &model, LlmWireProtocol protocol, ProviderRouteKey route_key,
                        ProviderRuntimeRegistry &runtime_registry, ProviderRuntimeState::TimePoint now,
                        mem::BufPool &pool) noexcept;
 
-[[nodiscard]] std::uint64_t rendezvous_score(std::string_view route_key, std::string_view candidate_key) noexcept;
+[[nodiscard]] std::uint64_t rendezvous_score(const ProviderRouteKey &route_key,
+                                             std::string_view candidate_key) noexcept;
 
 } // namespace fiber::ai_server
 

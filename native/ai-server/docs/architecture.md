@@ -84,7 +84,7 @@ LLM 入口严格按以下顺序：
 3. BT1 认证；
 4. 校验 POST、`application/json` 和 4 MiB 正文上限；
 5. 读取完整正文到单个 `IoBuf`；
-6. 用预编译 JSONPath program 抽取路由字段并保存原始正文；
+6. 单次遍历 JSON，抽取路由字段、计算 prompt affinity，并保存原始正文；
 7. 在 CAT 根 `URL` Transaction data 记录 `stream=true|false`；
 8. 校验逻辑模型名、查找模型、执行用户组授权，并将 CAT 根 Transaction name 更新为
    `<path>:<authorized-model>`；
@@ -123,15 +123,31 @@ OpenAI 和 Anthropic 分别生成自己的错误 JSON；内部原因只进入无
 
 ## 5. 路由键和执行计划
 
-路由键优先级、UTF-8 字节截断和 Java 保持一致：
+路由键只服务于 Provider 和 API token 的缓存亲和性，不发送给 Provider。请求解析时
+直接产生固定 32 字节 digest，不复制 prompt，也不记录原始键值。优先级为：
 
-- OpenAI：metadata route key -> prompt cache key -> `role:content\n` 前缀 -> model；
-- Anthropic：metadata route key -> container -> system + `role:content\n` 前缀 -> model。
+- OpenAI：非空 `prompt_cache_key`；否则使用完整 tools 和截至第一个 user 消息的
+  稳定语义锚点（没有 user 时使用第一条消息）；
+- Anthropic：非空 `metadata.user_id`；否则使用 cache-control-aware 锚点；
+- 没有可用锚点时使用认证 principal 和已授权逻辑模型构造兜底键。
 
-Rendezvous score 为
-`SHA-256(routeKey + "\n" + candidateKey)` 的前 8 字节按 big-endian 解释。Provider
-按 score 降序、名字升序；同 Provider token 用
-`providerName + "\n" + tokenName` 作为 candidate key。
+Anthropic 锚点遵守 Provider 的 `tools -> system -> messages` 前缀顺序。显式
+`cache_control: {"type":"ephemeral"}` 位于 tools、system 或第一条消息时，只计算到
+最早断点；断点位于后续消息、使用顶层自动 `cache_control`、或没有 cache control 时，
+均以完整 tools、system 和第一条消息为稳定 conversation anchor。后续增长消息和移动
+到后续消息的断点不参与 hash，避免同一会话随轮次增长被重新分配。`cache_control`
+标记本身不进入 digest。
+
+项目自定义的 `metadata.route_key`、`metadata.routeKey` 和 Anthropic `container`
+不再影响路由。最终 digest 还包含算法版本、入站协议、认证 principal、已授权逻辑模型
+和来源类型，避免跨租户、跨模型或跨协议串键。
+
+Rendezvous score 以最终 route digest 和 candidate name 计算 SHA-256，前 8 字节按
+big-endian 解释。Provider 按 score 降序、名字升序；同 Provider 的 token 再以
+Provider 名和 token 名参与评分。配置中的 `hash-source: prompt-prefix` 和
+`prefix-max-bytes` 继续兼容读取，但不再改变路由键，也不需要修改 rnacos 配置格式。
+`ai_server_route_keys_total{protocol,source}` 记录实际采用的来源；
+`ai_server_route_key_info{algorithm="cache-affinity-v1"}` 用于识别滚动发布期间的新旧算法实例。
 
 计划生成规则：
 

@@ -24,13 +24,13 @@
 #include <fiber/async/Sleep.h>
 #include <fiber/async/Spawn.h>
 #include <fiber/async/WaitGroup.h>
+#include <fiber/cat/Cat.h>
 #include <fiber/common/Assert.h>
 #include <fiber/common/IoError.h>
 #include <fiber/common/json/JsonParse.h>
 #include <fiber/common/json/JsonStructDecode.h>
 #include <fiber/event/EventLoop.h>
 #include <fiber/event/EventLoopGroup.h>
-#include <fiber/cat/Cat.h>
 #include <fiber/http/ClientHttp1Exchange.h>
 #include <fiber/http/ClientHttp1Types.h>
 #include <fiber/http/Http1ClientConnection.h>
@@ -55,6 +55,7 @@
 #include "provider/ProviderConnectionManager.h"
 #include "provider/ProviderHttpClient.h"
 #include "provider/ProviderRuntime.h"
+#include "routing/ProviderRouteKey.h"
 #include "server/LlmRequestHandler.h"
 #include "server/TokenRateLimitHttpHandler.h"
 
@@ -812,7 +813,15 @@ private:
             (void) primary->service->update(*service_snapshot);
             for (std::size_t i = 0; i < 1024; ++i) {
                 std::string candidate = "service-route-" + std::to_string(i);
-                const std::uint64_t key = fiber::ai_server::rendezvous_score(candidate, primary->name);
+                fiber::ai_server::LlmRoutingData routing;
+                FIBER_ASSERT(fiber::ai_server::digest_opaque_route_key("openai-prompt-cache-key", candidate,
+                                                                       routing.direct_route_key.digest));
+                routing.direct_route_key.source = fiber::ai_server::PromptRouteKeySource::OpenAiPromptCacheKey;
+                routing.direct_route_key.available = true;
+                auto route_key = fiber::ai_server::build_provider_route_key(LlmWireProtocol::OpenAiChatCompletions,
+                                                                            "alice", "logical", routing);
+                FIBER_ASSERT(route_key.has_value());
+                const std::uint64_t key = fiber::ai_server::rendezvous_score(*route_key, primary->name);
                 auto selected = primary->service->select(key, {}, WeightedRendezvous::TimePoint{});
                 FIBER_ASSERT(selected.has_value());
                 const bool selects_failing = selected->port() == failing_provider_port;
@@ -1489,8 +1498,8 @@ TEST(LlmProxyIntegrationTest, WeightedRendezvousRetryExcludesFailedServiceInstan
     ASSERT_FALSE(token.empty());
     const std::string route_key = fixture.rendezvous_route_key();
     ASSERT_FALSE(route_key.empty());
-    const std::string request = R"({"model":"logical","stream":false,"metadata":{"route_key":")" + route_key +
-                                R"("},"messages":[{"role":"user","content":"hello"}]})";
+    const std::string request = R"({"model":"logical","stream":false,"prompt_cache_key":")" + route_key +
+                                R"(","messages":[{"role":"user","content":"hello"}]})";
 
     const RawHttpResponse response = post_json(fixture.entry_port(), token, request);
 

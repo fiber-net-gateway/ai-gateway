@@ -57,14 +57,14 @@ std::size_t attempt_capacity(std::span<const std::shared_ptr<const ProjectProvid
     return capacity;
 }
 
-std::uint64_t token_score(std::string_view route_key, std::string_view provider_name,
+std::uint64_t token_score(const ProviderRouteKey &route_key, std::string_view provider_name,
                           std::string_view token_name) noexcept {
-    if (route_key.empty() || provider_name.empty() || token_name.empty()) {
+    if (provider_name.empty() || token_name.empty()) {
         return 0;
     }
     SHA256_CTX context;
     std::array<std::uint8_t, SHA256_DIGEST_LENGTH> digest{};
-    if (SHA256_Init(&context) != 1 || SHA256_Update(&context, route_key.data(), route_key.size()) != 1 ||
+    if (SHA256_Init(&context) != 1 || SHA256_Update(&context, route_key.digest.data(), route_key.digest.size()) != 1 ||
         SHA256_Update(&context, "\n", 1) != 1 ||
         SHA256_Update(&context, provider_name.data(), provider_name.size()) != 1 ||
         SHA256_Update(&context, "\n", 1) != 1 || SHA256_Update(&context, token_name.data(), token_name.size()) != 1 ||
@@ -79,7 +79,7 @@ std::uint64_t token_score(std::string_view route_key, std::string_view provider_
 }
 
 CandidateGroup build_candidates(std::span<const std::shared_ptr<const ProjectProvider>> providers,
-                                ProviderProtocolType protocol_type, std::string_view route_key,
+                                ProviderProtocolType protocol_type, const ProviderRouteKey &route_key,
                                 ProviderRuntimeRegistry &registry, ProviderRuntimeState::TimePoint now,
                                 mem::BufPool &pool) noexcept {
     CandidateGroup group;
@@ -146,39 +146,34 @@ CandidateGroup build_candidates(std::span<const std::shared_ptr<const ProjectPro
         }
     }
 
-    if (!route_key.empty()) {
-        std::sort(group.attempts, group.attempts + group.size,
-                  [](const ScoredAttempt &left, const ScoredAttempt &right) {
-                      if (left.provider_score != right.provider_score) {
-                          return left.provider_score > right.provider_score;
-                      }
-                      if (left.attempt.provider->name != right.attempt.provider->name) {
-                          return left.attempt.provider->name < right.attempt.provider->name;
-                      }
-                      if (left.token_score != right.token_score) {
-                          return left.token_score > right.token_score;
-                      }
-                      const std::string_view left_name = left.attempt.api_token
-                                                                 ? std::string_view(left.attempt.api_token->name)
-                                                                 : std::string_view{};
-                      const std::string_view right_name = right.attempt.api_token
-                                                                  ? std::string_view(right.attempt.api_token->name)
-                                                                  : std::string_view{};
-                      return left_name < right_name;
-                  });
-    }
+    std::sort(group.attempts, group.attempts + group.size, [](const ScoredAttempt &left, const ScoredAttempt &right) {
+        if (left.provider_score != right.provider_score) {
+            return left.provider_score > right.provider_score;
+        }
+        if (left.attempt.provider->name != right.attempt.provider->name) {
+            return left.attempt.provider->name < right.attempt.provider->name;
+        }
+        if (left.token_score != right.token_score) {
+            return left.token_score > right.token_score;
+        }
+        const std::string_view left_name =
+                left.attempt.api_token ? std::string_view(left.attempt.api_token->name) : std::string_view{};
+        const std::string_view right_name =
+                right.attempt.api_token ? std::string_view(right.attempt.api_token->name) : std::string_view{};
+        return left_name < right_name;
+    });
     return group;
 }
 
 } // namespace
 
-std::uint64_t rendezvous_score(std::string_view route_key, std::string_view candidate_key) noexcept {
-    if (route_key.empty() || candidate_key.empty()) {
+std::uint64_t rendezvous_score(const ProviderRouteKey &route_key, std::string_view candidate_key) noexcept {
+    if (candidate_key.empty()) {
         return 0;
     }
     SHA256_CTX context;
     std::array<std::uint8_t, SHA256_DIGEST_LENGTH> digest{};
-    if (SHA256_Init(&context) != 1 || SHA256_Update(&context, route_key.data(), route_key.size()) != 1 ||
+    if (SHA256_Init(&context) != 1 || SHA256_Update(&context, route_key.digest.data(), route_key.digest.size()) != 1 ||
         SHA256_Update(&context, "\n", 1) != 1 ||
         SHA256_Update(&context, candidate_key.data(), candidate_key.size()) != 1 ||
         SHA256_Final(digest.data(), &context) != 1) {
@@ -192,7 +187,7 @@ std::uint64_t rendezvous_score(std::string_view route_key, std::string_view cand
 }
 
 std::expected<ResolvedExecutionPlan, ExecutionPlanError>
-resolve_execution_plan(const AuthorizedModel &model, LlmWireProtocol protocol, std::string_view route_key,
+resolve_execution_plan(const AuthorizedModel &model, LlmWireProtocol protocol, ProviderRouteKey route_key,
                        ProviderRuntimeRegistry &runtime_registry, ProviderRuntimeState::TimePoint now,
                        mem::BufPool &pool) noexcept {
     if (!model.route) {
@@ -276,7 +271,7 @@ resolve_execution_plan(const AuthorizedModel &model, LlmWireProtocol protocol, s
     }
     return ResolvedExecutionPlan{
             .client_protocol = protocol,
-            .route_key = route_key,
+            .route_key = std::move(route_key),
             .attempts = json::JsonArray<ResolvedProviderAttempt>(attempts, output),
             .load_balance = model.route->load_balance,
     };

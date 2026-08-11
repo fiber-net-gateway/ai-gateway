@@ -390,8 +390,8 @@ Provider 选择器每个选项显示：
 | UI 字段                                                                           | 配置字段               | 控件和默认值           | 校验和说明                                  |
 | --------------------------------------------------------------------------------- | ---------------------- | ---------------------- | ------------------------------------------- |
 | Provider 选择策略                                                                 | `policy`               | 只读 `rendezvous-hash` | 当前只有一个有效策略                        |
-| 路由键来源                                                                        | `hash-source`          | 只读 `prompt-prefix`   | 当前只有一个有效来源                        |
-| Prompt 前缀上限                                                                   | `prefix-max-bytes`     | 数字，默认 2048 bytes  | 1..2147483647；空值写默认值                 |
+| 路由键来源                                                                        | `hash-source`          | 只读 `prompt-prefix`   | 兼容字段；运行时使用内建协议感知算法        |
+| Prompt 前缀上限                                                                   | `prefix-max-bytes`     | 数字，默认 2048 bytes  | 兼容字段；保留原校验和输出                  |
 | 主 Provider 尝试上限                                                              | `max-primary-attempts` | 数字，默认 0           | 0 表示全部；大于 0 时限制不同主 Provider 数 |
 | 启用 Fallback                                                                     | `fallback-enabled`     | 开关，默认开           | 未选择 fallback 时禁用并显示说明            |
 | 可重试 HTTP 状态                                                                  | `retryable-status`     | 标签数字输入           | 100..599，去重、升序；空输入恢复默认集合    |
@@ -405,8 +405,9 @@ Provider 选择器每个选项显示：
 - `max-primary-attempts` 限制不同主 Provider，不限制 token 产生的 HTTP 总尝试数；
 - 401、403、429 和传输错误本身可触发后续尝试，其中 429 也在默认重试集合；
 - SSE 成功响应头开始发送后不再重试或 fallback；
-- 运行时对小于等于 0 的 `prefix-max-bytes` 使用默认值，对小于等于 0 的
-  `max-primary-attempts` 使用 0。控制台只生成规范化非负值。
+- `hash-source` 和 `prefix-max-bytes` 为 rnacos 格式兼容继续读取和原样生成，但不再
+  影响 Provider/API token 路由；控制台无需迁移历史配置；
+- 运行时对小于等于 0 的 `max-primary-attempts` 使用 0。控制台只生成规范化非负值。
 
 #### Token 限流
 

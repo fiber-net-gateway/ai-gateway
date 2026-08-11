@@ -25,6 +25,11 @@ namespace {
 constexpr std::size_t kMaxMetricsOutputBytes = 16 * 1024 * 1024;
 constexpr std::array<std::string_view, 2> kProtocolNames{"openai", "anthropic"};
 constexpr std::array<std::string_view, 3> kTokenTypes{"in_cache", "in_nocache", "out"};
+constexpr std::array<std::string_view, static_cast<std::size_t>(PromptRouteKeySource::Count)> kRouteKeySources{
+        "openai_prompt_cache_key",         "openai_semantic_anchor",           "anthropic_metadata_user_id",
+        "anthropic_explicit_cache_anchor", "anthropic_automatic_cache_anchor", "anthropic_conversation_anchor",
+        "principal_model_fallback",
+};
 constexpr std::array<std::string_view, static_cast<std::size_t>(ProviderHttpErrorCode::Count)> kFailurePhases{
         "invalid_endpoint", "no_service_endpoint", "dns",       "pool_shutdown",      "connect",          "send_header",
         "send_body",        "read_header",         "read_body", "response_too_large", "invalid_response",
@@ -154,6 +159,12 @@ private:
     return output.append("# HELP ") && output.append(name) && output.append(" ") && output.append(help) &&
            output.append("\n# TYPE ") && output.append(name) && output.append(" counter\n") && output.append(name) &&
            output.append(" ") && output.append_uint(value) && output.append("\n");
+}
+
+[[nodiscard]] bool append_route_key_info(BoundedTextBuilder &output) noexcept {
+    return output.append("# HELP ai_server_route_key_info Active Provider route key algorithm.\n"
+                         "# TYPE ai_server_route_key_info gauge\n"
+                         "ai_server_route_key_info{algorithm=\"cache-affinity-v1\"} 1\n");
 }
 
 [[nodiscard]] bool append_seconds_metric(BoundedTextBuilder &output, std::string_view name, std::string_view help,
@@ -408,6 +419,13 @@ void AiServerMetrics::Worker::provider_circuit_open(LlmWireProtocol protocol) no
     provider_circuit_opens_[protocol_index(protocol)].inc();
 }
 
+void AiServerMetrics::Worker::route_key(LlmWireProtocol protocol, PromptRouteKeySource source) noexcept {
+    const std::size_t source_index = static_cast<std::size_t>(source);
+    if (source_index < kRouteKeySourceCount) {
+        route_keys_[protocol_index(protocol)][source_index].inc();
+    }
+}
+
 void AiServerMetrics::Worker::rate_limit_check(RateLimitCheckMetric result) noexcept {
     rate_limit_checks_[static_cast<std::size_t>(result)].inc();
 }
@@ -448,6 +466,7 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
     constexpr std::array<std::string_view, 2> kRequestLabels{"protocol", "result"};
     constexpr std::array<std::string_view, 2> kTransportFailureLabels{"protocol", "phase"};
     constexpr std::array<std::string_view, 2> kSseDrainLabels{"protocol", "result"};
+    constexpr std::array<std::string_view, 2> kRouteKeyLabels{"protocol", "source"};
     constexpr std::array<std::string_view, 1> kResultLabel{"result"};
     constexpr std::array<std::string_view, 4> kRequestResults{"success", "client_error", "server_error", "canceled"};
     constexpr std::array<std::string_view, 4> kCheckResults{"bypass", "allowed", "denied", "error"};
@@ -480,6 +499,8 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
                                        "Provider DNS lookups suppressed by transient timeout backoff.", kProtocolLabel);
     auto provider_circuit_opens = registry_.register_counter("ai_server_provider_circuit_opens_total",
                                                              "Provider circuit breaker openings.", kProtocolLabel);
+    auto route_keys = registry_.register_counter("ai_server_route_keys_total", "Selected Provider route key sources.",
+                                                 kRouteKeyLabels);
     auto rate_checks = registry_.register_counter("ai_server_rate_limit_checks_total",
                                                   "Token rate limit check outcomes.", kResultLabel);
     auto rate_settles = registry_.register_counter("ai_server_rate_limit_settlements_total",
@@ -496,7 +517,7 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
             "ai_server_audit_capture_incomplete_total", "LLM audit records with incomplete request observations.");
     if (!requests || !duration || !inflight || !provider_attempts || !provider_failures || !provider_retries ||
         !provider_transport_failures || !provider_attempts_skipped || !dns_backoff_hits || !provider_circuit_opens ||
-        !rate_checks || !rate_settles || !sse_failures || !sse_drains || !audit_generated ||
+        !route_keys || !rate_checks || !rate_settles || !sse_failures || !sse_drains || !audit_generated ||
         !audit_generation_failures || !audit_capture_incomplete) {
         return false;
     }
@@ -518,6 +539,7 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
     std::array<prometheus::SeriesId, 2> attempts_skipped_series;
     std::array<prometheus::SeriesId, 2> dns_backoff_hit_series;
     std::array<prometheus::SeriesId, 2> circuit_open_series;
+    std::array<std::array<prometheus::SeriesId, kRouteKeySources.size()>, 2> route_key_series;
     std::array<prometheus::SeriesId, 2> sse_series;
     std::array<std::array<prometheus::SeriesId, 3>, 2> sse_drain_series;
     std::array<prometheus::SeriesId, 4> check_series;
@@ -554,6 +576,14 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
         if (!duration_id || !inflight_id || !attempt_id || !failure_id || !retry_id || !attempts_skipped_id ||
             !dns_backoff_hit_id || !circuit_open_id || !sse_id) {
             return false;
+        }
+        for (std::size_t source = 0; source < kRouteKeySources.size(); ++source) {
+            auto route_key_id = registry_.register_series(
+                    *route_keys, std::array<std::string_view, 2>{kProtocolNames[protocol], kRouteKeySources[source]});
+            if (!route_key_id) {
+                return false;
+            }
+            route_key_series[protocol][source] = *route_key_id;
         }
         for (std::size_t phase = 0; phase < kFailurePhases.size(); ++phase) {
             auto transport_failure_id = registry_.register_series(
@@ -656,6 +686,13 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
             worker.provider_attempts_skipped_[protocol] = *attempts_skipped_value;
             worker.dns_backoff_hits_[protocol] = *dns_backoff_hit_value;
             worker.provider_circuit_opens_[protocol] = *circuit_open_value;
+            for (std::size_t source = 0; source < kRouteKeySources.size(); ++source) {
+                auto route_key_value = shard->counter(route_key_series[protocol][source]);
+                if (!route_key_value) {
+                    return false;
+                }
+                worker.route_keys_[protocol][source] = *route_key_value;
+            }
             for (std::size_t phase = 0; phase < kFailurePhases.size(); ++phase) {
                 auto transport_failure_value = shard->counter(transport_failure_series[protocol][phase]);
                 if (!transport_failure_value) {
@@ -721,7 +758,8 @@ AiServerMetrics::collect(mem::IoBufNodePool &node_pool, TokenRateLimiterStats li
         co_return std::unexpected(collected.error());
     }
     BoundedTextBuilder output(*collected, kMaxMetricsOutputBytes);
-    if (!append_gauge(output, "ai_server_config_generation", "Latest installed configuration generation.",
+    if (!append_route_key_info(output) ||
+        !append_gauge(output, "ai_server_config_generation", "Latest installed configuration generation.",
                       config_generation_.load(std::memory_order_acquire)) ||
         !append_gauge(output, "ai_server_rate_limit_entries", "Local token rate limiter entries.",
                       limiter_stats.limiter_count) ||

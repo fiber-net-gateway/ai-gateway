@@ -32,12 +32,12 @@
 
 #include <openssl/sha.h>
 
+#include <fiber/cat/Status.h>
 #include <fiber/common/Assert.h>
 #include <fiber/common/IoError.h>
 #include <fiber/common/json/JsonEncode.h>
 #include <fiber/common/json/JsonPath.h>
 #include <fiber/event/EventLoop.h>
-#include <fiber/cat/Status.h>
 #include <fiber/http/HttpBodySpec.h>
 #include <fiber/http/HttpExchange.h>
 #include <fiber/http/HttpExchangeIo.h>
@@ -1758,7 +1758,7 @@ void apply_observed_provider_error(const ResolvedProviderAttempt &attempt, const
 
 class ServiceInstanceRetryState {
 public:
-    [[nodiscard]] bool init(std::string_view route_key, std::size_t maximum_attempts, mem::BufPool &pool) noexcept {
+    [[nodiscard]] bool init(ProviderRouteKey route_key, std::size_t maximum_attempts, mem::BufPool &pool) noexcept {
         route_key_ = route_key;
         capacity_ = maximum_attempts;
         if (capacity_ > 1) {
@@ -1795,7 +1795,7 @@ public:
 
 private:
     const ProjectProvider *provider_ = nullptr;
-    std::string_view route_key_;
+    ProviderRouteKey route_key_;
     std::uint64_t rendezvous_key_ = 0;
     std::uint64_t *excluded_peer_ids_ = nullptr;
     std::size_t excluded_size_ = 0;
@@ -2217,7 +2217,8 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
     }
     audit.model(requested_model, authorized->model_name);
 
-    auto route_key = build_provider_route_key(protocol, routing, authorized->route->load_balance, exchange.pool());
+    auto route_key =
+            build_provider_route_key(protocol, authenticated->principal().username(), authorized->model_name, routing);
     if (!route_key) {
         co_await send_error(exchange, cat_request, protocol,
                             LlmError{
@@ -2279,6 +2280,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
         co_await send_error(exchange, cat_request, protocol, plan_error(protocol, plan.error()));
         co_return;
     }
+    metrics_->route_key(protocol, plan->route_key.source);
     audit.reserve_provider_attempts(plan->attempts.size());
 
     ServiceInstanceRetryState service_instances;

@@ -2,6 +2,7 @@
 #define FIBER_AI_SERVER_METRICS_H
 
 #include "../limit/TokenRateLimiter.h"
+#include "../protocol/PromptAffinity.h"
 #include "../protocol/TokenUsage.h"
 #include "../provider/ProviderHttpClient.h"
 
@@ -19,12 +20,12 @@
 #include <fiber/common/NonMovable.h>
 #include <fiber/common/mem/IoBufChain.h>
 #include <fiber/event/EventLoopGroup.h>
+#include <fiber/http/HttpExchange.h>
+#include <fiber/log/Appender.h>
 #include <fiber/prometheus/Counter.h>
 #include <fiber/prometheus/Gauge.h>
 #include <fiber/prometheus/Histogram.h>
 #include <fiber/prometheus/MetricsRegistry.h>
-#include <fiber/http/HttpExchange.h>
-#include <fiber/log/Appender.h>
 
 namespace fiber::ai_server {
 
@@ -77,6 +78,7 @@ public:
         void provider_attempts_skipped(LlmWireProtocol protocol, std::size_t count) noexcept;
         void dns_backoff_hit(LlmWireProtocol protocol) noexcept;
         void provider_circuit_open(LlmWireProtocol protocol) noexcept;
+        void route_key(LlmWireProtocol protocol, PromptRouteKeySource source) noexcept;
         void rate_limit_check(RateLimitCheckMetric result) noexcept;
         void rate_limit_settle(RateLimitSettleMetric result) noexcept;
         void sse_failure(LlmWireProtocol protocol) noexcept;
@@ -92,6 +94,7 @@ public:
 
         static constexpr std::size_t kProtocolCount = 2;
         static constexpr std::size_t kRequestResultCount = 4;
+        static constexpr std::size_t kRouteKeySourceCount = static_cast<std::size_t>(PromptRouteKeySource::Count);
 
         std::array<std::array<prometheus::CounterRef, kRequestResultCount>, kProtocolCount> requests_;
         std::array<prometheus::HistogramRef, kProtocolCount> request_duration_;
@@ -105,6 +108,7 @@ public:
         std::array<prometheus::CounterRef, kProtocolCount> provider_attempts_skipped_;
         std::array<prometheus::CounterRef, kProtocolCount> dns_backoff_hits_;
         std::array<prometheus::CounterRef, kProtocolCount> provider_circuit_opens_;
+        std::array<std::array<prometheus::CounterRef, kRouteKeySourceCount>, kProtocolCount> route_keys_;
         std::array<prometheus::CounterRef, static_cast<std::size_t>(RateLimitCheckMetric::Count)> rate_limit_checks_;
         std::array<prometheus::CounterRef, static_cast<std::size_t>(RateLimitSettleMetric::Count)> rate_limit_settles_;
         std::array<prometheus::CounterRef, kProtocolCount> sse_failures_;

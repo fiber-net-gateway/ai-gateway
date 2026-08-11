@@ -31,6 +31,7 @@ add_library(ai_server_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/src/provider/WorkerDnsService.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/LlmBodyExtractor.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/LlmBodyModifier.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/protocol/PromptAffinity.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/LlmError.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/SseParser.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/TokenUsage.cpp"

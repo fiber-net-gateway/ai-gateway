@@ -13,6 +13,8 @@
 #include <fiber/common/mem/IoBuf.h>
 #include <fiber/common/mem/IoBufChain.h>
 
+#include "PromptAffinity.h"
+
 namespace fiber::ai_server {
 
 enum class LlmWireProtocol : std::uint8_t {
@@ -39,12 +41,8 @@ struct LlmBodyError {
 struct LlmRoutingData {
     json::Nullable<std::string_view> model;
     json::Nullable<bool> stream;
-    json::Nullable<std::string_view> metadata_route_key;
-    json::Nullable<std::string_view> container;
-    json::Nullable<std::string_view> prompt_cache_key;
-    json::Nullable<std::string_view> system_text;
-    json::JsonArray<json::Nullable<std::string_view>> message_roles;
-    json::JsonArray<json::Nullable<std::string_view>> message_content_texts;
+    PromptRouteCandidate direct_route_key;
+    PromptRouteCandidate prompt_affinity;
     std::size_t messages_count = 0;
     std::size_t tools_count = 0;
 };

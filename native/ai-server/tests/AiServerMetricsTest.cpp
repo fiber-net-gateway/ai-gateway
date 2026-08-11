@@ -21,6 +21,7 @@ using namespace std::chrono_literals;
 using fiber::ai_server::AiServerMetrics;
 using fiber::ai_server::LlmTokenUsage;
 using fiber::ai_server::LlmWireProtocol;
+using fiber::ai_server::PromptRouteKeySource;
 using fiber::ai_server::ProviderHttpErrorCode;
 using fiber::ai_server::RateLimitCheckMetric;
 using fiber::ai_server::RateLimitSettleMetric;
@@ -89,6 +90,9 @@ fiber::async::DetachedTask record_worker_metrics(AiServerMetrics::Worker *worker
     worker->provider_attempts_skipped(protocol, protocol == LlmWireProtocol::OpenAiChatCompletions ? 2 : 3);
     worker->dns_backoff_hit(protocol);
     worker->provider_circuit_open(protocol);
+    worker->route_key(protocol, protocol == LlmWireProtocol::OpenAiChatCompletions
+                                        ? PromptRouteKeySource::OpenAiPromptCacheKey
+                                        : PromptRouteKeySource::AnthropicMetadataUserId);
     worker->rate_limit_check(RateLimitCheckMetric::Allowed);
     worker->rate_limit_settle(RateLimitSettleMetric::Usage);
     worker->sse_failure(protocol);
@@ -188,6 +192,7 @@ TEST(AiServerMetricsTest, AggregatesRuntimeAndDynamicTokenUsageMetrics) {
     ASSERT_EQ(collected_future.wait_for(2s), std::future_status::ready);
     auto result = collected_future.get();
     ASSERT_TRUE(result);
+    EXPECT_NE(result->find("ai_server_route_key_info{algorithm=\"cache-affinity-v1\"} 1"), std::string::npos);
     EXPECT_NE(result->find("ai_server_requests_total{protocol=\"openai\",result=\"success\"} 1"), std::string::npos);
     EXPECT_NE(result->find("ai_server_requests_total{protocol=\"anthropic\",result=\"client_error\"} 1"),
               std::string::npos);
@@ -201,6 +206,11 @@ TEST(AiServerMetricsTest, AggregatesRuntimeAndDynamicTokenUsageMetrics) {
     EXPECT_NE(result->find("ai_server_provider_attempts_skipped_total{protocol=\"anthropic\"} 3"), std::string::npos);
     EXPECT_NE(result->find("ai_server_dns_backoff_hits_total{protocol=\"openai\"} 1"), std::string::npos);
     EXPECT_NE(result->find("ai_server_provider_circuit_opens_total{protocol=\"anthropic\"} 1"), std::string::npos);
+    EXPECT_NE(result->find("ai_server_route_keys_total{protocol=\"openai\",source=\"openai_prompt_cache_key\"} 1"),
+              std::string::npos);
+    EXPECT_NE(
+            result->find("ai_server_route_keys_total{protocol=\"anthropic\",source=\"anthropic_metadata_user_id\"} 1"),
+            std::string::npos);
     EXPECT_NE(result->find("ai_server_sse_drains_total{protocol=\"openai\",result=\"completed\"} 1"),
               std::string::npos);
     EXPECT_NE(result->find("ai_server_sse_drains_total{protocol=\"anthropic\",result=\"upstream_error\"} 1"),

@@ -1,23 +1,25 @@
 #ifndef FIBER_AI_SERVER_PROVIDER_ROUTE_KEY_H
 #define FIBER_AI_SERVER_PROVIDER_ROUTE_KEY_H
 
-#include "../config/LlmConfigSnapshot.h"
 #include "../protocol/LlmBody.h"
 
 #include <expected>
 #include <string_view>
 
-#include <fiber/common/mem/BufPool.h>
-
 namespace fiber::ai_server {
 
 enum class ProviderRouteKeyError : std::uint8_t {
-    OutOfMemory,
+    DigestFailure,
 };
 
-[[nodiscard]] std::expected<std::string_view, ProviderRouteKeyError>
-build_provider_route_key(LlmWireProtocol protocol, const LlmRoutingData &routing, const LoadBalanceConfig &config,
-                         mem::BufPool &pool) noexcept;
+struct ProviderRouteKey {
+    PromptDigest digest{};
+    PromptRouteKeySource source = PromptRouteKeySource::PrincipalModelFallback;
+};
+
+[[nodiscard]] std::expected<ProviderRouteKey, ProviderRouteKeyError>
+build_provider_route_key(LlmWireProtocol protocol, std::string_view authenticated_principal,
+                         std::string_view logical_model, const LlmRoutingData &routing) noexcept;
 
 } // namespace fiber::ai_server
 

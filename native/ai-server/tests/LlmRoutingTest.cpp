@@ -32,8 +32,6 @@ using fiber::ai_server::ProviderProtocol;
 using fiber::ai_server::ProviderProtocolType;
 using fiber::ai_server::ProviderRuntimeRegistry;
 using fiber::ai_server::ProviderRuntimeState;
-using fiber::json::JsonArray;
-using fiber::json::Nullable;
 using fiber::mem::BufPool;
 
 std::shared_ptr<const ProjectProvider> make_provider(std::string name, std::vector<ProviderProtocolType> protocol_types,
@@ -72,9 +70,11 @@ std::shared_ptr<const LlmProjectSnapshot> make_project(CompiledModelRoute route,
                                                 std::vector<CompiledModelRoute>{std::move(route)});
 }
 
-Nullable<std::string_view> text(std::string_view value) {
-    Nullable<std::string_view> result;
-    result.set_present(value);
+fiber::ai_server::ProviderRouteKey route_key(std::string_view value) {
+    fiber::ai_server::ProviderRouteKey result;
+    const bool hashed = fiber::ai_server::digest_opaque_route_key("test-route-key", value, result.digest);
+    EXPECT_TRUE(hashed);
+    result.source = fiber::ai_server::PromptRouteKeySource::OpenAiSemanticAnchor;
     return result;
 }
 
@@ -116,58 +116,36 @@ TEST(LlmRoutingTest, ValidatesModelAndHidesMissingFromUnauthorized) {
     EXPECT_EQ(no_config.error().code, ModelAuthorizationErrorCode::ModelConfigUnavailable);
 }
 
-TEST(LlmRoutingTest, BuildsProtocolSpecificRouteKeysAndHonorsUtf8ByteLimit) {
-    Nullable<std::string_view> roles[] = {text("user"), text("assistant")};
-    Nullable<std::string_view> contents[] = {text("你好吗"), text("ok")};
+TEST(LlmRoutingTest, DirectKeysWinThenAffinityAndPrincipalModelFallback) {
     LlmRoutingData routing;
-    routing.model = text("chat");
-    routing.message_roles = JsonArray<Nullable<std::string_view>>(roles, 2);
-    routing.message_content_texts = JsonArray<Nullable<std::string_view>>(contents, 2);
-    fiber::ai_server::LoadBalanceConfig config;
-    config.prefix_max_bytes = 9;
-    BufPool pool;
+    ASSERT_TRUE(fiber::ai_server::digest_opaque_route_key("direct", "session-a", routing.direct_route_key.digest));
+    routing.direct_route_key.source = fiber::ai_server::PromptRouteKeySource::AnthropicMetadataUserId;
+    routing.direct_route_key.available = true;
+    ASSERT_TRUE(fiber::ai_server::digest_opaque_route_key("affinity", "prompt-a", routing.prompt_affinity.digest));
+    routing.prompt_affinity.source = fiber::ai_server::PromptRouteKeySource::AnthropicExplicitCacheAnchor;
+    routing.prompt_affinity.available = true;
 
-    auto key =
-            fiber::ai_server::build_provider_route_key(LlmWireProtocol::OpenAiChatCompletions, routing, config, pool);
+    auto direct =
+            fiber::ai_server::build_provider_route_key(LlmWireProtocol::AnthropicMessages, "alice", "chat", routing);
+    ASSERT_TRUE(direct);
+    EXPECT_EQ(direct->source, fiber::ai_server::PromptRouteKeySource::AnthropicMetadataUserId);
 
-    ASSERT_TRUE(key);
-    EXPECT_EQ(*key, "user:你\n");
-    EXPECT_EQ(key->size(), 9u);
+    routing.direct_route_key.available = false;
+    auto affinity =
+            fiber::ai_server::build_provider_route_key(LlmWireProtocol::AnthropicMessages, "alice", "chat", routing);
+    ASSERT_TRUE(affinity);
+    EXPECT_EQ(affinity->source, fiber::ai_server::PromptRouteKeySource::AnthropicExplicitCacheAnchor);
 
-    routing.prompt_cache_key = text("cache-key");
-    auto cached =
-            fiber::ai_server::build_provider_route_key(LlmWireProtocol::OpenAiChatCompletions, routing, config, pool);
-    ASSERT_TRUE(cached);
-    EXPECT_EQ(*cached, "cache-key");
+    auto other_principal =
+            fiber::ai_server::build_provider_route_key(LlmWireProtocol::AnthropicMessages, "bob", "chat", routing);
+    ASSERT_TRUE(other_principal);
+    EXPECT_NE(affinity->digest, other_principal->digest);
 
-    routing.metadata_route_key = text("metadata-key");
-    auto metadata =
-            fiber::ai_server::build_provider_route_key(LlmWireProtocol::AnthropicMessages, routing, config, pool);
-    ASSERT_TRUE(metadata);
-    EXPECT_EQ(*metadata, "metadata-key");
-}
-
-TEST(LlmRoutingTest, UsesAnthropicContainerThenSystemAndMessages) {
-    Nullable<std::string_view> roles[] = {text("user")};
-    Nullable<std::string_view> contents[] = {text("hello")};
-    LlmRoutingData routing;
-    routing.model = text("claude");
-    routing.container = text("session-1");
-    routing.system_text = text("rules");
-    routing.message_roles = JsonArray<Nullable<std::string_view>>(roles, 1);
-    routing.message_content_texts = JsonArray<Nullable<std::string_view>>(contents, 1);
-    fiber::ai_server::LoadBalanceConfig config;
-    BufPool pool;
-
-    auto container =
-            fiber::ai_server::build_provider_route_key(LlmWireProtocol::AnthropicMessages, routing, config, pool);
-    ASSERT_TRUE(container);
-    EXPECT_EQ(*container, "session-1");
-
-    routing.container.set_absent();
-    auto prefix = fiber::ai_server::build_provider_route_key(LlmWireProtocol::AnthropicMessages, routing, config, pool);
-    ASSERT_TRUE(prefix);
-    EXPECT_EQ(*prefix, "rules\nuser:hello\n");
+    routing.prompt_affinity.available = false;
+    auto fallback =
+            fiber::ai_server::build_provider_route_key(LlmWireProtocol::AnthropicMessages, "alice", "chat", routing);
+    ASSERT_TRUE(fallback);
+    EXPECT_EQ(fallback->source, fiber::ai_server::PromptRouteKeySource::PrincipalModelFallback);
 }
 
 TEST(LlmRoutingTest, ProviderRuntimeAppliesTokenTtlAndThreeFailureCircuit) {
@@ -200,10 +178,10 @@ TEST(LlmRoutingTest, ResolvesSameProtocolAndExpandsTokensInStableOrder) {
     const AuthorizedModel model{.model_name = "chat", .route = &route};
     const ProviderRuntimeState::TimePoint now{100s};
 
-    auto first = fiber::ai_server::resolve_execution_plan(model, LlmWireProtocol::OpenAiChatCompletions, "same-key",
-                                                          runtime, now, first_pool);
-    auto second = fiber::ai_server::resolve_execution_plan(model, LlmWireProtocol::OpenAiChatCompletions, "same-key",
-                                                           runtime, now, second_pool);
+    auto first = fiber::ai_server::resolve_execution_plan(model, LlmWireProtocol::OpenAiChatCompletions,
+                                                          route_key("same-key"), runtime, now, first_pool);
+    auto second = fiber::ai_server::resolve_execution_plan(model, LlmWireProtocol::OpenAiChatCompletions,
+                                                           route_key("same-key"), runtime, now, second_pool);
 
     ASSERT_TRUE(first) << first.error().message;
     ASSERT_TRUE(second) << second.error().message;
@@ -231,13 +209,12 @@ TEST(LlmRoutingTest, EnforcesPrimaryProviderLimitButKeepsSelectedProviderTokens)
     BufPool pool;
 
     auto plan = fiber::ai_server::resolve_execution_plan(AuthorizedModel{.model_name = "chat", .route = &route},
-                                                         LlmWireProtocol::OpenAiChatCompletions, {}, runtime,
-                                                         ProviderRuntimeState::TimePoint{100s}, pool);
+                                                         LlmWireProtocol::OpenAiChatCompletions, route_key("limit"),
+                                                         runtime, ProviderRuntimeState::TimePoint{100s}, pool);
 
     ASSERT_TRUE(plan) << plan.error().message;
     ASSERT_EQ(plan->attempts.size(), 3u);
-    EXPECT_EQ(plan->attempts[0].provider->name, "provider-a");
-    EXPECT_EQ(plan->attempts[1].provider->name, "provider-a");
+    EXPECT_EQ(plan->attempts[0].provider->name, plan->attempts[1].provider->name);
     EXPECT_FALSE(plan->attempts[0].fallback);
     EXPECT_TRUE(plan->attempts[2].fallback);
     EXPECT_EQ(plan->attempts[2].provider->name, "provider-f");

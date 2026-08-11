@@ -41,7 +41,7 @@ TEST(LlmBodyTest, ExtractsOpenAiRoutingFieldsAndRetainsRawBody) {
     constexpr std::string_view input = R"({
   "model": "chat.public",
   "stream": true,
-  "metadata": {"routeKey": "camel", "route_key": "preferred"},
+  "metadata": {"routeKey": "ignored", "route_key": "ignored"},
   "prompt_cache_key": "cache-17",
   "messages": [
     {"role": "system", "content": "be concise"},
@@ -59,18 +59,10 @@ TEST(LlmBodyTest, ExtractsOpenAiRoutingFieldsAndRetainsRawBody) {
     EXPECT_EQ(*routing.model, "chat.public");
     ASSERT_TRUE(routing.stream.is_present());
     EXPECT_TRUE(*routing.stream);
-    ASSERT_TRUE(routing.metadata_route_key.is_present());
-    EXPECT_EQ(*routing.metadata_route_key, "preferred");
-    ASSERT_TRUE(routing.prompt_cache_key.is_present());
-    EXPECT_EQ(*routing.prompt_cache_key, "cache-17");
-    ASSERT_EQ(routing.message_roles.size(), 3u);
-    EXPECT_EQ(*routing.message_roles[0], "system");
-    EXPECT_EQ(*routing.message_roles[1], "user");
-    EXPECT_EQ(*routing.message_roles[2], "assistant");
-    ASSERT_EQ(routing.message_content_texts.size(), 3u);
-    EXPECT_EQ(*routing.message_content_texts[0], "be concise");
-    EXPECT_EQ(*routing.message_content_texts[1], "42");
-    EXPECT_TRUE(routing.message_content_texts[2].is_null());
+    EXPECT_TRUE(routing.direct_route_key.available);
+    EXPECT_EQ(routing.direct_route_key.source, fiber::ai_server::PromptRouteKeySource::OpenAiPromptCacheKey);
+    EXPECT_TRUE(routing.prompt_affinity.available);
+    EXPECT_EQ(routing.prompt_affinity.source, fiber::ai_server::PromptRouteKeySource::OpenAiSemanticAnchor);
     EXPECT_EQ(routing.messages_count, 3u);
     EXPECT_EQ(body->body_size(), input.size());
     EXPECT_EQ(std::string_view(reinterpret_cast<const char *>(body->raw_body().readable_data()),
@@ -78,11 +70,70 @@ TEST(LlmBodyTest, ExtractsOpenAiRoutingFieldsAndRetainsRawBody) {
               input);
 }
 
-TEST(LlmBodyTest, ExtractsAnthropicSpecificFieldsAndNullsComplexValues) {
+TEST(LlmBodyTest, OpenAiSemanticAnchorStopsAfterFirstUserMessage) {
+    constexpr std::string_view first = R"({
+        "tools":[{"type":"function","function":{"name":"weather"}}],
+        "messages":[
+            {"role":"system","content":"rules"},
+            {"role":"user","content":"root"}
+        ]
+    })";
+    constexpr std::string_view second = R"({
+        "tools":[{"type":"function","function":{"name":"weather"}}],
+        "messages":[
+            {"role":"system","content":"rules"},
+            {"role":"user","content":"root"},
+            {"role":"assistant","content":"answer"},
+            {"role":"user","content":"continue"}
+        ]
+    })";
+    BufPool first_pool;
+    BufPool second_pool;
+
+    auto first_body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions, make_body(first), first_pool);
+    auto second_body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions, make_body(second), second_pool);
+
+    ASSERT_TRUE(first_body) << first_body.error().message;
+    ASSERT_TRUE(second_body) << second_body.error().message;
+    EXPECT_EQ(first_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::OpenAiSemanticAnchor);
+    EXPECT_EQ(first_body->routing().prompt_affinity.digest, second_body->routing().prompt_affinity.digest);
+}
+
+TEST(LlmBodyTest, ProjectSpecificRouteKeysDoNotOverrideProtocolAffinity) {
+    constexpr std::string_view openai = R"({
+        "metadata":{"route_key":"custom-a","routeKey":"custom-b"},
+        "prompt_cache_key":"",
+        "messages":[{"role":"user","content":"root"}]
+    })";
+    constexpr std::string_view anthropic = R"({
+        "metadata":{"route_key":"custom-a","routeKey":"custom-b","user_id":""},
+        "container":"session-a",
+        "messages":[{"role":"user","content":"root"}]
+    })";
+    BufPool openai_pool;
+    BufPool anthropic_pool;
+
+    auto openai_body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions, make_body(openai), openai_pool);
+    auto anthropic_body =
+            ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(anthropic), anthropic_pool);
+
+    ASSERT_TRUE(openai_body) << openai_body.error().message;
+    ASSERT_TRUE(anthropic_body) << anthropic_body.error().message;
+    EXPECT_FALSE(openai_body->routing().direct_route_key.available);
+    EXPECT_EQ(openai_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::OpenAiSemanticAnchor);
+    EXPECT_FALSE(anthropic_body->routing().direct_route_key.available);
+    EXPECT_EQ(anthropic_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::AnthropicConversationAnchor);
+}
+
+TEST(LlmBodyTest, ExtractsAnthropicUserIdAndExplicitCacheAnchor) {
     constexpr std::string_view input = R"({
         "model":"claude.public",
         "container":"session-a",
-        "system":[{"type":"text","text":"rules"}],
+        "metadata":{"user_id":"user-a_account-b_session-c"},
+        "system":[{"type":"text","text":"rules","cache_control":{"type":"ephemeral"}}],
         "messages":[
             {"role":"user","content":"hello"},
             {"role":"assistant","content":{"type":"text","text":"world"}}
@@ -94,13 +145,180 @@ TEST(LlmBodyTest, ExtractsAnthropicSpecificFieldsAndNullsComplexValues) {
 
     ASSERT_TRUE(body) << body.error().message;
     const auto &routing = body->routing();
-    ASSERT_TRUE(routing.container.is_present());
-    EXPECT_EQ(*routing.container, "session-a");
-    EXPECT_TRUE(routing.prompt_cache_key.is_absent());
-    EXPECT_TRUE(routing.system_text.is_null());
-    ASSERT_EQ(routing.message_content_texts.size(), 2u);
-    EXPECT_EQ(*routing.message_content_texts[0], "hello");
-    EXPECT_TRUE(routing.message_content_texts[1].is_null());
+    EXPECT_TRUE(routing.direct_route_key.available);
+    EXPECT_EQ(routing.direct_route_key.source, fiber::ai_server::PromptRouteKeySource::AnthropicMetadataUserId);
+    EXPECT_TRUE(routing.prompt_affinity.available);
+    EXPECT_EQ(routing.prompt_affinity.source, fiber::ai_server::PromptRouteKeySource::AnthropicExplicitCacheAnchor);
+    EXPECT_EQ(routing.messages_count, 2u);
+}
+
+TEST(LlmBodyTest, AnthropicUserIdRemainsStableAsConversationGrows) {
+    constexpr std::string_view first = R"({
+        "metadata":{"user_id":"user-a_account-b_session-c"},
+        "messages":[{"role":"user","content":"start"}]
+    })";
+    constexpr std::string_view second = R"({
+        "metadata":{"user_id":"user-a_account-b_session-c"},
+        "messages":[
+            {"role":"user","content":"different start"},
+            {"role":"assistant","content":"answer"},
+            {"role":"user","content":"continue"}
+        ]
+    })";
+    BufPool first_pool;
+    BufPool second_pool;
+
+    auto first_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(first), first_pool);
+    auto second_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(second), second_pool);
+
+    ASSERT_TRUE(first_body) << first_body.error().message;
+    ASSERT_TRUE(second_body) << second_body.error().message;
+    EXPECT_EQ(first_body->routing().direct_route_key.source,
+              fiber::ai_server::PromptRouteKeySource::AnthropicMetadataUserId);
+    EXPECT_EQ(first_body->routing().direct_route_key.digest, second_body->routing().direct_route_key.digest);
+    EXPECT_NE(first_body->routing().prompt_affinity.digest, second_body->routing().prompt_affinity.digest);
+}
+
+TEST(LlmBodyTest, AnthropicAutomaticAnchorDoesNotMoveWithConversationSuffix) {
+    constexpr std::string_view first = R"({
+        "model":"claude.public",
+        "cache_control":{"type":"ephemeral"},
+        "system":[{"type":"text","text":"rules"}],
+        "messages":[{"role":"user","content":[{"type":"text","text":"start"}]}]
+    })";
+    constexpr std::string_view second = R"({
+        "model":"claude.public",
+        "cache_control":{"type":"ephemeral"},
+        "system":[{"type":"text","text":"rules"}],
+        "messages":[
+            {"role":"user","content":[{"type":"text","text":"start"}]},
+            {"role":"assistant","content":[{"type":"text","text":"answer"}]},
+            {"role":"user","content":[{"type":"text","text":"continue"}]}
+        ]
+    })";
+    BufPool first_pool;
+    BufPool second_pool;
+
+    auto first_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(first), first_pool);
+    auto second_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(second), second_pool);
+
+    ASSERT_TRUE(first_body) << first_body.error().message;
+    ASSERT_TRUE(second_body) << second_body.error().message;
+    EXPECT_EQ(first_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::AnthropicAutomaticCacheAnchor);
+    EXPECT_EQ(first_body->routing().prompt_affinity.digest, second_body->routing().prompt_affinity.digest);
+}
+
+TEST(LlmBodyTest, AnthropicLaterBreakpointUsesStableConversationAnchor) {
+    constexpr std::string_view first = R"({
+        "system":"rules",
+        "messages":[
+            {"role":"user","content":"root"},
+            {"role":"assistant","content":[
+                {"type":"text","text":"first answer","cache_control":{"type":"ephemeral"}}
+            ]}
+        ]
+    })";
+    constexpr std::string_view second = R"({
+        "system":"rules",
+        "messages":[
+            {"role":"user","content":"root"},
+            {"role":"assistant","content":"different answer"},
+            {"role":"user","content":[
+                {"type":"text","text":"moving breakpoint","cache_control":{"type":"ephemeral"}}
+            ]}
+        ]
+    })";
+    BufPool first_pool;
+    BufPool second_pool;
+
+    auto first_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(first), first_pool);
+    auto second_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(second), second_pool);
+
+    ASSERT_TRUE(first_body) << first_body.error().message;
+    ASSERT_TRUE(second_body) << second_body.error().message;
+    EXPECT_EQ(first_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::AnthropicExplicitCacheAnchor);
+    EXPECT_EQ(second_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::AnthropicExplicitCacheAnchor);
+    EXPECT_EQ(first_body->routing().prompt_affinity.digest, second_body->routing().prompt_affinity.digest);
+}
+
+TEST(LlmBodyTest, AnthropicBreakpointCanMoveFromFirstToLaterMessage) {
+    constexpr std::string_view first = R"({
+        "system":"rules",
+        "messages":[{
+            "role":"user",
+            "content":[{"type":"text","text":"root","cache_control":{"type":"ephemeral"}}]
+        }]
+    })";
+    constexpr std::string_view second = R"({
+        "system":"rules",
+        "messages":[
+            {"role":"user","content":[{"type":"text","text":"root"}]},
+            {"role":"assistant","content":[
+                {"type":"text","text":"answer","cache_control":{"type":"ephemeral"}}
+            ]}
+        ]
+    })";
+    BufPool first_pool;
+    BufPool second_pool;
+
+    auto first_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(first), first_pool);
+    auto second_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(second), second_pool);
+
+    ASSERT_TRUE(first_body) << first_body.error().message;
+    ASSERT_TRUE(second_body) << second_body.error().message;
+    EXPECT_EQ(first_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::AnthropicExplicitCacheAnchor);
+    EXPECT_EQ(second_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::AnthropicExplicitCacheAnchor);
+    EXPECT_EQ(first_body->routing().prompt_affinity.digest, second_body->routing().prompt_affinity.digest);
+}
+
+TEST(LlmBodyTest, AnthropicExplicitSystemBreakpointExcludesMessages) {
+    constexpr std::string_view first = R"({
+        "system":[{"cache_control":{"type":"ephemeral"},"type":"text","text":"rules"}],
+        "messages":[{"role":"user","content":"first"}]
+    })";
+    constexpr std::string_view second = R"({
+        "messages":[{"role":"user","content":"different"}],
+        "system":[{"type":"text","text":"rules","cache_control":{"type":"ephemeral"}}]
+    })";
+    BufPool first_pool;
+    BufPool second_pool;
+
+    auto first_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(first), first_pool);
+    auto second_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(second), second_pool);
+
+    ASSERT_TRUE(first_body) << first_body.error().message;
+    ASSERT_TRUE(second_body) << second_body.error().message;
+    EXPECT_EQ(first_body->routing().prompt_affinity.digest, second_body->routing().prompt_affinity.digest);
+    EXPECT_EQ(first_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::AnthropicExplicitCacheAnchor);
+}
+
+TEST(LlmBodyTest, AnthropicConversationAnchorUsesFirstMessageWithoutCacheControl) {
+    constexpr std::string_view first = R"({
+        "messages":[{"role":"user","content":"root"}]
+    })";
+    constexpr std::string_view second = R"({
+        "messages":[
+            {"role":"user","content":"root"},
+            {"role":"assistant","content":"answer"}
+        ]
+    })";
+    BufPool first_pool;
+    BufPool second_pool;
+
+    auto first_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(first), first_pool);
+    auto second_body = ParsedLlmBody::parse(LlmWireProtocol::AnthropicMessages, make_body(second), second_pool);
+
+    ASSERT_TRUE(first_body) << first_body.error().message;
+    ASSERT_TRUE(second_body) << second_body.error().message;
+    EXPECT_EQ(first_body->routing().prompt_affinity.source,
+              fiber::ai_server::PromptRouteKeySource::AnthropicConversationAnchor);
+    EXPECT_EQ(first_body->routing().prompt_affinity.digest, second_body->routing().prompt_affinity.digest);
 }
 
 TEST(LlmBodyTest, CountsMessagesAndToolsWithoutBuildingDuplicatePromptParts) {

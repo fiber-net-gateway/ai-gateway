@@ -42,13 +42,10 @@ LLM 请求正文最大为 4 MiB。入口需要在不构造完整业务 DTO 的�
 ## 3. 请求期数据流
 
 ```text
-immutable JsonPathProgram
-             |
-             v
-raw IoBuf -> JsonParser 单次遍历 -> action callback
-   |                              |-> 拷贝命中的解码字符串到 request BufPool
+raw IoBuf -> JsonParser 单次遍历 -> ai-server body parser
+   |                              |-> 拷贝 model 到 request BufPool
    |                              |-> 记录 model/stream 原始值区间
-   |                              `-> 记录通配捕获作用域
+   |                              `-> 流式计算固定大小的 prompt affinity digest
    |
    `---------------------------> ParsedLlmBody 持有原始 IoBuf
                                       |
@@ -57,16 +54,10 @@ raw IoBuf -> JsonParser 单次遍历 -> action callback
                                       `-> attempt C: 原文切片 + model C
 ```
 
-`JsonParser::current_end_offset()` 暴露当前 token 的原始、排他结束偏移。容器值的
-结束偏移由匹配遍历在读到对应 `}` 或 `]` 后确定。因此回调同时获得：
-
-- 解码后的标量值；
-- 原始 JSON 值区间 `[begin, end)`；
-- 编译期 action ID；
-- 当前通配捕获链。
-
-解析期间只有命中的字符串和小数组索引写入请求 `BufPool`。未命中的正文不复制、
-不构造 DOM。
+`JsonParser::current_end_offset()` 暴露当前 token 的原始、排他结束偏移。专用 parser
+在同一次遍历中验证完整 JSON、记录所有 `model`/`stream` patch site，并按结构化 tag、
+长度和解码值更新 SHA-256。请求期只复制授权所需的 `model`；prompt、直接路由键、
+tools 和 messages 都不复制、不构造 DOM。
 
 通用 `rewrite_json_paths` 在同一次 visitor 遍历中调用 function-pointer
 rewriter。回调可以保留原值或返回一个已经编码的 JSON value；框架会校验
@@ -75,33 +66,20 @@ replacement 是且仅是一个完整 JSON value，再用 `IoBuf` slice chain 拼
 
 ## 4. ai-server 固定抽取程序
 
-OpenAI Chat Completions：
+两个协议都抽取 `$.model`、`$.stream`、`$.tools` 和 `$.messages`。OpenAI 额外读取
+非空 `$.prompt_cache_key`；Anthropic 额外读取非空 `$.metadata.user_id`、
+`$.cache_control`、`$.system`，以及 tools/system/message content block 中的显式
+`cache_control`。
 
-- `$.model`
-- `$.stream`
-- `$.metadata.route_key`
-- `$.metadata.routeKey`
-- `$.prompt_cache_key`
-- `$.messages[*].role`
-- `$.messages[*].content`
+直接键存在时优先作为 affinity 来源；它在解析时立即单向摘要，原值不进入
+`LlmRoutingData`。没有直接键时，parser 从稳定的缓存前缀生成语义 digest；
+`cache_control` 子树不参与 digest，后续增长消息也不会移动 conversation anchor。
+`metadata.route_key`、`metadata.routeKey` 和 Anthropic `container` 作为未知扩展原样
+转发，但不影响路由。
 
-Anthropic Messages：
-
-- `$.model`
-- `$.stream`
-- `$.metadata.route_key`
-- `$.metadata.routeKey`
-- `$.container`
-- `$.system`
-- `$.messages[*].role`
-- `$.messages[*].content`
-
-`model`、路由键、角色和协议专有键只接受 JSON string 或 null；`stream` 只接受
-boolean 或 null。消息 content 和 Anthropic system 的对象、数组值按 Java 轻量
-抽取语义记为 null，不递归提取内容块。
-
-`metadata.route_key` 的非空值优先于 `metadata.routeKey`。重复 JSON 字段保持输入
-顺序：抽取结果采用最后一次匹配值，所有 `model`/`stream` 原始区间都会进入改写表。
+`model`、`prompt_cache_key`、`metadata.user_id` 只接受 JSON string 或 null；
+`stream` 只接受 boolean 或 null。重复 JSON 字段保持输入顺序：标量抽取采用最后一次
+值，所有 `model`/`stream` 原始区间都会进入改写表。
 
 ## 5. 改写契约
 
