@@ -1,6 +1,9 @@
 # Downloaded upstream source used only for local research.
 .temp/
 
+# Locally generated project-review documents.
+temp/
+
 # Dependencies and generated output.
 node_modules/
 dist/
