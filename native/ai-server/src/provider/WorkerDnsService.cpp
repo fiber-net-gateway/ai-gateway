@@ -208,7 +208,8 @@ async::Task<bool> WorkerDnsService::init(event::EventLoopGroup &group) noexcept 
         LoopEntry *current = &entry;
         spawn_on(*current->loop, [this, current, nameserver, &all_ready, &resolver_init]() -> async::DetachedTask {
             dns::DnsClient::Options client_options;
-            client_options.server = nameserver;
+            const bool nameserver_added = client_options.nameservers.add(nameserver);
+            FIBER_ASSERT(nameserver_added);
             client_options.timeout = options_.timeout;
             client_options.attempts = options_.attempts;
             const bool ready = current->local->init(*current->loop, cache_, client_options) &&

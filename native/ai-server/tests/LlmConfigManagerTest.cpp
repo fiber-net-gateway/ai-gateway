@@ -33,6 +33,8 @@ public:
 
     fiber::async::Task<void> shutdown() noexcept override { co_return; }
 
+    StatusSubscriber subscribe_status() override { return status_.subscribe(); }
+
     fiber::async::Task<std::expected<std::shared_ptr<const fiber::nacos::ConfigData>, fiber::nacos::ConfigServiceError>>
     get_config(std::string, std::string) noexcept override {
         co_return fiber::tests::make_config_data(fiber::nacos::ConfigState::NotFound);
@@ -89,6 +91,7 @@ private:
         return key;
     }
 
+    fiber::async::Watch<fiber::nacos::ConfigServiceStatus> status_{fiber::nacos::ConfigServiceStatus{}};
     std::map<std::string, std::unique_ptr<Entry>, std::less<>> entries_;
 };
 
@@ -99,6 +102,8 @@ public:
     fiber::common::IoResult<void> start() noexcept override { return {}; }
 
     fiber::async::Task<void> shutdown() noexcept override { co_return; }
+
+    StatusSubscriber subscribe_status() override { return status_.subscribe(); }
 
     fiber::async::Task<
             std::expected<std::shared_ptr<const fiber::nacos::ServiceInfo>, fiber::nacos::NamingServiceError>>
@@ -147,6 +152,7 @@ private:
         return key;
     }
 
+    fiber::async::Watch<fiber::nacos::NamingServiceStatus> status_{fiber::nacos::NamingServiceStatus{}};
     std::map<std::string, std::unique_ptr<Entry>, std::less<>> entries_;
 };
 

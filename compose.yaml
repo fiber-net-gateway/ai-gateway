@@ -177,8 +177,8 @@ services:
       context: .
       dockerfile: deploy/ai-server/Dockerfile
       args:
-        FIBER_GATEWAY_REF: b6ee98d1775b7766fc0758ee8351c81fd1ec6475
-        FIBER_GATEWAY_SHA256: ef3f074c134ea8ca8171e10fb8c7c5a5d115051fd3c1b625db0b8cb8327e231b
+        FIBER_GATEWAY_REF: 2dcf467290498ce86b0938c061f0bcf4626ee1ed
+        FIBER_GATEWAY_SHA256: 281da131b19a85d365e3e68a05875b37d6628c86adae6f367634f940e69ba70f
     environment:
       AI_SERVER_ADVERTISE_ADDRESS: 172.28.0.30
       NACOS_SERVER_ADDRESSES: 172.28.0.10
