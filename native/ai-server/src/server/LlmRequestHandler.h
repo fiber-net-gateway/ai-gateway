@@ -2,7 +2,9 @@
 #define FIBER_AI_SERVER_LLM_REQUEST_HANDLER_H
 
 #include "../config/LlmConfigSnapshot.h"
+#if AI_SERVER_AUDIT_HTTP
 #include "../audit/LlmAuditHttpSender.h"
+#endif
 #include "../limit/TokenRateLimitCoordinator.h"
 #include "../observability/AiServerMetrics.h"
 #include "../protocol/LlmBody.h"
@@ -21,6 +23,9 @@ class HttpExchange;
 namespace fiber::ai_server {
 
 class AiServerCatRequest;
+#if !AI_SERVER_AUDIT_HTTP
+class LlmAuditHttpSender;
+#endif
 
 class LlmRequestHandler {
 public:

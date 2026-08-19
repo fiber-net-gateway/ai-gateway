@@ -1,9 +1,9 @@
 add_library(ai_server_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/src/AiServer.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/AiServerCompat.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/AiServerConfig.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/AiServerLogging.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/AiServerRuntime.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/src/audit/LlmAuditHttpSender.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/audit/LlmAuditLog.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/auth/Bt1TokenVerifier.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/auth/LlmRequestAuthenticator.cpp"
@@ -42,6 +42,7 @@ add_library(ai_server_core STATIC
 find_package(Threads REQUIRED)
 if (AI_SERVER_AUDIT_TRANSPORT STREQUAL "HTTP")
     target_compile_definitions(ai_server_core PUBLIC AI_SERVER_AUDIT_HTTP=1)
+    target_sources(ai_server_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/src/audit/LlmAuditHttpSender.cpp")
 else()
     target_compile_definitions(ai_server_core PUBLIC AI_SERVER_AUDIT_HTTP=0)
 endif()

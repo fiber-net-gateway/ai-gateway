@@ -417,8 +417,21 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
             std::chrono::milliseconds &initial_config_timeout, std::optional<net::IpAddress> &advertise_address,
             std::string &service_name, std::string &service_group, std::string &zone, std::string &cluster,
             cat::CatClientConfigParams &cat_params, bool &cat_setting_present,
-            nacos::NacosClientConfigParams &nacos_params, FieldLines &field_lines, std::string &logging_config_path,
-            LlmAuditDeliveryOptions &audit_options) {
+            nacos::NacosClientConfigParams &nacos_params, FieldLines &field_lines, std::string &logging_config_path
+#if AI_SERVER_AUDIT_HTTP
+            , LlmAuditDeliveryOptions &audit_options
+#endif
+            ) {
+#if !AI_SERVER_AUDIT_HTTP
+    // HTTP audit settings are accepted but ignored in FILE builds: the audit
+    // destination is the on-disk log, configured through the logging file.
+    if (entry.key == kAuditInstanceIdKey || entry.key == kAuditIngestTokenKey ||
+        entry.key == kAuditQueueBytesKey || entry.key == kAuditBatchSizeKey ||
+        entry.key == kAuditBatchBytesKey || entry.key == kAuditFlushIntervalKey ||
+        entry.key == kAuditConnectTimeoutKey || entry.key == kAuditRequestTimeoutKey) {
+        return {};
+    }
+#endif
     if (entry.key == kListenAddressKey) {
         if (!net::IpAddress::parse(entry.value, listen_ip)) {
             return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, entry.line, entry.key,
@@ -569,6 +582,7 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
         logging_config_path = entry.value;
         return {};
     }
+#if AI_SERVER_AUDIT_HTTP
     if (entry.key == kAuditInstanceIdKey) {
         if (entry.value.empty() || entry.value.size() > 128) {
             return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, entry.line, entry.key,
@@ -634,6 +648,7 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
         }
         return {};
     }
+#endif
 
     return std::unexpected(
             make_error(AiServerConfigErrorCode::UnknownKey, entry.line, entry.key, "unknown ai-server setting"));
@@ -712,15 +727,21 @@ AiServerConfig::AiServerConfig(net::SocketAddress listen_address, nacos::NacosCl
                                std::chrono::milliseconds initial_config_timeout, net::IpAddress advertise_address,
                                std::optional<net::LocalIpv4Selection> detected_local_ipv4, std::string service_name,
                                std::string service_group, std::string zone, std::string cluster,
-                               std::optional<cat::CatClientConfig> cat_config, std::string logging_config_path,
-                               LlmAuditDeliveryOptions audit_delivery_options) noexcept
+                               std::optional<cat::CatClientConfig> cat_config, std::string logging_config_path
+#if AI_SERVER_AUDIT_HTTP
+                               , LlmAuditDeliveryOptions audit_delivery_options
+#endif
+                               ) noexcept
     :
     listen_address_(std::move(listen_address)), nacos_config_(std::move(nacos_config)),
     initial_config_timeout_(initial_config_timeout), advertise_address_(advertise_address),
     detected_local_ipv4_(std::move(detected_local_ipv4)), service_name_(std::move(service_name)),
     service_group_(std::move(service_group)), zone_(std::move(zone)), cluster_(std::move(cluster)),
-    cat_config_(std::move(cat_config)), logging_config_path_(std::move(logging_config_path)),
-    audit_delivery_options_(std::move(audit_delivery_options)) {}
+    cat_config_(std::move(cat_config)), logging_config_path_(std::move(logging_config_path))
+#if AI_SERVER_AUDIT_HTTP
+    , audit_delivery_options_(std::move(audit_delivery_options))
+#endif
+    {}
 
 std::string AiServerConfig::nacos_cluster() const {
     std::string result;
@@ -785,12 +806,18 @@ std::expected<AiServerConfig, AiServerConfigError> AiServerConfig::load_from_str
     nacos_params.namespace_id = "public";
     FieldLines field_lines;
     std::string logging_config_path;
+#if AI_SERVER_AUDIT_HTTP
     LlmAuditDeliveryOptions audit_options;
     audit_options.instance_id = "fiber-ai-server";
+#endif
     for (const EnvEntry &entry: *entries) {
         auto result = apply_entry(entry, listen_ip, listen_port, initial_config_timeout, advertise_address,
                                   service_name, service_group, zone, cluster, cat_params, cat_setting_present,
-                                  nacos_params, field_lines, logging_config_path, audit_options);
+                                  nacos_params, field_lines, logging_config_path
+#if AI_SERVER_AUDIT_HTTP
+                                  , audit_options
+#endif
+                                  );
         if (!result) {
             return std::unexpected(std::move(result.error()));
         }
@@ -841,7 +868,11 @@ std::expected<AiServerConfig, AiServerConfigError> AiServerConfig::load_from_str
     return AiServerConfig(net::SocketAddress(listen_ip, listen_port), std::move(*nacos_config), initial_config_timeout,
                           *advertise_address, std::move(detected_local_ipv4), std::move(service_name),
                           std::move(service_group), std::move(zone), std::move(cluster), std::move(cat_config),
-                          std::move(logging_config_path), std::move(audit_options));
+                          std::move(logging_config_path)
+#if AI_SERVER_AUDIT_HTTP
+                          , std::move(audit_options)
+#endif
+                          );
 }
 
 } // namespace fiber::ai_server

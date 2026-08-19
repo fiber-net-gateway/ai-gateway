@@ -322,7 +322,11 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         metrics.request_started(protocol);
         const auto started = event::EventLoop::current().now();
         LlmRequestHandler handler(provider_client_, worker.provider_runtime, rate_limit_coordinator_, metrics,
-                                  audit_max_record_bytes_, audit_http_sender_);
+                                  audit_max_record_bytes_
+#if AI_SERVER_AUDIT_HTTP
+                                  , audit_http_sender_
+#endif
+                                  );
         co_await handler.handle(exchange, protocol, worker.config, &cat_request);
         metrics.request_finished(
                 protocol, exchange.response_stats(),

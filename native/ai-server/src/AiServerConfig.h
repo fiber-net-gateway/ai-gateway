@@ -14,7 +14,11 @@
 #include <fiber/net/LocalAddress.h>
 #include <fiber/net/SocketAddress.h>
 
+#if AI_SERVER_AUDIT_HTTP
 #include "audit/LlmAuditHttpSender.h"
+#else
+struct LlmAuditDeliveryOptions;
+#endif
 
 namespace fiber::ai_server {
 
@@ -61,17 +65,22 @@ public:
     [[nodiscard]] std::string nacos_cluster() const;
     [[nodiscard]] const std::optional<cat::CatClientConfig> &cat_config() const noexcept { return cat_config_; }
     [[nodiscard]] std::string_view logging_config_path() const noexcept { return logging_config_path_; }
+#if AI_SERVER_AUDIT_HTTP
     [[nodiscard]] const LlmAuditDeliveryOptions &audit_delivery_options() const noexcept {
         return audit_delivery_options_;
     }
+#endif
 
 private:
     AiServerConfig(net::SocketAddress listen_address, nacos::NacosClientConfig nacos_config,
                    std::chrono::milliseconds initial_config_timeout, net::IpAddress advertise_address,
                    std::optional<net::LocalIpv4Selection> detected_local_ipv4, std::string service_name,
                    std::string service_group, std::string zone, std::string cluster,
-                   std::optional<cat::CatClientConfig> cat_config, std::string logging_config_path,
-                   LlmAuditDeliveryOptions audit_delivery_options) noexcept;
+                   std::optional<cat::CatClientConfig> cat_config, std::string logging_config_path
+#if AI_SERVER_AUDIT_HTTP
+                   , LlmAuditDeliveryOptions audit_delivery_options
+#endif
+                   ) noexcept;
 
     net::SocketAddress listen_address_;
     nacos::NacosClientConfig nacos_config_;
@@ -84,7 +93,9 @@ private:
     std::string cluster_;
     std::optional<cat::CatClientConfig> cat_config_;
     std::string logging_config_path_;
+#if AI_SERVER_AUDIT_HTTP
     LlmAuditDeliveryOptions audit_delivery_options_;
+#endif
 };
 
 } // namespace fiber::ai_server

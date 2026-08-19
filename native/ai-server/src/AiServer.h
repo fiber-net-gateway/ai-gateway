@@ -2,7 +2,9 @@
 #define FIBER_AI_SERVER_AI_SERVER_H
 
 #include "config/LlmConfigManager.h"
+#if AI_SERVER_AUDIT_HTTP
 #include "audit/LlmAuditHttpSender.h"
+#endif
 #include "limit/RateLimitShardRing.h"
 #include "limit/TokenRateLimitCoordinator.h"
 #include "limit/TokenRateLimitRemoteClient.h"
@@ -37,6 +39,10 @@ class CatClient;
 }
 
 namespace fiber::ai_server {
+
+#if !AI_SERVER_AUDIT_HTTP
+class LlmAuditHttpSender;
+#endif
 
 class AiServer final : public common::NonCopyable, public common::NonMovable {
 public:

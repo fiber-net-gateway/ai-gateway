@@ -101,7 +101,10 @@ private:
                     net::ListenOptions listen_options, std::chrono::milliseconds initial_config_timeout,
                     net::IpAddress advertise_address, std::string service_name, std::string service_group,
                     std::string nacos_cluster, std::unique_ptr<cat::CatClient> cat_client,
-                    std::unique_ptr<LlmAuditHttpSender> audit_sender, std::size_t audit_max_record_bytes,
+#if AI_SERVER_AUDIT_HTTP
+                    std::unique_ptr<LlmAuditHttpSender> audit_sender,
+#endif
+                    std::size_t audit_max_record_bytes,
                     log::AppenderId audit_appender_id,
                     std::unique_ptr<nacos::NacosClient> nacos_client,
                     std::unique_ptr<nacos::ConfigService> config_service,
@@ -129,7 +132,9 @@ private:
     std::unique_ptr<nacos::NacosClient> nacos_client_;
     std::unique_ptr<nacos::ConfigService> config_service_;
     std::unique_ptr<nacos::NamingService> naming_service_;
+#if AI_SERVER_AUDIT_HTTP
     std::unique_ptr<LlmAuditHttpSender> audit_sender_;
+#endif
     nacos::Subscription<nacos::ServiceInfo> console_api_subscription_;
     LlmConfigManager config_manager_;
     AiServer server_;

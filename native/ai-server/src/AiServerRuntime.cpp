@@ -97,8 +97,8 @@ AiServerRuntime::create(event::EventLoop &accept_loop, event::EventLoop &nacos_l
         }
         cat_client = std::move(*created);
     }
-    std::unique_ptr<LlmAuditHttpSender> audit_sender;
 #if AI_SERVER_AUDIT_HTTP
+    std::unique_ptr<LlmAuditHttpSender> audit_sender;
     if (!config.audit_delivery_options().ingest_token.empty()) {
         try {
             audit_sender = std::make_unique<LlmAuditHttpSender>(config.audit_delivery_options());
@@ -117,7 +117,10 @@ AiServerRuntime::create(event::EventLoop &accept_loop, event::EventLoop &nacos_l
             accept_loop, nacos_loop, cat_loop, http_workers, config.listen_address(), listen_options,
             config.initial_config_timeout(), config.advertise_address(), std::string(config.service_name()),
             std::string(config.service_group()), config.nacos_cluster(), std::move(cat_client),
-            std::move(audit_sender), audit_max_record_bytes, audit_appender_id, std::move(*client),
+#if AI_SERVER_AUDIT_HTTP
+            std::move(audit_sender),
+#endif
+            audit_max_record_bytes, audit_appender_id, std::move(*client),
             std::move(*service), std::move(*naming)));
     if (!runtime) {
         return std::unexpected(AiServerRuntimeError{
@@ -134,7 +137,9 @@ AiServerRuntime::AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop
                                  std::chrono::milliseconds initial_config_timeout, net::IpAddress advertise_address,
                                  std::string service_name, std::string service_group, std::string nacos_cluster,
                                  std::unique_ptr<cat::CatClient> cat_client,
+#if AI_SERVER_AUDIT_HTTP
                                  std::unique_ptr<LlmAuditHttpSender> audit_sender,
+#endif
                                  std::size_t audit_max_record_bytes, log::AppenderId audit_appender_id,
                                  std::unique_ptr<nacos::NacosClient> nacos_client,
                                  std::unique_ptr<nacos::ConfigService> config_service,
@@ -144,10 +149,15 @@ AiServerRuntime::AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop
     initial_config_timeout_(initial_config_timeout), advertise_address_(std::move(advertise_address)),
     cat_client_(std::move(cat_client)), nacos_client_(std::move(nacos_client)),
     config_service_(std::move(config_service)), naming_service_(std::move(naming_service)),
+#if AI_SERVER_AUDIT_HTTP
     audit_sender_(std::move(audit_sender)),
+#endif
     config_manager_(nacos_loop, *config_service_, *naming_service_),
-    server_(accept_loop, http_workers, cat_client_.get(), audit_max_record_bytes, audit_appender_id,
-            audit_sender_.get()),
+    server_(accept_loop, http_workers, cat_client_.get(), audit_max_record_bytes, audit_appender_id
+#if AI_SERVER_AUDIT_HTTP
+            , audit_sender_.get()
+#endif
+            ),
     rate_limit_membership_(nacos_loop, *naming_service_, server_.rate_limit_ring(), std::move(service_name),
                            std::move(service_group), std::move(nacos_cluster)) {
     FIBER_ASSERT(nacos_client_ != nullptr);
@@ -226,6 +236,7 @@ async::DetachedTask AiServerRuntime::start_nacos() noexcept {
         co_return;
     }
     LOG(LOG_LIFECYCLE, DEBUG) << "Nacos naming service started";
+#if AI_SERVER_AUDIT_HTTP
     if (audit_sender_) {
         auto subscription = naming_service_->subscribe(kConsoleApiService, kConsoleApiGroup,
                                                        &AiServerRuntime::on_console_api_update, this);
@@ -237,12 +248,15 @@ async::DetachedTask AiServerRuntime::start_nacos() noexcept {
                                      << static_cast<int>(subscription.error().code);
         }
     }
+#endif
     auto manager_started = config_manager_.start();
     if (!manager_started) {
         console_api_subscription_.close();
+#if AI_SERVER_AUDIT_HTTP
         if (audit_sender_) {
             audit_sender_->clear_endpoints();
         }
+#endif
         co_await naming_service_->shutdown();
         co_await config_service_->shutdown();
         co_await nacos_client_->shutdown();
@@ -278,9 +292,11 @@ async::DetachedTask AiServerRuntime::shutdown_nacos() noexcept {
     co_await rate_limit_membership_.shutdown();
     co_await config_manager_.shutdown();
     console_api_subscription_.close();
+#if AI_SERVER_AUDIT_HTTP
     if (audit_sender_) {
         audit_sender_->clear_endpoints();
     }
+#endif
     co_await naming_service_->shutdown();
     co_await config_service_->shutdown();
     co_await nacos_client_->shutdown();
@@ -330,9 +346,11 @@ async::Task<void> AiServerRuntime::fail_start() noexcept {
     state_ = AiServerRuntimeState::Stopping;
     co_await server_.shutdown_and_wait();
     co_await stop_cat();
+#if AI_SERVER_AUDIT_HTTP
     if (audit_sender_) {
         audit_sender_->shutdown();
     }
+#endif
     co_await stop_nacos();
     state_ = AiServerRuntimeState::Stopped;
 }
@@ -342,9 +360,11 @@ async::Task<std::expected<void, AiServerRuntimeError>> AiServerRuntime::start() 
     FIBER_ASSERT(state_ == AiServerRuntimeState::Created);
     state_ = AiServerRuntimeState::Starting;
 
+#if AI_SERVER_AUDIT_HTTP
     if (audit_sender_ && !audit_sender_->start()) {
         LOG(LOG_LIFECYCLE, ERROR) << "failed to start audit HTTP sender; audit records will be dropped";
     }
+#endif
 
     if (cat_client_) {
         auto cat_status = cat_start_status_.subscribe();
@@ -443,9 +463,11 @@ async::Task<void> AiServerRuntime::shutdown() noexcept {
     if (state_ == AiServerRuntimeState::Created) {
         server_.close();
         co_await stop_cat();
+#if AI_SERVER_AUDIT_HTTP
         if (audit_sender_) {
             audit_sender_->shutdown();
         }
+#endif
         co_await stop_nacos();
         state_ = AiServerRuntimeState::Stopped;
         LOG(LOG_LIFECYCLE, INFO) << "runtime shutdown completed";
@@ -455,9 +477,11 @@ async::Task<void> AiServerRuntime::shutdown() noexcept {
     state_ = AiServerRuntimeState::Stopping;
     co_await server_.shutdown_and_wait();
     co_await stop_cat();
+#if AI_SERVER_AUDIT_HTTP
     if (audit_sender_) {
         audit_sender_->shutdown();
     }
+#endif
     co_await stop_nacos();
     state_ = AiServerRuntimeState::Stopped;
     LOG(LOG_LIFECYCLE, INFO) << "runtime shutdown completed";
@@ -468,6 +492,7 @@ void AiServerRuntime::on_console_api_update(
     auto *runtime = static_cast<AiServerRuntime *>(context);
     FIBER_ASSERT(runtime != nullptr);
     FIBER_ASSERT(runtime->nacos_loop_->in_loop());
+#if AI_SERVER_AUDIT_HTTP
     if (!runtime->audit_sender_) {
         return;
     }
@@ -476,6 +501,7 @@ void AiServerRuntime::on_console_api_update(
     } else {
         runtime->audit_sender_->clear_endpoints();
     }
+#endif
 }
 
 } // namespace fiber::ai_server
