@@ -78,7 +78,8 @@ private:
                    std::string service_group, std::string zone, std::string cluster,
                    std::optional<cat::CatClientConfig> cat_config, std::string logging_config_path
 #if AI_SERVER_AUDIT_HTTP
-                   , LlmAuditDeliveryOptions audit_delivery_options
+                   ,
+                   LlmAuditDeliveryOptions audit_delivery_options
 #endif
                    ) noexcept;
 

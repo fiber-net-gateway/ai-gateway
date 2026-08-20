@@ -419,15 +419,15 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
             cat::CatClientConfigParams &cat_params, bool &cat_setting_present,
             nacos::NacosClientConfigParams &nacos_params, FieldLines &field_lines, std::string &logging_config_path
 #if AI_SERVER_AUDIT_HTTP
-            , LlmAuditDeliveryOptions &audit_options
+            ,
+            LlmAuditDeliveryOptions &audit_options
 #endif
-            ) {
+) {
 #if !AI_SERVER_AUDIT_HTTP
     // HTTP audit settings are accepted but ignored in FILE builds: the audit
     // destination is the on-disk log, configured through the logging file.
-    if (entry.key == kAuditInstanceIdKey || entry.key == kAuditIngestTokenKey ||
-        entry.key == kAuditQueueBytesKey || entry.key == kAuditBatchSizeKey ||
-        entry.key == kAuditBatchBytesKey || entry.key == kAuditFlushIntervalKey ||
+    if (entry.key == kAuditInstanceIdKey || entry.key == kAuditIngestTokenKey || entry.key == kAuditQueueBytesKey ||
+        entry.key == kAuditBatchSizeKey || entry.key == kAuditBatchBytesKey || entry.key == kAuditFlushIntervalKey ||
         entry.key == kAuditConnectTimeoutKey || entry.key == kAuditRequestTimeoutKey) {
         return {};
     }
@@ -589,8 +589,7 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
                                               "expected 1 through 128 safe ASCII bytes"));
         }
         for (const char ch: entry.value) {
-            if (std::isalnum(static_cast<unsigned char>(ch)) == 0 && ch != '.' && ch != '_' && ch != ':' &&
-                ch != '-') {
+            if (std::isalnum(static_cast<unsigned char>(ch)) == 0 && ch != '.' && ch != '_' && ch != ':' && ch != '-') {
                 return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, entry.line, entry.key,
                                                   "expected only A-Z, a-z, 0-9, dot, underscore, colon, or dash"));
             }
@@ -599,10 +598,9 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
         return {};
     }
     if (entry.key == kAuditIngestTokenKey) {
-        if (!entry.value.empty() && (entry.value.size() < 32 || entry.value.size() > 4096 ||
-                                     std::ranges::any_of(entry.value, [](unsigned char ch) {
-                                         return std::isspace(ch) != 0;
-                                     }))) {
+        if (!entry.value.empty() &&
+            (entry.value.size() < 32 || entry.value.size() > 4096 ||
+             std::ranges::any_of(entry.value, [](unsigned char ch) { return std::isspace(ch) != 0; }))) {
             return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, entry.line, entry.key,
                                               "expected at least 32 non-whitespace bytes"));
         }
@@ -610,8 +608,7 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
         return {};
     }
     if (entry.key == kAuditQueueBytesKey) {
-        if (!parse_size(entry.value, 64 * 1024, 1024ULL * 1024ULL * 1024ULL,
-                        audit_options.queue_capacity_bytes)) {
+        if (!parse_size(entry.value, 64 * 1024, 1024ULL * 1024ULL * 1024ULL, audit_options.queue_capacity_bytes)) {
             return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, entry.line, entry.key,
                                               "expected 65536 through 1073741824 bytes"));
         }
@@ -729,19 +726,21 @@ AiServerConfig::AiServerConfig(net::SocketAddress listen_address, nacos::NacosCl
                                std::string service_group, std::string zone, std::string cluster,
                                std::optional<cat::CatClientConfig> cat_config, std::string logging_config_path
 #if AI_SERVER_AUDIT_HTTP
-                               , LlmAuditDeliveryOptions audit_delivery_options
+                               ,
+                               LlmAuditDeliveryOptions audit_delivery_options
 #endif
-                               ) noexcept
-    :
+                               ) noexcept :
     listen_address_(std::move(listen_address)), nacos_config_(std::move(nacos_config)),
     initial_config_timeout_(initial_config_timeout), advertise_address_(advertise_address),
     detected_local_ipv4_(std::move(detected_local_ipv4)), service_name_(std::move(service_name)),
     service_group_(std::move(service_group)), zone_(std::move(zone)), cluster_(std::move(cluster)),
     cat_config_(std::move(cat_config)), logging_config_path_(std::move(logging_config_path))
 #if AI_SERVER_AUDIT_HTTP
-    , audit_delivery_options_(std::move(audit_delivery_options))
+    ,
+    audit_delivery_options_(std::move(audit_delivery_options))
 #endif
-    {}
+{
+}
 
 std::string AiServerConfig::nacos_cluster() const {
     std::string result;
@@ -815,9 +814,10 @@ std::expected<AiServerConfig, AiServerConfigError> AiServerConfig::load_from_str
                                   service_name, service_group, zone, cluster, cat_params, cat_setting_present,
                                   nacos_params, field_lines, logging_config_path
 #if AI_SERVER_AUDIT_HTTP
-                                  , audit_options
+                                  ,
+                                  audit_options
 #endif
-                                  );
+        );
         if (!result) {
             return std::unexpected(std::move(result.error()));
         }
@@ -870,9 +870,10 @@ std::expected<AiServerConfig, AiServerConfigError> AiServerConfig::load_from_str
                           std::move(service_group), std::move(zone), std::move(cluster), std::move(cat_config),
                           std::move(logging_config_path)
 #if AI_SERVER_AUDIT_HTTP
-                          , std::move(audit_options)
+                                  ,
+                          std::move(audit_options)
 #endif
-                          );
+    );
 }
 
 } // namespace fiber::ai_server

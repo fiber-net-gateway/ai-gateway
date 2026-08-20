@@ -16,11 +16,11 @@
 #include <fiber/async/Spawn.h>
 #include <fiber/async/Task.h>
 #include <fiber/async/WaitGroup.h>
+#include <fiber/cat/MessageTrace.h>
+#include <fiber/cat/Transaction.h>
 #include <fiber/common/NonCopyable.h>
 #include <fiber/common/NonMovable.h>
 #include <fiber/common/mem/BufPool.h>
-#include <fiber/cat/MessageTrace.h>
-#include <fiber/cat/Transaction.h>
 
 namespace fiber::ai_server {
 

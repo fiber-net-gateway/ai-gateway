@@ -11,9 +11,9 @@
 #include <new>
 #include <utility>
 
-#include <fiber/event/EventLoop.h>
 #include <fiber/cat/Status.h>
 #include <fiber/cat/Transaction.h>
+#include <fiber/event/EventLoop.h>
 #include <fiber/http/ClientHttp1Exchange.h>
 #include <fiber/http/ClientHttp1Types.h>
 #include <fiber/http/HttpBodySpec.h>

@@ -104,8 +104,8 @@ std::string accept_one_request(int listener, int status) {
             break;
         }
     }
-    const std::string response = "HTTP/1.1 " + std::to_string(status) +
-                                 " Test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+    const std::string response =
+            "HTTP/1.1 " + std::to_string(status) + " Test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
     (void) ::send(client, response.data(), response.size(), MSG_NOSIGNAL);
     ::close(client);
     return request;
@@ -151,8 +151,7 @@ TEST(LlmAuditHttpSenderTest, PostsAuthenticatedBatchToDiscoveredHealthyEndpoint)
     service->hosts = hosts;
     sender.update_endpoints(service);
     EXPECT_EQ(sender.stats().endpoint_count, 1u);
-    ASSERT_TRUE(sender.submit(
-            R"({"schema_version":5,"request_id":"request-1","auth_user":"alice"})", 1786183200000));
+    ASSERT_TRUE(sender.submit(R"({"schema_version":5,"request_id":"request-1","auth_user":"alice"})", 1786183200000));
 
     ASSERT_EQ(captured.wait_for(std::chrono::seconds(5)), std::future_status::ready);
     const std::string request = captured.get();
@@ -206,8 +205,7 @@ TEST(LlmAuditHttpSenderTest, DropsPermanentlyRejectedBatchWithoutRetry) {
     auto service = std::make_shared<fiber::nacos::ServiceInfo>();
     service->hosts = hosts;
     sender.update_endpoints(service);
-    ASSERT_TRUE(sender.submit(
-            R"({"schema_version":5,"request_id":"request-2","auth_user":"alice"})", 1786183200000));
+    ASSERT_TRUE(sender.submit(R"({"schema_version":5,"request_id":"request-2","auth_user":"alice"})", 1786183200000));
 
     ASSERT_EQ(captured.wait_for(std::chrono::seconds(5)), std::future_status::ready);
     EXPECT_FALSE(captured.get().empty());

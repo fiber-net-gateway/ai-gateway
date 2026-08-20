@@ -12,8 +12,8 @@
 #include <utility>
 
 #include <fiber/async/Spawn.h>
-#include <fiber/common/Assert.h>
 #include <fiber/cat/Status.h>
+#include <fiber/common/Assert.h>
 #include <fiber/log/Log.h>
 
 namespace fiber::ai_server {

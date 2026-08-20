@@ -8,13 +8,13 @@
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
-#include <ctime>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <new>
-#include <limits>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -61,8 +61,7 @@ bool is_ip_literal(std::string_view value) noexcept {
     in6_addr ipv6{};
     if (::inet_pton(AF_INET, text.data(), &ipv4) == 1) {
         const std::uint32_t address = ntohl(ipv4.s_addr);
-        return address != INADDR_ANY && address != INADDR_BROADCAST &&
-               (address & 0xf0000000U) != 0xe0000000U;
+        return address != INADDR_ANY && address != INADDR_BROADCAST && (address & 0xf0000000U) != 0xe0000000U;
     }
     if (::inet_pton(AF_INET6, text.data(), &ipv6) == 1) {
         return !IN6_IS_ADDR_UNSPECIFIED(&ipv6) && !IN6_IS_ADDR_MULTICAST(&ipv6);
@@ -78,16 +77,15 @@ std::string iso8601(std::int64_t millis) {
         return "1970-01-01T00:00:00.000Z";
     }
     std::array<char, 32> output{};
-    const int length = std::snprintf(output.data(), output.size(), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
-                                     utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min,
-                                     utc.tm_sec, fraction);
+    const int length =
+            std::snprintf(output.data(), output.size(), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", utc.tm_year + 1900,
+                          utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec, fraction);
     return length > 0 ? std::string(output.data(), static_cast<std::size_t>(length))
                       : std::string("1970-01-01T00:00:00.000Z");
 }
 
 std::int64_t wall_now_millis() noexcept {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::system_clock::now().time_since_epoch())
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count();
 }
 
@@ -196,9 +194,9 @@ DeliveryResult post(const Endpoint &endpoint, std::string_view token, std::strin
     if (fd < 0) {
         return DeliveryResult::Retryable;
     }
-    const auto timeout_micros =
-            std::chrono::duration_cast<std::chrono::microseconds>(std::max(request_timeout, std::chrono::milliseconds(1)))
-                    .count();
+    const auto timeout_micros = std::chrono::duration_cast<std::chrono::microseconds>(
+                                        std::max(request_timeout, std::chrono::milliseconds(1)))
+                                        .count();
     timeval timeout{
             .tv_sec = static_cast<time_t>(timeout_micros / 1'000'000),
             .tv_usec = static_cast<suseconds_t>(timeout_micros % 1'000'000),
@@ -313,8 +311,7 @@ public:
             try {
                 next.reserve(service->hosts.size());
                 for (const nacos::ServiceInstance &host: service->hosts) {
-                    if (host.healthy && host.enabled && host.weight > 0 && host.port != 0 &&
-                        is_ip_literal(host.ip)) {
+                    if (host.healthy && host.enabled && host.weight > 0 && host.port != 0 && is_ip_literal(host.ip)) {
                         next.push_back(Endpoint{.ip = std::string(host.ip), .port = host.port});
                     }
                 }

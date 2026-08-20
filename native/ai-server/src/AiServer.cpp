@@ -92,8 +92,8 @@ AiServer::AiServer(event::EventLoop &accept_loop, event::EventLoopGroup &worker_
                    LlmAuditHttpSender *audit_http_sender) :
     accept_loop_(&accept_loop), worker_group_(&worker_group), cat_client_(cat_client),
     audit_max_record_bytes_(audit_max_record_bytes), audit_appender_id_(audit_appender_id),
-    audit_http_sender_(audit_http_sender),
-    workers_(worker_group.size()), rate_limiters_(worker_group.size()), rate_limit_remote_client_(worker_group),
+    audit_http_sender_(audit_http_sender), workers_(worker_group.size()), rate_limiters_(worker_group.size()),
+    rate_limit_remote_client_(worker_group),
     rate_limit_coordinator_(rate_limiters_, rate_limit_ring_, rate_limit_remote_client_),
     provider_connections_(worker_group), provider_client_(provider_connections_), metrics_(worker_group),
     server_(
@@ -279,11 +279,11 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         }
         const auto ring = rate_limit_ring_.snapshot();
 #if AI_SERVER_AUDIT_HTTP
-        const LlmAuditDeliveryStats delivery_stats = audit_http_sender_ ? audit_http_sender_->stats()
-                                                                        : LlmAuditDeliveryStats{};
-        auto collected = co_await metrics_.collect(event::EventLoop::current().io_buf_node_pool(),
-                                                   rate_limiters_.stats(), ring ? ring->nodes.size() : 0, nullptr,
-                                                   &delivery_stats);
+        const LlmAuditDeliveryStats delivery_stats =
+                audit_http_sender_ ? audit_http_sender_->stats() : LlmAuditDeliveryStats{};
+        auto collected =
+                co_await metrics_.collect(event::EventLoop::current().io_buf_node_pool(), rate_limiters_.stats(),
+                                          ring ? ring->nodes.size() : 0, nullptr, &delivery_stats);
 #else
         const log::AppenderStats audit_stats = log::LoggerManager::global().appender_stats(audit_appender_id_);
         auto collected = co_await metrics_.collect(event::EventLoop::current().io_buf_node_pool(),
@@ -324,9 +324,10 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         LlmRequestHandler handler(provider_client_, worker.provider_runtime, rate_limit_coordinator_, metrics,
                                   audit_max_record_bytes_
 #if AI_SERVER_AUDIT_HTTP
-                                  , audit_http_sender_
+                                  ,
+                                  audit_http_sender_
 #endif
-                                  );
+        );
         co_await handler.handle(exchange, protocol, worker.config, &cat_request);
         metrics.request_finished(
                 protocol, exchange.response_stats(),
