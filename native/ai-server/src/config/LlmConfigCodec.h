@@ -26,6 +26,8 @@ struct LlmConfigError {
     std::string message;
 };
 
+[[nodiscard]] std::string_view llm_config_error_code_name(LlmConfigErrorCode code) noexcept;
+
 [[nodiscard]] std::expected<Bt1KeySnapshot, LlmConfigError> parse_bt1_key_config(std::string_view content,
                                                                                  std::string_view md5);
 

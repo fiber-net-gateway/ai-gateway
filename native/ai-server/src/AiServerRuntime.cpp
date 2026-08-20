@@ -1,15 +1,13 @@
 #include "AiServerRuntime.h"
 #include "observability/AiServerLogCategories.h"
+#include "server/InitialConfigStartupGate.h"
 
 #include <cerrno>
 #include <new>
 #include <sys/socket.h>
 #include <utility>
 
-#include <fiber/async/Sleep.h>
 #include <fiber/async/Spawn.h>
-#include <fiber/async/TaskSelect.h>
-#include <fiber/async/WhenAny.h>
 #include <fiber/common/Assert.h>
 #include <fiber/log/Log.h>
 
@@ -120,8 +118,7 @@ AiServerRuntime::create(event::EventLoop &accept_loop, event::EventLoop &nacos_l
 #if AI_SERVER_AUDIT_HTTP
             std::move(audit_sender),
 #endif
-            audit_max_record_bytes, audit_appender_id, std::move(*client),
-            std::move(*service), std::move(*naming)));
+            audit_max_record_bytes, audit_appender_id, std::move(*client), std::move(*service), std::move(*naming)));
     if (!runtime) {
         return std::unexpected(AiServerRuntimeError{
                 .code = AiServerRuntimeErrorCode::AllocateRuntime,
@@ -155,9 +152,10 @@ AiServerRuntime::AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop
     config_manager_(nacos_loop, *config_service_, *naming_service_),
     server_(accept_loop, http_workers, cat_client_.get(), audit_max_record_bytes, audit_appender_id
 #if AI_SERVER_AUDIT_HTTP
-            , audit_sender_.get()
+            ,
+            audit_sender_.get()
 #endif
-            ),
+                    ),
     rate_limit_membership_(nacos_loop, *naming_service_, server_.rate_limit_ring(), std::move(service_name),
                            std::move(service_group), std::move(nacos_cluster)) {
     FIBER_ASSERT(nacos_client_ != nullptr);
@@ -394,31 +392,33 @@ async::Task<std::expected<void, AiServerRuntimeError>> AiServerRuntime::start() 
         co_return std::unexpected(std::move(error));
     }
 
-    bool workers_ready = false;
-    if (initial_config_timeout_ > std::chrono::milliseconds::zero()) {
-        auto ready_or_timeout =
-                co_await async::when_any([this]() { return server_.start_config_workers(config_manager_).select(); },
-                                         [timeout = initial_config_timeout_]() { return async::sleep(timeout); });
-        if (ready_or_timeout.is<1>()) {
-            ready_or_timeout.get<1>();
-            co_await fail_start();
-            co_return std::unexpected(AiServerRuntimeError{
-                    .code = AiServerRuntimeErrorCode::InitialConfigTimeout,
-                    .io_error = common::IoErr::TimedOut,
-                    .message = "initial Nacos LLM configuration sync timed out",
-            });
-        }
-        workers_ready = std::move(ready_or_timeout).get<0>();
-    } else {
-        workers_ready = co_await server_.start_config_workers(config_manager_);
-    }
-    if (!workers_ready) {
+    InitialConfigGateResult initial_config =
+            co_await wait_for_initial_config(server_.start_config_workers(config_manager_),
+                                             config_manager_.subscribe_initial_rejection(), initial_config_timeout_);
+    if (initial_config.status != InitialConfigGateStatus::Installed) {
         co_await fail_start();
-        co_return std::unexpected(AiServerRuntimeError{
-                .code = AiServerRuntimeErrorCode::InitialConfigUnavailable,
-                .io_error = common::IoErr::Canceled,
-                .message = "initial Nacos LLM configuration sync stopped",
-        });
+        switch (initial_config.status) {
+            case InitialConfigGateStatus::Rejected:
+                FIBER_ASSERT(initial_config.failure != nullptr);
+                co_return std::unexpected(AiServerRuntimeError{
+                        .code = AiServerRuntimeErrorCode::InitialConfigRejected,
+                        .llm_config_failure = std::move(initial_config.failure),
+                });
+            case InitialConfigGateStatus::Unavailable:
+                co_return std::unexpected(AiServerRuntimeError{
+                        .code = AiServerRuntimeErrorCode::InitialConfigUnavailable,
+                        .io_error = common::IoErr::Canceled,
+                        .message = "initial Nacos LLM configuration sync stopped",
+                });
+            case InitialConfigGateStatus::TimedOut:
+                co_return std::unexpected(AiServerRuntimeError{
+                        .code = AiServerRuntimeErrorCode::InitialConfigTimeout,
+                        .io_error = common::IoErr::TimedOut,
+                        .message = "initial Nacos LLM configuration sync timed out",
+                });
+            case InitialConfigGateStatus::Installed:
+                FIBER_PANIC("installed initial configuration entered failure handling");
+        }
     }
     LOG(LOG_LIFECYCLE, INFO) << "initial LLM configuration installed on HTTP workers";
 
@@ -487,8 +487,8 @@ async::Task<void> AiServerRuntime::shutdown() noexcept {
     LOG(LOG_LIFECYCLE, INFO) << "runtime shutdown completed";
 }
 
-void AiServerRuntime::on_console_api_update(
-        void *context, const nacos::SubscriptionResult<nacos::ServiceInfo> &result) noexcept {
+void AiServerRuntime::on_console_api_update(void *context,
+                                            const nacos::SubscriptionResult<nacos::ServiceInfo> &result) noexcept {
     auto *runtime = static_cast<AiServerRuntime *>(context);
     FIBER_ASSERT(runtime != nullptr);
     FIBER_ASSERT(runtime->nacos_loop_->in_loop());

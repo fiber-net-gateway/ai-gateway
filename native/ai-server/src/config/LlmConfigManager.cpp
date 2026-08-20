@@ -19,8 +19,8 @@
 #include <fiber/async/WaitGroup.h>
 #include <fiber/async/WhenAny.h>
 #include <fiber/common/Assert.h>
-#include <fiber/nacos/discovery/ServiceDiscovery.h>
 #include <fiber/log/Log.h>
+#include <fiber/nacos/discovery/ServiceDiscovery.h>
 
 namespace fiber::ai_server {
 namespace {
@@ -28,8 +28,13 @@ namespace {
 DEFINE_LOGGER(LOG_CONFIG, kAiServerConfigLogger);
 DEFINE_LOGGER(LOG_DISCOVERY, kAiServerDiscoveryLogger);
 
+enum class InitialFailureAction : std::uint8_t {
+    RejectStartup,
+    WaitForUpdate,
+};
+
 void log_config_rejection(bool serving_ready, std::string_view data_id, std::string_view md5,
-                          const LlmConfigError &error) noexcept {
+                          const LlmConfigError &error, InitialFailureAction initial_action) noexcept {
     const log::LogLevel level = serving_ready ? log::LogLevel::Warn : log::LogLevel::Error;
     const log::Logger &logger = LOG_CONFIG.get();
     if (!logger.enabled(level)) {
@@ -37,7 +42,13 @@ void log_config_rejection(bool serving_ready, std::string_view data_id, std::str
     }
 
     log::LogLine line(logger, level, __FILE__, __LINE__, __func__);
-    line << "LLM config update rejected data_id=" << log::quoted(data_id) << " md5=" << log::quoted(md5);
+    const std::string_view action =
+            serving_ready
+                    ? "retain_last_good"
+                    : (initial_action == InitialFailureAction::RejectStartup ? "abort_startup" : "wait_for_update");
+    line << "LLM config update rejected data_id=" << log::quoted(data_id) << " md5=" << log::quoted(md5)
+         << " error_code=" << llm_config_error_code_name(error.code) << " initial=" << !serving_ready
+         << " action=" << action;
     if (!error.field.empty()) {
         line << " field=" << log::quoted(error.field);
     }
@@ -232,6 +243,8 @@ public:
         providers_(this, &ConfigGraph::create_provider_node), groups_(this, &ConfigGraph::create_group_node) {
         snapshot_publisher_ = snapshots_.acquire_publisher();
         FIBER_ASSERT(snapshot_publisher_.has_value());
+        initial_rejection_publisher_ = initial_rejection_.acquire_publisher();
+        FIBER_ASSERT(initial_rejection_publisher_.has_value());
     }
 
     ~ConfigGraph() {
@@ -247,6 +260,9 @@ public:
     [[nodiscard]] LlmConfigManagerState state() const noexcept { return state_; }
     [[nodiscard]] bool ready() const noexcept { return ready_; }
     [[nodiscard]] async::Watch<LlmConfigSnapshot>::Subscriber subscribe_snapshot() { return snapshots_.subscribe(); }
+    [[nodiscard]] async::Watch<LlmConfigFailure>::Subscriber subscribe_initial_rejection() {
+        return initial_rejection_.subscribe();
+    }
     [[nodiscard]] std::shared_ptr<const Bt1KeySnapshot> current_bt1_keys() const noexcept {
         return bt1_ ? bt1_->current() : nullptr;
     }
@@ -274,7 +290,8 @@ public:
     void service_wait_started() { service_waiters_.add(); }
     void service_wait_finished() { service_waiters_.done(); }
 
-    void report_failure(std::string_view data_id, std::string_view md5, LlmConfigError error);
+    void report_failure(std::string_view data_id, std::string_view md5, LlmConfigError error,
+                        InitialFailureAction initial_action = InitialFailureAction::RejectStartup);
     void report_not_found(std::string_view data_id);
 
 private:
@@ -294,6 +311,8 @@ private:
     std::shared_ptr<ModelsNode> models_;
     async::Watch<LlmConfigSnapshot> snapshots_;
     std::optional<async::Watch<LlmConfigSnapshot>::Publisher> snapshot_publisher_;
+    async::Watch<LlmConfigFailure> initial_rejection_;
+    std::optional<async::Watch<LlmConfigFailure>::Publisher> initial_rejection_publisher_;
     std::optional<LlmConfigFailure> last_failure_;
     async::WaitGroup service_waiters_;
     LlmConfigManagerState state_ = LlmConfigManagerState::Created;
@@ -301,6 +320,7 @@ private:
     std::uint64_t successful_updates_ = 0;
     std::uint64_t failed_updates_ = 0;
     bool ready_ = false;
+    bool initial_rejection_published_ = false;
 };
 
 GroupNode::GroupNode(ConfigGraph &graph, Key key) : graph_(&graph), key_(std::move(key)) {}
@@ -1017,14 +1037,20 @@ void ConfigGraph::publish_if_ready() {
                           << " bt1_keys=" << bt1_keys->keys.size();
 }
 
-void ConfigGraph::report_failure(std::string_view data_id, std::string_view md5, LlmConfigError error) {
+void ConfigGraph::report_failure(std::string_view data_id, std::string_view md5, LlmConfigError error,
+                                 InitialFailureAction initial_action) {
     ++failed_updates_;
-    log_config_rejection(ready_, data_id, md5, error);
-    last_failure_ = LlmConfigFailure{
+    log_config_rejection(ready_, data_id, md5, error, initial_action);
+    LlmConfigFailure failure{
             .data_id = std::string(data_id),
             .md5 = std::string(md5),
             .error = std::move(error),
     };
+    last_failure_ = failure;
+    if (!ready_ && initial_action == InitialFailureAction::RejectStartup && !initial_rejection_published_) {
+        initial_rejection_published_ = true;
+        initial_rejection_publisher_->publish(std::move(failure));
+    }
 }
 
 void ConfigGraph::report_not_found(std::string_view data_id) {
@@ -1032,8 +1058,10 @@ void ConfigGraph::report_not_found(std::string_view data_id) {
                    LlmConfigError{
                            .code = LlmConfigErrorCode::InvalidEnvelope,
                            .field = "data",
-                           .message = "configuration is not found; retaining the last valid snapshot",
-                   });
+                           .message = ready_ ? "configuration is not found; retaining the last valid snapshot"
+                                             : "configuration is not found while waiting for the initial snapshot",
+                   },
+                   InitialFailureAction::WaitForUpdate);
 }
 
 } // namespace
@@ -1062,6 +1090,10 @@ bool LlmConfigManager::ready() const noexcept { return impl_->graph_.ready(); }
 
 LlmConfigManager::SnapshotSubscriber LlmConfigManager::subscribe_snapshot() {
     return impl_->graph_.subscribe_snapshot();
+}
+
+LlmConfigManager::InitialRejectionSubscriber LlmConfigManager::subscribe_initial_rejection() {
+    return impl_->graph_.subscribe_initial_rejection();
 }
 
 std::shared_ptr<const Bt1KeySnapshot> LlmConfigManager::current_bt1_keys() const noexcept {

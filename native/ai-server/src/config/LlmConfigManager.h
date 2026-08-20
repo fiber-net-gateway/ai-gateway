@@ -37,6 +37,7 @@ struct LlmConfigFailure {
 class LlmConfigManager final : public common::NonCopyable, public common::NonMovable {
 public:
     using SnapshotSubscriber = async::Watch<LlmConfigSnapshot>::Subscriber;
+    using InitialRejectionSubscriber = async::Watch<LlmConfigFailure>::Subscriber;
 
     LlmConfigManager(event::EventLoop &loop, nacos::ConfigService &config_service,
                      nacos::NamingService &naming_service);
@@ -48,6 +49,7 @@ public:
     [[nodiscard]] LlmConfigManagerState state() const noexcept;
     [[nodiscard]] bool ready() const noexcept;
     [[nodiscard]] SnapshotSubscriber subscribe_snapshot();
+    [[nodiscard]] InitialRejectionSubscriber subscribe_initial_rejection();
     [[nodiscard]] std::shared_ptr<const Bt1KeySnapshot> current_bt1_keys() const noexcept;
     [[nodiscard]] std::shared_ptr<const LlmProjectSnapshot> current_project() const noexcept;
     [[nodiscard]] const std::optional<LlmConfigFailure> &last_failure() const noexcept;

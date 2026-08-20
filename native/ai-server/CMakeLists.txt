@@ -37,6 +37,7 @@ add_library(ai_server_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/TokenUsage.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/routing/ModelAuthorization.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/routing/ProviderRouteKey.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/server/InitialConfigStartupGate.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/server/LlmRequestHandler.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/server/TokenRateLimitHttpHandler.cpp")
 find_package(Threads REQUIRED)
@@ -82,6 +83,7 @@ if (FIBER_BUILD_TESTS AND (GTest_FOUND OR TARGET GTest::gtest_main))
             "${CMAKE_CURRENT_LIST_DIR}/tests/AiServerLoggingTest.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/AiServerMetricsTest.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/Bt1AuthenticationTest.cpp"
+            "${CMAKE_CURRENT_LIST_DIR}/tests/InitialConfigStartupGateTest.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/LlmBodyTest.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/LlmConfigCodecTest.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/LlmConfigManagerTest.cpp"

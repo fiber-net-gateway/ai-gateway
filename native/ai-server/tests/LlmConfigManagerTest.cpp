@@ -168,6 +168,7 @@ TEST(LlmConfigManagerTest, PublishesSnapshotsAndRetainsLastValidDynamicConfig) {
     FakeNamingService naming;
     fiber::ai_server::LlmConfigManager manager(loop, service, naming);
     auto serving = manager.subscribe_snapshot();
+    auto initial_rejection = manager.subscribe_initial_rejection();
     bool completed = false;
 
     fiber::async::spawn(loop, [&]() -> fiber::async::DetachedTask {
@@ -251,6 +252,7 @@ TEST(LlmConfigManagerTest, PublishesSnapshotsAndRetainsLastValidDynamicConfig) {
         EXPECT_EQ(manager.failed_updates(), failed_before_invalid_bt1 + 1);
         EXPECT_EQ(serving.current().value, initial_snapshot);
         EXPECT_EQ(manager.current_bt1_keys(), initial_bt1_keys);
+        EXPECT_EQ(initial_rejection.current().value, nullptr);
 
         service.push(fiber::ai_server::kBt1KeysDataId,
                      R"({"version":2,"data":{"clockSkewSec":30,"keys":[
@@ -320,6 +322,59 @@ TEST(LlmConfigManagerTest, PublishesSnapshotsAndRetainsLastValidDynamicConfig) {
     loop.run();
     EXPECT_TRUE(completed);
     EXPECT_EQ(manager.state(), fiber::ai_server::LlmConfigManagerState::Stopped);
+}
+
+TEST(LlmConfigManagerTest, RejectsOnlyTheFirstInvalidInitialConfiguration) {
+    fiber::event::EventLoop loop;
+    FakeConfigService service;
+    FakeNamingService naming;
+    fiber::ai_server::LlmConfigManager manager(loop, service, naming);
+    auto serving = manager.subscribe_snapshot();
+    auto initial_rejection = manager.subscribe_initial_rejection();
+    bool completed = false;
+
+    fiber::async::spawn(loop, [&]() -> fiber::async::DetachedTask {
+        EXPECT_TRUE(manager.start());
+        service.push_not_found(fiber::ai_server::kBt1KeysDataId);
+        co_await yield_updates();
+
+        EXPECT_EQ(initial_rejection.current().value, nullptr);
+        EXPECT_FALSE(manager.ready());
+        EXPECT_EQ(serving.current().value, nullptr);
+
+        service.push(fiber::ai_server::kBt1KeysDataId,
+                     R"({"version":1,"data":{"keys":[
+                         {"kid":"duplicate","secret":"first"},
+                         {"kid":"duplicate","secret":"second"}
+                     ]}})",
+                     "bt1-invalid");
+        co_await yield_updates();
+
+        auto first = initial_rejection.current();
+        EXPECT_NE(first.value, nullptr);
+        if (first.value) {
+            EXPECT_EQ(first.value->data_id, fiber::ai_server::kBt1KeysDataId);
+            EXPECT_EQ(first.value->md5, "bt1-invalid");
+            EXPECT_EQ(first.value->error.code, fiber::ai_server::LlmConfigErrorCode::DuplicateValue);
+            EXPECT_EQ(first.value->error.field, "data.keys[1].kid");
+        }
+        EXPECT_FALSE(manager.ready());
+        EXPECT_EQ(serving.current().value, nullptr);
+
+        service.push(fiber::ai_server::kModelsDataId, "not-json", "models-invalid");
+        co_await yield_updates();
+
+        auto unchanged = initial_rejection.current();
+        EXPECT_EQ(unchanged.version, first.version);
+        EXPECT_EQ(unchanged.value, first.value);
+
+        co_await manager.shutdown();
+        completed = true;
+        loop.stop();
+    });
+
+    loop.run();
+    EXPECT_TRUE(completed);
 }
 
 TEST(LlmConfigManagerTest, ModelsCandidateRetainsActiveTreeUntilDependenciesAreReady) {
@@ -556,6 +611,7 @@ TEST(LlmConfigManagerTest, HttpWorkersInstallInitialSnapshotBeforeBind) {
     FakeConfigService service;
     FakeNamingService naming;
     fiber::ai_server::LlmConfigManager manager(accept_loop, service, naming);
+    auto initial_rejection = manager.subscribe_initial_rejection();
     fiber::ai_server::AiServer server(accept_loop, workers);
     bool completed = false;
 
@@ -565,6 +621,16 @@ TEST(LlmConfigManagerTest, HttpWorkersInstallInitialSnapshotBeforeBind) {
                      R"({"version":1,"data":{"keys":[{"kid":"main","secret":"secret"}]}})", "bt1");
         service.push(fiber::ai_server::kModelsDataId, R"({"version":1,"data":[]})", "models");
         co_await yield_updates();
+        EXPECT_TRUE(manager.ready());
+
+        service.push(fiber::ai_server::kBt1KeysDataId,
+                     R"({"version":2,"data":{"keys":[
+                         {"kid":"duplicate","secret":"first"},
+                         {"kid":"duplicate","secret":"second"}
+                     ]}})",
+                     "bt1-invalid-after-ready");
+        co_await yield_updates();
+        EXPECT_EQ(initial_rejection.current().value, nullptr);
         EXPECT_TRUE(manager.ready());
 
         EXPECT_LT(server.fd(), 0);

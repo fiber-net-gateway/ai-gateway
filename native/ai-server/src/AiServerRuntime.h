@@ -17,12 +17,12 @@
 #include <fiber/async/Task.h>
 #include <fiber/async/WaitGroup.h>
 #include <fiber/async/Watch.h>
+#include <fiber/cat/CatClient.h>
 #include <fiber/common/IoError.h>
 #include <fiber/common/NonCopyable.h>
 #include <fiber/common/NonMovable.h>
 #include <fiber/event/EventLoop.h>
 #include <fiber/event/EventLoopGroup.h>
-#include <fiber/cat/CatClient.h>
 #include <fiber/nacos/ConfigService.h>
 #include <fiber/nacos/NacosClient.h>
 #include <fiber/nacos/NacosCreateError.h>
@@ -44,6 +44,7 @@ enum class AiServerRuntimeErrorCode : std::uint8_t {
     StartCatClient,
     StartConfigManager,
     StartRateLimitCluster,
+    InitialConfigRejected,
     InitialConfigUnavailable,
     InitialConfigTimeout,
 };
@@ -55,6 +56,7 @@ struct AiServerRuntimeError {
     nacos::ConfigServiceErrorCode config_error = nacos::ConfigServiceErrorCode::Protocol;
     nacos::NamingServiceErrorCode naming_error = nacos::NamingServiceErrorCode::Protocol;
     std::string message;
+    std::shared_ptr<const LlmConfigFailure> llm_config_failure;
 };
 
 enum class AiServerRuntimeState : std::uint8_t {
@@ -104,8 +106,7 @@ private:
 #if AI_SERVER_AUDIT_HTTP
                     std::unique_ptr<LlmAuditHttpSender> audit_sender,
 #endif
-                    std::size_t audit_max_record_bytes,
-                    log::AppenderId audit_appender_id,
+                    std::size_t audit_max_record_bytes, log::AppenderId audit_appender_id,
                     std::unique_ptr<nacos::NacosClient> nacos_client,
                     std::unique_ptr<nacos::ConfigService> config_service,
                     std::unique_ptr<nacos::NamingService> naming_service) noexcept;

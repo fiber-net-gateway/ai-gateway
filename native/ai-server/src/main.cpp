@@ -85,6 +85,8 @@ std::string_view runtime_stage_name(fiber::ai_server::AiServerRuntimeErrorCode c
             return "subscribe LLM configuration";
         case Code::StartRateLimitCluster:
             return "start token rate limit cluster";
+        case Code::InitialConfigRejected:
+            return "validate initial LLM configuration";
         case Code::InitialConfigUnavailable:
             return "install initial LLM configuration";
         case Code::InitialConfigTimeout:
@@ -98,8 +100,21 @@ void log_runtime_error(const fiber::ai_server::AiServerRuntimeError &error) noex
     line << "runtime startup failed stage=" << fiber::log::quoted(runtime_stage_name(error.code));
     if (error.io_error != fiber::common::IoErr::None) {
         line << " io_error=" << fiber::common::io_err_name(error.io_error);
-    } else if (!error.message.empty()) {
+    }
+    if (!error.message.empty()) {
         line << " reason=" << fiber::log::quoted(error.message);
+    }
+    if (error.llm_config_failure) {
+        const fiber::ai_server::LlmConfigFailure &failure = *error.llm_config_failure;
+        line << " data_id=" << fiber::log::quoted(failure.data_id) << " md5=" << fiber::log::quoted(failure.md5)
+             << " error_code=" << fiber::ai_server::llm_config_error_code_name(failure.error.code);
+        if (!failure.error.field.empty()) {
+            line << " field=" << fiber::log::quoted(failure.error.field);
+        }
+        if (failure.error.offset != 0) {
+            line << " offset=" << failure.error.offset;
+        }
+        line << " reason=" << fiber::log::quoted(failure.error.message);
     }
 }
 

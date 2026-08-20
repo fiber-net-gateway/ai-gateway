@@ -375,6 +375,22 @@ bool valid_user_group_name(std::string_view name) noexcept { return valid_name(n
 
 bool valid_model_name(std::string_view name) noexcept { return valid_name(name, 128, true); }
 
+std::string_view llm_config_error_code_name(LlmConfigErrorCode code) noexcept {
+    switch (code) {
+        case LlmConfigErrorCode::InvalidJson:
+            return "invalid_json";
+        case LlmConfigErrorCode::InvalidEnvelope:
+            return "invalid_envelope";
+        case LlmConfigErrorCode::MissingField:
+            return "missing_field";
+        case LlmConfigErrorCode::InvalidField:
+            return "invalid_field";
+        case LlmConfigErrorCode::DuplicateValue:
+            return "duplicate_value";
+    }
+    return "unknown";
+}
+
 std::expected<Bt1KeySnapshot, LlmConfigError> parse_bt1_key_config(std::string_view content, std::string_view md5) {
     mem::BufPool pool;
     json::JsonParser parser;
