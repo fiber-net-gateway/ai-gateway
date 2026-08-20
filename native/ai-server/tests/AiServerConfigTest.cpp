@@ -98,6 +98,7 @@ AUDIT_HTTP_REQUEST_TIMEOUT_MS=7500
     ASSERT_EQ(result->cat_config()->bootstrap_collectors().size(), 1u);
     EXPECT_EQ(result->cat_config()->bootstrap_collectors()[0].to_string(), "127.0.0.11:2280");
     EXPECT_EQ(result->logging_config_path(), "/tmp/custom-ai-server.logging.json");
+#if AI_SERVER_AUDIT_HTTP
     const auto &audit = result->audit_delivery_options();
     EXPECT_EQ(audit.instance_id, "ai-server:gray-1");
     EXPECT_EQ(audit.ingest_token, "0123456789abcdef0123456789abcdef");
@@ -107,6 +108,7 @@ AUDIT_HTTP_REQUEST_TIMEOUT_MS=7500
     EXPECT_EQ(audit.flush_interval, std::chrono::milliseconds(500));
     EXPECT_EQ(audit.connect_timeout, std::chrono::milliseconds(1500));
     EXPECT_EQ(audit.request_timeout, std::chrono::milliseconds(7500));
+#endif
 }
 
 TEST(AiServerConfigTest, AppliesDefaultsForOptionalSettings) {
@@ -133,10 +135,13 @@ TEST(AiServerConfigTest, AppliesDefaultsForOptionalSettings) {
     EXPECT_EQ(result->nacos_cluster(), "daily1-dev");
     EXPECT_FALSE(result->cat_config());
     EXPECT_EQ(result->logging_config_path(), "ai-server.logging.json");
+#if AI_SERVER_AUDIT_HTTP
     EXPECT_EQ(result->audit_delivery_options().instance_id, "fiber-ai-server");
     EXPECT_TRUE(result->audit_delivery_options().ingest_token.empty());
+#endif
 }
 
+#if AI_SERVER_AUDIT_HTTP
 TEST(AiServerConfigTest, RejectsInvalidAuditDeliverySettings) {
     auto short_token = AiServerConfig::load_from_string("NACOS_SERVER_ADDRESSES=127.0.0.1\n"
                                                         "AI_SERVER_LOG_CONFIG_PATH=ai-server.logging.json\n"
@@ -152,6 +157,7 @@ TEST(AiServerConfigTest, RejectsInvalidAuditDeliverySettings) {
     EXPECT_EQ(oversized_batch.error().code, AiServerConfigErrorCode::InvalidValue);
     EXPECT_EQ(oversized_batch.error().key, "AUDIT_HTTP_BATCH_SIZE");
 }
+#endif
 
 TEST(AiServerConfigTest, UsesResolvedHostIpv4ForNacosAndCatDefaults) {
     auto result = AiServerConfig::load_from_string("NACOS_SERVER_ADDRESSES=127.0.0.1\n"
