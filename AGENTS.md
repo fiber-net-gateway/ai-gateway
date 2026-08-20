@@ -106,6 +106,8 @@ Control plane:
 
 Native data plane:
 
+- `./format_code.sh` formats changed native C/C++ files with the repository style; use
+  `./format_code.sh -a` only when intentionally formatting all native sources.
 - `npm run configure:native` configures a Release HTTP-audit build in `native/build/`.
 - `npm run build:native` builds the `fiber_app_ai_server` target.
 - `npm run test:native:http` builds and runs the HTTP-audit test set.
@@ -128,7 +130,9 @@ Before submitting native changes, also run the relevant native build and both au
 the change can affect shared sources, conditional compilation, configuration, or shutdown:
 
 ```bash
+./format_code.sh
 npm run test:native
+git diff --check
 ```
 
 For Docker changes, validate the rendered Compose configuration and perform targeted container
@@ -153,6 +157,9 @@ Do not log request bodies, response bodies, authorization headers, cookies, or s
 ## C++23 and CMake Conventions
 
 Follow the migrated Fiber C++ conventions in `native/ai-server/`:
+
+Do not repeatedly format code while implementing a task. Once the task is complete, run
+`./format_code.sh` to apply the repository-wide native formatting rules.
 
 - Use C++23, four-space indentation, braces on the same line, and namespaces under
   `fiber::ai_server` or the relevant `fiber::...` module.
