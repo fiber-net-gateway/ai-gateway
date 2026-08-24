@@ -42,6 +42,13 @@ set(FIBER_BUILD_PROMETHEUS ON CACHE BOOL "" FORCE)
 set(FIBER_BUILD_CAT_DEMO OFF CACHE BOOL "" FORCE)
 set(FIBER_BUILD_PROMETHEUS_BENCHMARK OFF CACHE BOOL "" FORCE)
 
+# Debug builds skip LTO so fiber targets are plain ELF and link with any
+# system linker (GNU ld). Release keeps fiber-gateway-cpp's LTO default (ON);
+# its thin-LTO objects are LLVM bitcode, so link with lld (see build flags).
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(FIBER_ENABLE_LTO OFF CACHE BOOL "" FORCE)
+endif()
+
 FetchContent_Declare(
     fiber_gateway_cpp
     URL
