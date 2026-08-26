@@ -61,6 +61,8 @@ void print_config_error(std::string_view path, const fiber::ai_server::AiServerC
 std::string_view runtime_stage_name(fiber::ai_server::AiServerRuntimeErrorCode code) noexcept {
     using Code = fiber::ai_server::AiServerRuntimeErrorCode;
     switch (code) {
+        case Code::CreateDnsResolver:
+            return "initialize DNS resolver";
         case Code::CreateNacosClient:
             return "create Nacos client";
         case Code::CreateConfigService:

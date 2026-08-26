@@ -391,6 +391,43 @@ bool parse_size(std::string_view text, std::size_t minimum, std::size_t maximum,
     return true;
 }
 
+// Mirrors fiber's NacosServerHost::create() hostname rules so bad values are
+// reported at config load time. The authoritative parse still happens inside
+// NacosClientConfig::create() (mapped to a config error in from_nacos_error).
+bool is_valid_nacos_hostname(std::string_view host) noexcept {
+    if (host.empty()) {
+        return false;
+    }
+    if (host.back() == '.') {
+        host.remove_suffix(1);
+    }
+    if (host.empty()) {
+        return false;
+    }
+    std::size_t label_size = 0;
+    bool label_starts_with_hyphen = false;
+    for (std::size_t i = 0; i < host.size(); ++i) {
+        const unsigned char ch = static_cast<unsigned char>(host[i]);
+        if (ch == static_cast<unsigned char>('.')) {
+            if (label_size == 0 || label_size > 63 || label_starts_with_hyphen || host[i - 1] == '-') {
+                return false;
+            }
+            label_size = 0;
+            label_starts_with_hyphen = false;
+            continue;
+        }
+        const bool ascii_alnum = (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+        if (!ascii_alnum && ch != static_cast<unsigned char>('-') && ch != static_cast<unsigned char>('_')) {
+            return false;
+        }
+        if (label_size == 0) {
+            label_starts_with_hyphen = ch == static_cast<unsigned char>('-');
+        }
+        ++label_size;
+    }
+    return label_size != 0 && label_size <= 63 && !label_starts_with_hyphen && host.back() != '-';
+}
+
 std::expected<std::vector<std::string>, AiServerConfigError> parse_server_addresses(std::string_view value,
                                                                                     std::size_t line) {
     std::vector<std::string> addresses;
@@ -398,11 +435,21 @@ std::expected<std::vector<std::string>, AiServerConfigError> parse_server_addres
         const std::size_t separator = value.find(',');
         const std::string_view item = trim(separator == std::string_view::npos ? value : value.substr(0, separator));
         net::IpAddress address;
-        if (!net::IpAddress::parse(item, address)) {
+        if (net::IpAddress::parse(item, address)) {
+            if (address.is_unspecified() || address.is_multicast()) {
+                return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, line, kNacosServerAddressesKey,
+                                                  "expected a specified unicast IP literal or hostname"));
+            }
+            addresses.push_back(address.to_string());
+        } else if (is_valid_nacos_hostname(item)) {
+            // Hostnames are resolved at runtime through the shared DNS cache
+            // (NacosClient::create receives an AddressResolver); the fiber layer
+            // validates and normalizes them authoritatively.
+            addresses.push_back(std::string(item));
+        } else {
             return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, line, kNacosServerAddressesKey,
-                                              "expected comma-separated IP literals"));
+                                              "expected comma-separated IP literals or hostnames"));
         }
-        addresses.push_back(address.to_string());
 
         if (separator == std::string_view::npos) {
             break;
@@ -658,7 +705,8 @@ AiServerConfigError from_nacos_error(const nacos::NacosConfigError &error, const
                               "required setting is missing");
         case nacos::NacosConfigErrorCode::InvalidServerHost:
             return make_error(AiServerConfigErrorCode::InvalidNacosConfig, lines.server_addresses,
-                              kNacosServerAddressesKey, "Nacos server IP must be unicast and specified");
+                              kNacosServerAddressesKey,
+                              "Nacos server host must be a specified unicast IP literal or a valid hostname");
         case nacos::NacosConfigErrorCode::InvalidHttpPort:
             return make_error(AiServerConfigErrorCode::InvalidNacosConfig, lines.http_port, kNacosHttpPortKey,
                               "invalid Nacos HTTP port");

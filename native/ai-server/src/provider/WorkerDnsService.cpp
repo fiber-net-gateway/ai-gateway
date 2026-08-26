@@ -1,10 +1,10 @@
 #include "WorkerDnsService.h"
 
+#include "../DnsSetup.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cstring>
-#include <fstream>
-#include <string>
 #include <utility>
 
 #include <fiber/async/Spawn.h>
@@ -25,37 +25,6 @@ void spawn_on(event::EventLoop &loop, Factory &&factory) {
         return;
     }
     async::spawn(loop, std::forward<Factory>(factory));
-}
-
-net::SocketAddress read_nameserver() noexcept {
-    std::ifstream file("/etc/resolv.conf");
-    std::string line;
-    while (std::getline(file, line)) {
-        std::size_t pos = 0;
-        while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) {
-            ++pos;
-        }
-        if (pos >= line.size() || line[pos] == '#') {
-            continue;
-        }
-        constexpr std::string_view kNameserver = "nameserver";
-        if (line.size() - pos < kNameserver.size() || line.compare(pos, kNameserver.size(), kNameserver) != 0) {
-            continue;
-        }
-        pos += kNameserver.size();
-        while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) {
-            ++pos;
-        }
-        const std::size_t start = pos;
-        while (pos < line.size() && line[pos] != ' ' && line[pos] != '\t' && line[pos] != '#') {
-            ++pos;
-        }
-        net::IpAddress ip;
-        if (pos > start && net::IpAddress::parse(std::string_view(line).substr(start, pos - start), ip)) {
-            return net::SocketAddress(ip, 53);
-        }
-    }
-    return net::SocketAddress(net::IpAddress::v4({8, 8, 8, 8}), 53);
 }
 
 } // namespace
@@ -170,30 +139,17 @@ WorkerDnsService::~WorkerDnsService() {
     FIBER_ASSERT(entries_.empty());
 }
 
-async::Task<bool> WorkerDnsService::init(event::EventLoopGroup &group) noexcept {
+async::Task<bool> WorkerDnsService::init(event::EventLoopGroup &group, dns::SharedDnsCache2 &cache) noexcept {
     if (initialized_) {
         co_return true;
     }
     if (group.size() == 0) {
         co_return false;
     }
-    cache_loop_ = &group.at(0);
-    std::atomic_bool cache_ready{false};
-    async::WaitGroup cache_init;
-    cache_init.add();
-    spawn_on(*cache_loop_, [this, &cache_ready, &cache_init]() -> async::DetachedTask {
-        cache_ready.store(cache_.init(*cache_loop_), std::memory_order_release);
-        cache_init.done();
-        co_return;
-    });
-    co_await cache_init.join();
-    if (!cache_ready.load(std::memory_order_acquire)) {
-        cache_loop_ = nullptr;
-        co_return false;
-    }
+    cache_ = &cache;
     initialized_ = true;
 
-    const net::SocketAddress nameserver = options_.nameserver ? *options_.nameserver : read_nameserver();
+    const net::SocketAddress nameserver = options_.nameserver ? *options_.nameserver : read_system_nameserver();
     entries_.resize(group.size());
     for (std::size_t i = 0; i < group.size(); ++i) {
         entries_[i].loop = &group.at(i);
@@ -212,7 +168,7 @@ async::Task<bool> WorkerDnsService::init(event::EventLoopGroup &group) noexcept 
             FIBER_ASSERT(nameserver_added);
             client_options.timeout = options_.timeout;
             client_options.attempts = options_.attempts;
-            const bool ready = current->local->init(*current->loop, cache_, client_options) &&
+            const bool ready = current->local->init(*current->loop, *cache_, client_options) &&
                                current->resolver->init(*current->local);
             if (!ready) {
                 all_ready.store(false, std::memory_order_release);
@@ -249,17 +205,8 @@ async::Task<void> WorkerDnsService::shutdown() noexcept {
     }
     co_await releases.join();
     entries_.clear();
-
-    async::WaitGroup cache_release;
-    cache_release.add();
-    spawn_on(*cache_loop_, [this, &cache_release]() -> async::DetachedTask {
-        cache_.shutdown();
-        cache_release.done();
-        co_return;
-    });
-    co_await cache_release.join();
     transient_failures_.clear();
-    cache_loop_ = nullptr;
+    cache_ = nullptr;
     initialized_ = false;
 }
 

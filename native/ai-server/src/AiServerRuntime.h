@@ -21,6 +21,9 @@
 #include <fiber/common/IoError.h>
 #include <fiber/common/NonCopyable.h>
 #include <fiber/common/NonMovable.h>
+#include <fiber/dns/DnsCache2.h>
+#include <fiber/dns/DnsResolver.h>
+#include <fiber/dns/DnsResolverLocal.h>
 #include <fiber/event/EventLoop.h>
 #include <fiber/event/EventLoopGroup.h>
 #include <fiber/nacos/ConfigService.h>
@@ -32,6 +35,7 @@
 namespace fiber::ai_server {
 
 enum class AiServerRuntimeErrorCode : std::uint8_t {
+    CreateDnsResolver,
     CreateNacosClient,
     CreateConfigService,
     CreateNamingService,
@@ -98,11 +102,23 @@ private:
         AiServerRuntimeError error;
     };
 
+    // One process-wide DNS cache shared by every resolver stack (worker provider
+    // resolution, Nacos server resolution), plus the per-nacos-loop resolver stack.
+    // Objects are heap-owned because they are non-movable; created in create() before
+    // the event loops start (init is state-setting, no loop affinity).
+    struct RuntimeDns {
+        std::unique_ptr<dns::SharedDnsCache2> cache;
+        event::EventLoop *cache_loop = nullptr;
+        std::unique_ptr<dns::DnsResolverLocal> nacos_local;
+        std::unique_ptr<dns::DnsResolver> nacos_resolver;
+        std::unique_ptr<dns::AddressResolver> nacos_address_resolver;
+    };
+
     AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop &nacos_loop, event::EventLoop &cat_loop,
                     event::EventLoopGroup &http_workers, net::SocketAddress listen_address,
                     net::ListenOptions listen_options, std::chrono::milliseconds initial_config_timeout,
                     net::IpAddress advertise_address, std::string service_name, std::string service_group,
-                    std::string nacos_cluster, std::unique_ptr<cat::CatClient> cat_client,
+                    std::string nacos_cluster, RuntimeDns dns, std::unique_ptr<cat::CatClient> cat_client,
 #if AI_SERVER_AUDIT_HTTP
                     std::unique_ptr<LlmAuditHttpSender> audit_sender,
 #endif
@@ -118,9 +134,11 @@ private:
     [[nodiscard]] async::DetachedTask shutdown_cat() noexcept;
     [[nodiscard]] async::Task<void> stop_nacos() noexcept;
     [[nodiscard]] async::Task<void> stop_cat() noexcept;
+    [[nodiscard]] async::Task<void> stop_dns() noexcept;
     [[nodiscard]] async::Task<void> fail_start() noexcept;
     static void on_console_api_update(void *context,
                                       const nacos::SubscriptionResult<nacos::ServiceInfo> &result) noexcept;
+    static void leak_dns(RuntimeDns &dns) noexcept;
 
     event::EventLoop *accept_loop_ = nullptr;
     event::EventLoop *nacos_loop_ = nullptr;
@@ -138,6 +156,7 @@ private:
 #endif
     nacos::Subscription<nacos::ServiceInfo> console_api_subscription_;
     LlmConfigManager config_manager_;
+    RuntimeDns dns_;
     AiServer server_;
     RateLimitClusterMembership rate_limit_membership_;
     async::WaitGroup nacos_start_tasks_;

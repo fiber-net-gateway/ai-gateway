@@ -70,8 +70,9 @@ struct ProviderConnectionLease {
 
 class ProviderConnectionManager final : public common::NonCopyable, public common::NonMovable {
 public:
-    explicit ProviderConnectionManager(event::EventLoopGroup &workers) noexcept;
-    ProviderConnectionManager(event::EventLoopGroup &workers, WorkerDnsService::Options dns_options) noexcept;
+    explicit ProviderConnectionManager(event::EventLoopGroup &workers, dns::SharedDnsCache2 &dns_cache) noexcept;
+    ProviderConnectionManager(event::EventLoopGroup &workers, dns::SharedDnsCache2 &dns_cache,
+                              WorkerDnsService::Options dns_options) noexcept;
     ~ProviderConnectionManager();
 
     [[nodiscard]] async::Task<bool> init() noexcept;
@@ -85,6 +86,7 @@ public:
 
 private:
     event::EventLoopGroup *workers_ = nullptr;
+    dns::SharedDnsCache2 *dns_cache_ = nullptr;
     WorkerDnsService dns_;
     http::LocalHttp1ConnectionPoolSet pool_;
     bool pool_initialized_ = false;

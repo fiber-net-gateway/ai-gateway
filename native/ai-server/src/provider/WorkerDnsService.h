@@ -53,7 +53,8 @@ public:
     explicit WorkerDnsService(Options options) noexcept : options_(std::move(options)) {}
     ~WorkerDnsService();
 
-    [[nodiscard]] async::Task<bool> init(event::EventLoopGroup &group) noexcept;
+    // cache must be initialized by the owner before init() and must outlive this service.
+    [[nodiscard]] async::Task<bool> init(event::EventLoopGroup &group, dns::SharedDnsCache2 &cache) noexcept;
     [[nodiscard]] async::Task<void> shutdown() noexcept;
 
     [[nodiscard]] async::Task<std::expected<ProviderResolvedAddresses, ProviderDnsError>>
@@ -103,8 +104,7 @@ private:
 
     Options options_;
     TransientFailureCache transient_failures_;
-    dns::SharedDnsCache2 cache_;
-    event::EventLoop *cache_loop_ = nullptr;
+    dns::SharedDnsCache2 *cache_ = nullptr;
     std::vector<LoopEntry> entries_;
     bool initialized_ = false;
 };

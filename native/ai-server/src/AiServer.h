@@ -27,6 +27,7 @@
 #include "fiber/common/IoError.h"
 #include "fiber/common/NonCopyable.h"
 #include "fiber/common/NonMovable.h"
+#include "fiber/dns/DnsCache2.h"
 #include "fiber/event/EventLoop.h"
 #include "fiber/event/EventLoopGroup.h"
 #include "fiber/http/Http1Server.h"
@@ -46,8 +47,9 @@ class LlmAuditHttpSender;
 
 class AiServer final : public common::NonCopyable, public common::NonMovable {
 public:
-    AiServer(event::EventLoop &accept_loop, event::EventLoopGroup &worker_group, cat::CatClient *cat_client = nullptr,
-             std::size_t audit_max_record_bytes = 0, log::AppenderId audit_appender_id = log::kInvalidAppenderId,
+    AiServer(event::EventLoop &accept_loop, event::EventLoopGroup &worker_group, dns::SharedDnsCache2 &dns_cache,
+             cat::CatClient *cat_client = nullptr, std::size_t audit_max_record_bytes = 0,
+             log::AppenderId audit_appender_id = log::kInvalidAppenderId,
              LlmAuditHttpSender *audit_http_sender = nullptr);
     ~AiServer();
 

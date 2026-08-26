@@ -100,17 +100,19 @@ http::Http1ClientConnectionOptions connection_options(const net::IpAddress &ip, 
 
 } // namespace
 
-ProviderConnectionManager::ProviderConnectionManager(event::EventLoopGroup &workers) noexcept :
-    ProviderConnectionManager(workers, {}) {}
-
 ProviderConnectionManager::ProviderConnectionManager(event::EventLoopGroup &workers,
+                                                     dns::SharedDnsCache2 &dns_cache) noexcept :
+    ProviderConnectionManager(workers, dns_cache, {}) {}
+
+ProviderConnectionManager::ProviderConnectionManager(event::EventLoopGroup &workers, dns::SharedDnsCache2 &dns_cache,
                                                      WorkerDnsService::Options dns_options) noexcept :
-    workers_(&workers), dns_(std::move(dns_options)), pool_(workers, http::Http1ConnectionPoolCore::Options{
-                                                                             .max_idle_per_group = 4,
-                                                                             .max_idle_total = 256,
-                                                                             .idle_timeout = std::chrono::seconds(30),
-                                                                             .initial_group_capacity = 16,
-                                                                     }) {}
+    workers_(&workers), dns_cache_(&dns_cache), dns_(std::move(dns_options)),
+    pool_(workers, http::Http1ConnectionPoolCore::Options{
+                           .max_idle_per_group = 4,
+                           .max_idle_total = 256,
+                           .idle_timeout = std::chrono::seconds(30),
+                           .initial_group_capacity = 16,
+                   }) {}
 
 ProviderConnectionManager::~ProviderConnectionManager() { FIBER_ASSERT(!initialized_); }
 
@@ -122,7 +124,7 @@ async::Task<bool> ProviderConnectionManager::init() noexcept {
         co_return false;
     }
     pool_initialized_ = true;
-    if (!co_await dns_.init(*workers_)) {
+    if (!co_await dns_.init(*workers_, *dns_cache_)) {
         co_await dns_.shutdown();
         co_await pool_.shutdown_async();
         pool_initialized_ = false;

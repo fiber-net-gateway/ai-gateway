@@ -1,4 +1,5 @@
 #include "AiServerRuntime.h"
+#include "DnsSetup.h"
 #include "observability/AiServerLogCategories.h"
 #include "server/InitialConfigStartupGate.h"
 
@@ -9,6 +10,7 @@
 
 #include <fiber/async/Spawn.h>
 #include <fiber/common/Assert.h>
+#include <fiber/dns/DnsClient.h>
 #include <fiber/log/Log.h>
 
 namespace fiber::ai_server {
@@ -23,6 +25,14 @@ AiServerRuntimeError create_error(AiServerRuntimeErrorCode code, nacos::NacosCre
     return AiServerRuntimeError{
             .code = code,
             .create_error = error.code,
+    };
+}
+
+AiServerRuntimeError dns_error() noexcept {
+    return AiServerRuntimeError{
+            .code = AiServerRuntimeErrorCode::CreateDnsResolver,
+            .io_error = common::IoErr::Invalid,
+            .message = "failed to initialize DNS resolver",
     };
 }
 
@@ -71,22 +81,59 @@ AiServerRuntime::create(event::EventLoop &accept_loop, event::EventLoop &nacos_l
                         event::EventLoopGroup &http_workers, const AiServerConfig &config,
                         std::size_t audit_max_record_bytes, log::AppenderId audit_appender_id,
                         const net::ListenOptions &listen_options) {
-    auto client = nacos::NacosClient::create(nacos_loop, config.nacos_config());
+    // One process-wide DNS cache shared by the provider worker resolvers and the Nacos
+    // resolver. The Nacos resolver stack enables hostname (not just IP literal) Nacos
+    // servers. Init is state-setting (no in-loop requirement) so it runs here before the
+    // event loops start; the resolver fds are created and registered lazily on first use.
+    RuntimeDns dns;
+    dns.cache = std::make_unique<dns::SharedDnsCache2>();
+    dns.cache_loop = http_workers.size() > 0 ? &http_workers.at(0) : &nacos_loop;
+    if (!dns.cache->init(*dns.cache_loop)) {
+        leak_dns(dns);
+        return std::unexpected(dns_error());
+    }
+
+    dns::DnsClient::Options client_options;
+    FIBER_ASSERT(client_options.nameservers.add(read_system_nameserver()));
+    client_options.timeout = std::chrono::milliseconds(2000);
+    client_options.attempts = 2;
+
+    dns.nacos_local = std::make_unique<dns::DnsResolverLocal>();
+    if (!dns.nacos_local->init(nacos_loop, *dns.cache, client_options)) {
+        leak_dns(dns);
+        return std::unexpected(dns_error());
+    }
+    dns.nacos_resolver = std::make_unique<dns::DnsResolver>();
+    if (!dns.nacos_resolver->init(*dns.nacos_local)) {
+        leak_dns(dns);
+        return std::unexpected(dns_error());
+    }
+    dns.nacos_address_resolver = std::make_unique<dns::AddressResolver>();
+    if (!dns.nacos_address_resolver->init(*dns.nacos_resolver)) {
+        leak_dns(dns);
+        return std::unexpected(dns_error());
+    }
+
+    auto client = nacos::NacosClient::create(nacos_loop, *dns.nacos_address_resolver, config.nacos_config());
     if (!client) {
+        leak_dns(dns);
         return std::unexpected(create_error(AiServerRuntimeErrorCode::CreateNacosClient, client.error()));
     }
     auto service = nacos::ConfigService::create(**client);
     if (!service) {
+        leak_dns(dns);
         return std::unexpected(create_error(AiServerRuntimeErrorCode::CreateConfigService, service.error()));
     }
     auto naming = nacos::NamingService::create(**client);
     if (!naming) {
+        leak_dns(dns);
         return std::unexpected(create_error(AiServerRuntimeErrorCode::CreateNamingService, naming.error()));
     }
     std::unique_ptr<cat::CatClient> cat_client;
     if (config.cat_config()) {
         auto created = cat::CatClient::create(cat_loop, *config.cat_config());
         if (!created) {
+            leak_dns(dns);
             return std::unexpected(AiServerRuntimeError{
                     .code = AiServerRuntimeErrorCode::CreateCatClient,
                     .io_error = common::IoErr::Invalid,
@@ -114,12 +161,13 @@ AiServerRuntime::create(event::EventLoop &accept_loop, event::EventLoop &nacos_l
     auto runtime = std::unique_ptr<AiServerRuntime>(new (std::nothrow) AiServerRuntime(
             accept_loop, nacos_loop, cat_loop, http_workers, config.listen_address(), listen_options,
             config.initial_config_timeout(), config.advertise_address(), std::string(config.service_name()),
-            std::string(config.service_group()), config.nacos_cluster(), std::move(cat_client),
+            std::string(config.service_group()), config.nacos_cluster(), std::move(dns), std::move(cat_client),
 #if AI_SERVER_AUDIT_HTTP
             std::move(audit_sender),
 #endif
             audit_max_record_bytes, audit_appender_id, std::move(*client), std::move(*service), std::move(*naming)));
     if (!runtime) {
+        leak_dns(dns);
         return std::unexpected(AiServerRuntimeError{
                 .code = AiServerRuntimeErrorCode::AllocateRuntime,
                 .create_error = nacos::NacosCreateErrorCode::NoMem,
@@ -128,12 +176,23 @@ AiServerRuntime::create(event::EventLoop &accept_loop, event::EventLoop &nacos_l
     return runtime;
 }
 
+void AiServerRuntime::leak_dns(RuntimeDns &dns) noexcept {
+    // SharedDnsCache2::shutdown() and DnsResolverLocal::release() must run on their
+    // owning event loops, which are not started yet during create(). On a startup
+    // failure the process is exiting anyway, so intentionally leak the objects
+    // instead of hitting their in-loop destructor assertions.
+    (void) dns.cache.release();
+    (void) dns.nacos_local.release();
+    (void) dns.nacos_resolver.release();
+    (void) dns.nacos_address_resolver.release();
+}
+
 AiServerRuntime::AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop &nacos_loop,
                                  event::EventLoop &cat_loop, event::EventLoopGroup &http_workers,
                                  net::SocketAddress listen_address, net::ListenOptions listen_options,
                                  std::chrono::milliseconds initial_config_timeout, net::IpAddress advertise_address,
                                  std::string service_name, std::string service_group, std::string nacos_cluster,
-                                 std::unique_ptr<cat::CatClient> cat_client,
+                                 RuntimeDns dns, std::unique_ptr<cat::CatClient> cat_client,
 #if AI_SERVER_AUDIT_HTTP
                                  std::unique_ptr<LlmAuditHttpSender> audit_sender,
 #endif
@@ -149,8 +208,8 @@ AiServerRuntime::AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop
 #if AI_SERVER_AUDIT_HTTP
     audit_sender_(std::move(audit_sender)),
 #endif
-    config_manager_(nacos_loop, *config_service_, *naming_service_),
-    server_(accept_loop, http_workers, cat_client_.get(), audit_max_record_bytes, audit_appender_id
+    config_manager_(nacos_loop, *config_service_, *naming_service_), dns_(std::move(dns)),
+    server_(accept_loop, http_workers, *dns_.cache, cat_client_.get(), audit_max_record_bytes, audit_appender_id
 #if AI_SERVER_AUDIT_HTTP
             ,
             audit_sender_.get()
@@ -161,6 +220,8 @@ AiServerRuntime::AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop
     FIBER_ASSERT(nacos_client_ != nullptr);
     FIBER_ASSERT(config_service_ != nullptr);
     FIBER_ASSERT(naming_service_ != nullptr);
+    FIBER_ASSERT(dns_.cache != nullptr);
+    FIBER_ASSERT(dns_.cache_loop != nullptr);
     FIBER_ASSERT(accept_loop_ != nacos_loop_);
     FIBER_ASSERT(accept_loop_ != cat_loop_);
     FIBER_ASSERT(nacos_loop_ != cat_loop_);
@@ -339,6 +400,46 @@ async::Task<void> AiServerRuntime::stop_cat() noexcept {
     }
 }
 
+async::Task<void> AiServerRuntime::stop_dns() noexcept {
+    FIBER_ASSERT(accept_loop_->in_loop());
+    if (!dns_.cache) {
+        co_return;
+    }
+    // Runs after stop_nacos(), so the Nacos resolver is no longer in use. Release the
+    // per-loop resolver stack on the Nacos loop, then shut the shared cache down on its
+    // owner loop. Worker resolvers were already released by server_.shutdown_and_wait().
+    async::WaitGroup release_wg;
+    release_wg.add();
+    async::spawn(*nacos_loop_, [this, &release_wg]() -> async::DetachedTask {
+        if (dns_.nacos_address_resolver) {
+            dns_.nacos_address_resolver->release();
+        }
+        if (dns_.nacos_resolver) {
+            dns_.nacos_resolver->release();
+        }
+        if (dns_.nacos_local) {
+            dns_.nacos_local->release();
+        }
+        release_wg.done();
+        co_return;
+    });
+    co_await release_wg.join();
+
+    async::WaitGroup cache_wg;
+    cache_wg.add();
+    async::spawn(*dns_.cache_loop, [this, &cache_wg]() -> async::DetachedTask {
+        dns_.cache->shutdown();
+        cache_wg.done();
+        co_return;
+    });
+    co_await cache_wg.join();
+    dns_.cache.reset();
+    dns_.nacos_local.reset();
+    dns_.nacos_resolver.reset();
+    dns_.nacos_address_resolver.reset();
+    dns_.cache_loop = nullptr;
+}
+
 async::Task<void> AiServerRuntime::fail_start() noexcept {
     FIBER_ASSERT(accept_loop_->in_loop());
     state_ = AiServerRuntimeState::Stopping;
@@ -350,6 +451,7 @@ async::Task<void> AiServerRuntime::fail_start() noexcept {
     }
 #endif
     co_await stop_nacos();
+    co_await stop_dns();
     state_ = AiServerRuntimeState::Stopped;
 }
 
@@ -469,6 +571,7 @@ async::Task<void> AiServerRuntime::shutdown() noexcept {
         }
 #endif
         co_await stop_nacos();
+        co_await stop_dns();
         state_ = AiServerRuntimeState::Stopped;
         LOG(LOG_LIFECYCLE, INFO) << "runtime shutdown completed";
         co_return;
@@ -483,6 +586,7 @@ async::Task<void> AiServerRuntime::shutdown() noexcept {
     }
 #endif
     co_await stop_nacos();
+    co_await stop_dns();
     state_ = AiServerRuntimeState::Stopped;
     LOG(LOG_LIFECYCLE, INFO) << "runtime shutdown completed";
 }
