@@ -8,6 +8,7 @@ import { marketplaceReleaseOrchestrationMigration } from './004-marketplace-rele
 import { modelOwnedAccessGroupsMigration } from './005-model-owned-access-groups.js'
 import { llmCallAuditMigration } from './006-llm-call-audit.js'
 import { accessGroupPublicationEvidenceMigration } from './007-access-group-publication-evidence.js'
+import { llmCallAuditUsageComponentsMigration } from './008-llm-call-audit-usage-components.js'
 
 const migrations = [
   userModuleMigration,
@@ -17,6 +18,7 @@ const migrations = [
   modelOwnedAccessGroupsMigration,
   llmCallAuditMigration,
   accessGroupPublicationEvidenceMigration,
+  llmCallAuditUsageComponentsMigration,
 ]
 
 test('every migration starts with the idempotent migration-table bootstrap', () => {
@@ -35,4 +37,16 @@ test('publication evidence migration does not recreate a foreign key with the dr
   assert.match(statement, /DROP FOREIGN KEY fk_access_publication_request/)
   assert.doesNotMatch(statement, /ADD CONSTRAINT fk_access_publication_request\b/)
   assert.match(statement, /ADD CONSTRAINT fk_access_group_publication_request/)
+})
+
+test('audit usage migration preserves v5 while adding nullable v6 component columns', () => {
+  const statement = llmCallAuditUsageComponentsMigration.statements[1]
+
+  assert.match(statement, /ADD COLUMN in_cache_tokens BIGINT UNSIGNED NULL/)
+  assert.match(statement, /ADD COLUMN in_nocache_tokens BIGINT UNSIGNED NULL/)
+  assert.match(statement, /ADD COLUMN out_tokens BIGINT UNSIGNED NULL/)
+  assert.match(statement, /MODIFY COLUMN prompt_tokens BIGINT UNSIGNED NULL/)
+  assert.match(statement, /MODIFY COLUMN completion_tokens BIGINT UNSIGNED NULL/)
+  assert.match(statement, /MODIFY COLUMN total_tokens BIGINT UNSIGNED NULL/)
+  assert.match(statement, /source_schema_version IN \(5, 6\)/)
 })

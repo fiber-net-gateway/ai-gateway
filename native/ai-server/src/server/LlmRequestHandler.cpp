@@ -1126,18 +1126,22 @@ private:
         return {};
     }
 
-    [[nodiscard]] static std::int64_t usage_value(const std::optional<std::int64_t> &value) noexcept {
-        return value.value_or(0);
+    static void encode_usage_field(AuditJsonWriter &json, std::string_view name,
+                                   const std::optional<std::int64_t> &value) noexcept {
+        if (value) {
+            json.field(name, *value);
+        } else {
+            json.null_field(name);
+        }
     }
 
-    [[nodiscard]] static std::int64_t add_usage(std::int64_t left, std::int64_t right) noexcept {
-        if (right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) {
-            return std::numeric_limits<std::int64_t>::max();
-        }
-        if (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right) {
-            return std::numeric_limits<std::int64_t>::min();
-        }
-        return left + right;
+    void encode_usage(AuditJsonWriter &json) const noexcept {
+        json.key("usage_json");
+        json.object_open();
+        encode_usage_field(json, "in_cache", usage_.in_cache);
+        encode_usage_field(json, "in_nocache", usage_.in_nocache);
+        encode_usage_field(json, "out", usage_.out);
+        json.object_close();
     }
 
     [[nodiscard]] bool encode(AuditJsonWriter &json, const http::HttpResponseStats &response,
@@ -1163,7 +1167,7 @@ private:
         }
 
         json.object_open();
-        json.field("schema_version", 5);
+        json.field("schema_version", 6);
         json.field("event", "llm_request");
         json.field("request_id", request_id_);
         json.field("capture_complete", capture_complete);
@@ -1218,12 +1222,7 @@ private:
         }
         json.field("finish_reason", output_.finish_reason());
         json.field("tool_names", output_.tool_names());
-        json.key("usage_json");
-        json.object_open();
-        json.field("promptTokens", add_usage(usage_value(usage_.in_cache), usage_value(usage_.in_nocache)));
-        json.field("completionTokens", usage_value(usage_.out));
-        json.field("total_tokens", usage_value(usage_.total_tokens));
-        json.object_close();
+        encode_usage(json);
         json.field("duration_ms", duration_us / 1000);
         if (attempts_size_ == 0) {
             json.null_field("upstream_status");
@@ -1267,13 +1266,8 @@ private:
         const bool capture_complete = capture_error_.empty() && attempts_observed_ == attempts_size_;
         capture_incomplete_ = !capture_complete;
         const std::string_view error = error_json(response);
-        const std::int64_t prompt_tokens =
-                std::max<std::int64_t>(add_usage(usage_value(usage_.in_cache), usage_value(usage_.in_nocache)), 0);
-        const std::int64_t completion_tokens = std::max<std::int64_t>(usage_value(usage_.out), 0);
-        const std::int64_t total_tokens = std::max<std::int64_t>(usage_value(usage_.total_tokens), 0);
-
         json.object_open();
-        json.field("schema_version", 5);
+        json.field("schema_version", 6);
         json.field("event", "llm_request");
         json.field("request_id", request_id_);
         json.field("auth_user", user_.view());
@@ -1284,12 +1278,7 @@ private:
         json.field("stream", stream_);
         json.field("status", response.status_code);
         json.field("duration_ms", std::max<std::int64_t>(duration_us / 1000, 0));
-        json.key("usage_json");
-        json.object_open();
-        json.field("promptTokens", prompt_tokens);
-        json.field("completionTokens", completion_tokens);
-        json.field("total_tokens", total_tokens);
-        json.object_close();
+        encode_usage(json);
         json.field("client_aborted", !response.completed);
         json.field("error_json", error);
         json.field("capture_complete", capture_complete);
@@ -1839,7 +1828,7 @@ public:
         return *this;
     }
 
-    void settle_async(std::optional<std::int64_t> total_tokens) noexcept {
+    void settle_async(std::optional<std::int64_t> summed_tokens) noexcept {
         if (!manager_) {
             return;
         }
@@ -1848,11 +1837,11 @@ public:
         manager_ = nullptr;
         metrics_ = nullptr;
         manager->settle(
-                std::move(owner_), user_, model_, ticket_, total_tokens.value_or(0), total_tokens.has_value(),
+                std::move(owner_), user_, model_, ticket_, summed_tokens.value_or(0), summed_tokens.has_value(),
                 wall_now_millis(),
                 RateLimitSettleCompletion{
                         .context = metrics,
-                        .callback = total_tokens.has_value() ? settle_usage_completed : settle_no_usage_completed,
+                        .callback = summed_tokens.has_value() ? settle_usage_completed : settle_no_usage_completed,
                 },
                 cat_request_);
         cat_request_ = nullptr;
@@ -2489,7 +2478,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
             std::optional<LlmTokenUsage> usage;
             const SseRelayResult relay_result =
                     co_await relay_sse(exchange, *started, protocol, response_started, usage, audit);
-            rate_limit.settle_async(usage ? usage->total_tokens : std::optional<std::int64_t>{});
+            rate_limit.settle_async(usage ? usage->sum() : std::optional<std::int64_t>{});
             audit.output_complete(relay_result.upstream_complete);
             if (relay_result.upstream_complete) {
                 started->report_instance(InstanceReportOutcome::Success);
@@ -2606,7 +2595,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
             if (usage) {
                 metrics_->token_usage(authenticated->principal().username(), attempt.provider->name, protocol, *usage);
             }
-            rate_limit.settle_async(usage ? usage->total_tokens : std::optional<std::int64_t>{});
+            rate_limit.settle_async(usage ? usage->sum() : std::optional<std::int64_t>{});
             co_await send_body(exchange, cat_request, response->status_code, response->content_type, response->body,
                                response->request_id);
             co_return;

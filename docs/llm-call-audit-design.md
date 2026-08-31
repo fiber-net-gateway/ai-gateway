@@ -6,7 +6,7 @@
 `llm-call-audit` 领域模块，不复用控制面 `audit_events` 表：
 
 ```text
-ai-server 后台发送器（后续）
+ai-server 后台发送器
         │ Bearer + batch envelope
         ▼
 POST /api/internal/llm-call-audits/batches
@@ -30,7 +30,7 @@ GET /api/me/llm-call-audits
 server/src/modules/llm-call-audit/
 ├── types.ts          # 上报投影、持久化记录、查询与 Store 接口
 ├── schemas.ts        # Fastify body/query JSON Schema
-├── projection.ts     # v5 原始对象到白名单字段的纯函数
+├── projection.ts     # v5/v6 原始对象到白名单字段的纯函数
 ├── service.ts        # 认证后的接收编排、用户固化、cursor 与查询授权
 ├── memory-store.ts   # preview 和单元测试
 ├── mysql-store.ts    # 参数化单表 SQL
@@ -38,6 +38,7 @@ server/src/modules/llm-call-audit/
 └── llm-call-audit.test.ts
 
 server/src/database/migrations/006-llm-call-audit.ts
+server/src/database/migrations/008-llm-call-audit-usage-components.ts
 web/src/pages/MyLlmCallsPage.tsx
 ```
 
@@ -74,11 +75,11 @@ Content-Type: application/json
 ```
 
 body 使用需求文档第 6 节信封。信封 `additionalProperties=false`，`audit` 允许上游附带其他
-v5 字段，但以下字段必须存在并满足约束：
+扁平字段。当前 v6 usage 契约如下；接收端在滚动升级期间继续兼容 v5：
 
 ```ts
-interface V5AuditInput {
-  schema_version: 5
+interface V6AuditInput {
+  schema_version: 6
   event: 'llm_request'
   request_id: string
   auth_user: string
@@ -90,9 +91,9 @@ interface V5AuditInput {
   status: number
   duration_ms: number
   usage_json: {
-    promptTokens: number
-    completionTokens: number
-    total_tokens: number
+    in_cache: number | null
+    in_nocache: number | null
+    out: number | null
   }
   client_aborted?: boolean
   error_json?: string
@@ -144,13 +145,13 @@ Service 始终把 `ownerUserId=actor.user.id` 传给 store，不接受客户端 
 
 ## 5. 白名单投影
 
-`projectV5Audit` 是无 I/O 纯函数，输入经过 schema 校验的逐条信封，输出
+`projectAudit` 是无 I/O 纯函数，输入经过 schema 校验的逐条 v5/v6 信封，输出
 `NewLlmCallAuditRecord`。它执行：
 
 1. `eventKey = SHA-256(environmentId + NUL + instanceId + NUL + requestId)`；
 2. 复制并截断白名单字符串；
 3. 从 `client_aborted`、status 和 `error_json` 计算 outcome；
-4. 复制非负安全整数用量与尺寸；
+4. v6 只复制三项基础用量，v5 只写历史兼容列，并复制其他非负安全整数；
 5. 只保留最多 256 字符的 `error_json` 作为诊断标识；
 6. 不展开或复制 `request_json`、`response_json`、`attempts_json` 等字段。
 
@@ -191,9 +192,12 @@ CREATE TABLE llm_call_audits (
   response_status SMALLINT UNSIGNED NOT NULL,
   outcome VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   duration_ms BIGINT UNSIGNED NOT NULL,
-  prompt_tokens BIGINT UNSIGNED NOT NULL,
-  completion_tokens BIGINT UNSIGNED NOT NULL,
-  total_tokens BIGINT UNSIGNED NOT NULL,
+  in_cache_tokens BIGINT UNSIGNED NULL,
+  in_nocache_tokens BIGINT UNSIGNED NULL,
+  out_tokens BIGINT UNSIGNED NULL,
+  prompt_tokens BIGINT UNSIGNED NULL,
+  completion_tokens BIGINT UNSIGNED NULL,
+  total_tokens BIGINT UNSIGNED NULL,
   client_aborted BOOLEAN NOT NULL,
   capture_complete BOOLEAN NOT NULL,
   message_count INT UNSIGNED NOT NULL,
@@ -215,6 +219,8 @@ CREATE TABLE llm_call_audits (
 
 `event_key` 是固定长度唯一键，避免把最长 1024 字节 request ID 加进复合唯一索引。
 `owner_user_id` 允许 null 以安全容纳暂未在 console 建档的 ai-server 用户。
+迁移 `008` 增加三项 v6 基础列并保留可空的 v5 历史列；v5 的 prompt 无法可靠拆分，禁止伪造
+cache 明细。查询 Service 对 v6 安全求和，对 v5 返回历史合计，派生值不写回数据库。
 
 ## 8. Store 接口与 SQL
 
@@ -293,7 +299,7 @@ cursor 内容为：
 4. protocol + 流式/非流式；
 5. outcome + HTTP status；
 6. duration；
-7. prompt/completion/total tokens。
+7. cache/non-cache/output 基础用量，以及读取时派生的 input/total tokens。
 
 不展示 username、instance、errorCode 或任意原始正文。空状态文案为“尚未收到 ai-server 上报的
 调用记录”，筛选后空状态为“暂无匹配记录”。表格外层沿用 `table-wrap` 允许窄屏横向滚动。
@@ -304,7 +310,7 @@ cursor 内容为：
 | --------------------------- | ---: | ------------------------- |
 | `AUDIT_INGEST_DISABLED`     |  503 | 未配置上报 token          |
 | `AUDIT_INGEST_UNAUTHORIZED` |  401 | Bearer 缺失或不匹配       |
-| `VALIDATION_FAILED`         |  400 | 信封或 v5 字段不合法      |
+| `VALIDATION_FAILED`         |  400 | 信封或 v5/v6 字段不合法   |
 | `ENVIRONMENT_NOT_FOUND`     |  404 | 当前用户无目标环境访问权  |
 | `INVALID_CURSOR`            |  400 | cursor 无法解码或字段非法 |
 | `INVALID_TIME_RANGE`        |  422 | from 晚于 to              |
@@ -325,7 +331,7 @@ cursor 内容为：
 后端至少覆盖：
 
 - 认证关闭、无效 Bearer 和有效 Bearer；
-- v5 投影、outcome、usage、时间和默认可选字段；
+- v5 兼容投影、v6 基础 usage、派生用量、时间和默认可选字段；
 - 同批重复与跨请求重放；
 - Alice/管理员/未知用户归属隔离；
 - 原始 request/response/attempts/secret marker 未进入 store/API；

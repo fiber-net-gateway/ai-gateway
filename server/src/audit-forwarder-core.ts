@@ -23,6 +23,10 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
+function isNullableNonNegativeInteger(value: unknown): value is number | null {
+  return value === null || isNonNegativeInteger(value)
+}
+
 function isBoundedText(value: unknown, minimum: number, maximum: number): value is string {
   return (
     typeof value === 'string' &&
@@ -34,7 +38,9 @@ function isBoundedText(value: unknown, minimum: number, maximum: number): value 
 function projectedAudit(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const input = value as Record<string, unknown>
-  if (input.schema_version !== 5 || input.event !== 'llm_request') return null
+  if ((input.schema_version !== 5 && input.schema_version !== 6) || input.event !== 'llm_request') {
+    return null
+  }
   if (
     !isBoundedText(input.request_id, 1, 1024) ||
     !isBoundedText(input.auth_user, 1, 64) ||
@@ -59,15 +65,32 @@ function projectedAudit(value: unknown): Record<string, unknown> | null {
     return null
   }
   const usage = input.usage_json as Record<string, unknown>
-  if (
-    !isNonNegativeInteger(usage.promptTokens) ||
-    !isNonNegativeInteger(usage.completionTokens) ||
-    !isNonNegativeInteger(usage.total_tokens)
-  ) {
+  const projectedUsage =
+    input.schema_version === 5
+      ? isNonNegativeInteger(usage.promptTokens) &&
+        isNonNegativeInteger(usage.completionTokens) &&
+        isNonNegativeInteger(usage.total_tokens)
+        ? {
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            total_tokens: usage.total_tokens,
+          }
+        : null
+      : isNullableNonNegativeInteger(usage.in_cache) &&
+          isNullableNonNegativeInteger(usage.in_nocache) &&
+          isNullableNonNegativeInteger(usage.out) &&
+          Object.keys(usage).every((field) => ['in_cache', 'in_nocache', 'out'].includes(field))
+        ? {
+            in_cache: usage.in_cache,
+            in_nocache: usage.in_nocache,
+            out: usage.out,
+          }
+        : null
+  if (!projectedUsage) {
     return null
   }
   const result: Record<string, unknown> = {
-    schema_version: 5,
+    schema_version: input.schema_version,
     event: 'llm_request',
     request_id: input.request_id,
     auth_user: input.auth_user,
@@ -78,11 +101,7 @@ function projectedAudit(value: unknown): Record<string, unknown> | null {
     stream: input.stream,
     status: input.status,
     duration_ms: input.duration_ms,
-    usage_json: {
-      promptTokens: usage.promptTokens,
-      completionTokens: usage.completionTokens,
-      total_tokens: usage.total_tokens,
-    },
+    usage_json: projectedUsage,
   }
   for (const field of optionalBooleanFields) {
     if (typeof input[field] === 'boolean') result[field] = input[field]

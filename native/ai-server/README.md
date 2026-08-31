@@ -305,11 +305,11 @@ ai-server 在静态初始化边界编译 OpenAI/Anthropic 路径。请求只解�
 FILE 构建的 LLM 对话审计使用独立的 `ai_server.audit` logger，不向 stderr 传播。请求
 worker 直接生成 JSON 日志记录，随后投递给进程共享的异步日志线程。专用审计
 FileAppender 只写 message 和行末换行，不写常规日志前缀；文件因此是 NDJSON，每个
-物理行都可以直接作为一个完整 JSON 解析。HTTP 构建改为生成最小化 schema v5 投影并
+物理行都可以直接作为一个完整 JSON 解析。HTTP 构建改为生成最小化 schema v6 投影并
 投递给有界后台发送队列，不采集完整请求/响应正文、网络地址、Provider token 或 BT1
 secret。
 
-当前审计 schema 为 `schema_version=5`，按采集端旧列名输出扁平字段。`request_json`
+当前审计 schema 为 `schema_version=6`，按稳定字段名输出扁平对象。`request_json`
 是入站 body 的唯一完整副本：合法 UTF-8 以 `content_type=json_text` 保存，非法 UTF-8
 以 base64 保存；图片 URL、音频/base64 等多模态字段不会再被过滤。为了让采集服务
 不必解析 body，记录还直接提供 `requested_model`、有效 `stream`、`message_count` 和
@@ -317,9 +317,9 @@ secret。
 usage 等信息位于同一顶层对象。每个 Provider attempt 还记录
 `failure_phase`、`io_error`、`failure_source`、`retry_target`、`retry_performed` 和
 `skipped_attempts`；请求级 `provider_attempt_skipped_count` 汇总被剪枝的计划项。
-`attempts_json` 和 `rate_limit_json` 是包含完整结构的 JSON 字符串，`usage_json`
-是使用 `promptTokens`、`completionTokens`、`total_tokens` 的 JSON 对象，缺失 token
-数按零输出。
+`attempts_json` 和 `rate_limit_json` 是包含完整结构的 JSON 字符串。`usage_json` 只包含
+`in_cache`、`in_nocache`、`out` 三项归一化基础用量；Provider 未返回的分项输出 `null`，
+不在审计生产端生成输入合计或总量。
 
 同步和 SSE 共用同一个 `llm.output` 聚合器。SSE delta 在转发前依次追加，最终
 `output_role/response_json/tool_names/tool_arguments/finish_reason` 的形态与同步响应一致；
@@ -340,11 +340,12 @@ Authorization、Provider token 值、BT1 secret 和 Nacos 凭据不会作为独�
 但完整 request body 和模型输出本身可能包含任意业务秘密，生产环境必须严格限制文件
 读取、采集、传输和保留权限。
 
-`usage` 将两种协议统一为 `in_cache`、`in_nocache`、`out` 和派生的
-`total_tokens`。OpenAI 的 `in_cache` 来自 `cached_tokens`，`in_nocache` 为
+`usage` 将两种协议统一为 `in_cache`、`in_nocache`、`out`。OpenAI 的 `in_cache`
+来自 `cached_tokens`，`in_nocache` 为
 `prompt_tokens - cached_tokens`；Anthropic 的 `in_cache` 来自
 `cache_read_input_tokens`，`in_nocache` 为 `input_tokens +
-cache_creation_input_tokens`。配置 CAT 后，每份有效 usage 还会生成
+cache_creation_input_tokens`。限流 settle 仅在三项均存在且可安全相加时使用三项之和；
+审计消费方以同样规则自行派生输入合计和总量。配置 CAT 后，每份有效 usage 还会生成
 `LLMTokenUsage` 子 Event，携带相同三个用量字段、协议、上游模型和实际 Provider。
 模型配置 `allow_user_groups` 时，每次检查还会生成 name 为 username 的 `Auth`
 子 Event。最终放行时 status 为 `Success`，命中用户组时 `allowed_user_group` 为按

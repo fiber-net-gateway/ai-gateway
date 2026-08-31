@@ -4,7 +4,7 @@ import type { Clock } from '../users/crypto.js'
 import { constantTimeEqual, sha256Hex } from '../users/crypto.js'
 import { DomainError } from '../users/errors.js'
 import type { UserRecord, UserStore } from '../users/types.js'
-import { projectV5Audit } from './projection.js'
+import { projectAudit } from './projection.js'
 import type {
   AuditIngestEnvelope,
   LlmCallAuditCursor,
@@ -42,6 +42,14 @@ function decodeCursor(value: string | undefined): LlmCallAuditCursor | undefined
 function toView(
   record: Awaited<ReturnType<LlmCallAuditStore['listForOwner']>>[number],
 ): LlmCallAuditView {
+  const add = (...values: Array<number | null>): number | null => {
+    if (values.some((value) => value === null)) return null
+    const sum = values.reduce<number>((total, value) => total + (value ?? 0), 0)
+    return Number.isSafeInteger(sum) ? sum : null
+  }
+  const componentPromptTokens = add(record.inCacheTokens, record.inNoCacheTokens)
+  const componentTotalTokens = add(record.inCacheTokens, record.inNoCacheTokens, record.outTokens)
+  const out = record.outTokens ?? record.completionTokens
   return {
     id: record.id,
     requestId: record.sourceRequestId,
@@ -56,9 +64,12 @@ function toView(
     outcome: record.outcome,
     durationMs: record.durationMs,
     usage: {
-      promptTokens: record.promptTokens,
-      completionTokens: record.completionTokens,
-      totalTokens: record.totalTokens,
+      inCache: record.inCacheTokens,
+      inNoCache: record.inNoCacheTokens,
+      out,
+      promptTokens: componentPromptTokens ?? record.promptTokens,
+      completionTokens: out,
+      totalTokens: componentTotalTokens ?? record.totalTokens,
     },
     clientAborted: record.clientAborted,
     captureComplete: record.captureComplete,
@@ -113,7 +124,7 @@ export class LlmCallAuditService {
       }),
     )
     const records = input.records.map((record) =>
-      projectV5Audit({
+      projectAudit({
         id: randomUUID(),
         environmentId: this.environmentId,
         ownerUserId: owners.get(record.audit.auth_user) ?? null,

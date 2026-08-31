@@ -15,7 +15,7 @@ interface LlmCallAuditRow extends RowDataPacket {
   subject_username: string
   source_instance_id: string
   source_request_id: string
-  source_schema_version: number
+  source_schema_version: 5 | 6
   occurred_at: Date
   received_at: Date
   method: string
@@ -26,9 +26,12 @@ interface LlmCallAuditRow extends RowDataPacket {
   response_status: number
   outcome: LlmCallAuditRecord['outcome']
   duration_ms: string | number
-  prompt_tokens: string | number
-  completion_tokens: string | number
-  total_tokens: string | number
+  in_cache_tokens: string | number | null
+  in_nocache_tokens: string | number | null
+  out_tokens: string | number | null
+  prompt_tokens: string | number | null
+  completion_tokens: string | number | null
+  total_tokens: string | number | null
   client_aborted: number
   capture_complete: number
   message_count: number
@@ -43,13 +46,18 @@ const auditSelect = `
     BIN_TO_UUID(environment_id) AS environment_id, BIN_TO_UUID(owner_user_id) AS owner_user_id,
     subject_username, source_instance_id, source_request_id, source_schema_version,
     occurred_at, received_at, method, request_path, requested_model, client_protocol,
-    is_stream, response_status, outcome, duration_ms, prompt_tokens, completion_tokens,
-    total_tokens, client_aborted, capture_complete, message_count, tool_count,
+    is_stream, response_status, outcome, duration_ms, in_cache_tokens, in_nocache_tokens,
+    out_tokens, prompt_tokens, completion_tokens, total_tokens, client_aborted, capture_complete,
+    message_count, tool_count,
     request_body_bytes, response_body_bytes, error_code
   FROM llm_call_audits`
 
 function date(value: string): Date {
   return new Date(value)
+}
+
+function nullableNumber(value: string | number | null): number | null {
+  return value === null ? null : Number(value)
 }
 
 function isDuplicateError(error: unknown): boolean {
@@ -78,9 +86,12 @@ function mapRow(row: LlmCallAuditRow): LlmCallAuditRecord {
     responseStatus: row.response_status,
     outcome: row.outcome,
     durationMs: Number(row.duration_ms),
-    promptTokens: Number(row.prompt_tokens),
-    completionTokens: Number(row.completion_tokens),
-    totalTokens: Number(row.total_tokens),
+    inCacheTokens: nullableNumber(row.in_cache_tokens),
+    inNoCacheTokens: nullableNumber(row.in_nocache_tokens),
+    outTokens: nullableNumber(row.out_tokens),
+    promptTokens: nullableNumber(row.prompt_tokens),
+    completionTokens: nullableNumber(row.completion_tokens),
+    totalTokens: nullableNumber(row.total_tokens),
     clientAborted: Boolean(row.client_aborted),
     captureComplete: Boolean(row.capture_complete),
     messageCount: row.message_count,
@@ -111,12 +122,17 @@ export class MySqlLlmCallAuditStore implements LlmCallAuditStore {
               (id, event_key, environment_id, owner_user_id, subject_username,
                source_instance_id, source_request_id, source_schema_version, occurred_at,
                received_at, method, request_path, requested_model, client_protocol, is_stream,
-               response_status, outcome, duration_ms, prompt_tokens, completion_tokens,
-               total_tokens, client_aborted, capture_complete, message_count, tool_count,
-               request_body_bytes, response_body_bytes, error_code)
+               response_status, outcome, duration_ms, in_cache_tokens, in_nocache_tokens,
+               out_tokens, prompt_tokens, completion_tokens, total_tokens, client_aborted,
+               capture_complete, message_count, tool_count, request_body_bytes,
+               response_body_bytes, error_code)
              VALUES
-              (UUID_TO_BIN(?), UNHEX(?), UUID_TO_BIN(?), UUID_TO_BIN(?), ?, ?, ?, ?, ?, ?, ?, ?,
-               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (UUID_TO_BIN(?), UNHEX(?), UUID_TO_BIN(?), UUID_TO_BIN(?), ?,
+               ?, ?, ?, ?, ?,
+               ?, ?, ?, ?, ?,
+               ?, ?, ?, ?, ?,
+               ?, ?, ?, ?, ?,
+               ?, ?, ?, ?, ?, ?)`,
             [
               record.id,
               record.eventKey,
@@ -136,6 +152,9 @@ export class MySqlLlmCallAuditStore implements LlmCallAuditStore {
               record.responseStatus,
               record.outcome,
               record.durationMs,
+              record.inCacheTokens,
+              record.inNoCacheTokens,
+              record.outTokens,
               record.promptTokens,
               record.completionTokens,
               record.totalTokens,

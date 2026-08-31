@@ -12,7 +12,6 @@ namespace {
 enum class UsageAction : std::uint32_t {
     Input,
     Output,
-    Total,
     CacheCreation,
     CacheRead,
     OutputToken,
@@ -21,12 +20,11 @@ enum class UsageAction : std::uint32_t {
 struct RawUsage {
     std::optional<std::int64_t> input;
     std::optional<std::int64_t> output;
-    std::optional<std::int64_t> total;
     std::optional<std::int64_t> cache_creation;
     std::optional<std::int64_t> cache_read;
     bool output_token_observed = false;
 
-    [[nodiscard]] bool empty() const noexcept { return !input && !output && !total && !cache_creation && !cache_read; }
+    [[nodiscard]] bool empty() const noexcept { return !input && !output && !cache_creation && !cache_read; }
 };
 
 const json::JsonPathProgram &openai_program() {
@@ -34,7 +32,6 @@ const json::JsonPathProgram &openai_program() {
         constexpr json::JsonPathRule rules[] = {
                 {.expression = "$.usage.prompt_tokens", .action = static_cast<std::uint32_t>(UsageAction::Input)},
                 {.expression = "$.usage.completion_tokens", .action = static_cast<std::uint32_t>(UsageAction::Output)},
-                {.expression = "$.usage.total_tokens", .action = static_cast<std::uint32_t>(UsageAction::Total)},
                 {.expression = "$.usage.prompt_tokens_details.cached_tokens",
                  .action = static_cast<std::uint32_t>(UsageAction::CacheRead)},
         };
@@ -50,7 +47,6 @@ const json::JsonPathProgram &openai_event_program() {
         constexpr json::JsonPathRule rules[] = {
                 {.expression = "$.usage.prompt_tokens", .action = static_cast<std::uint32_t>(UsageAction::Input)},
                 {.expression = "$.usage.completion_tokens", .action = static_cast<std::uint32_t>(UsageAction::Output)},
-                {.expression = "$.usage.total_tokens", .action = static_cast<std::uint32_t>(UsageAction::Total)},
                 {.expression = "$.usage.prompt_tokens_details.cached_tokens",
                  .action = static_cast<std::uint32_t>(UsageAction::CacheRead)},
                 {.expression = "$.choices[*choice].delta.content",
@@ -142,9 +138,6 @@ bool on_usage(void *opaque, const json::JsonPathMatch &match) noexcept {
         case UsageAction::Output:
             usage.output = value;
             break;
-        case UsageAction::Total:
-            usage.total = value;
-            break;
         case UsageAction::CacheCreation:
             usage.cache_creation = value;
             break;
@@ -171,25 +164,19 @@ bool extract_raw(LlmWireProtocol protocol, std::string_view input, bool streamin
 }
 
 std::optional<LlmTokenUsage> to_openai(const RawUsage &raw) noexcept {
-    if (!raw.input && !raw.output && !raw.total) {
+    if (!raw.input && !raw.output) {
         return std::nullopt;
     }
     const std::optional<std::int64_t> cached =
-            raw.cache_read ? raw.cache_read
-                           : ((raw.input || raw.output) ? std::optional<std::int64_t>(0) : std::nullopt);
+            raw.cache_read ? raw.cache_read : (raw.input ? std::optional<std::int64_t>(0) : std::nullopt);
     std::optional<std::int64_t> uncached;
     if (raw.input && cached && *raw.input >= *cached) {
         uncached = *raw.input - *cached;
-    }
-    std::optional<std::int64_t> total = raw.total;
-    if (!total) {
-        total = add(raw.input, raw.output);
     }
     return LlmTokenUsage{
             .in_cache = cached,
             .in_nocache = uncached,
             .out = raw.output,
-            .total_tokens = total,
     };
 }
 
@@ -208,21 +195,16 @@ std::optional<LlmTokenUsage> to_anthropic(const RawUsage &raw, bool partial) noe
     if (!partial || has_input_side) {
         uncached = add(raw.input.value_or(0), creation.value_or(0));
     }
-    std::optional<std::int64_t> total;
-    if (raw.input && raw.output) {
-        total = add(raw.input, raw.output);
-        total = add(total, creation.value_or(0));
-        total = add(total, read.value_or(0));
-    }
     return LlmTokenUsage{
             .in_cache = read,
             .in_nocache = uncached,
             .out = raw.output,
-            .total_tokens = total,
     };
 }
 
 } // namespace
+
+std::optional<std::int64_t> LlmTokenUsage::sum() const noexcept { return add(add(in_cache, in_nocache), out); }
 
 void LlmTokenUsage::merge(const LlmTokenUsage &next) noexcept {
     if (next.in_cache) {
@@ -233,12 +215,6 @@ void LlmTokenUsage::merge(const LlmTokenUsage &next) noexcept {
     }
     if (next.out) {
         out = next.out;
-    }
-    if (next.total_tokens) {
-        total_tokens = next.total_tokens;
-    }
-    if (!total_tokens && in_cache && in_nocache && out) {
-        total_tokens = add(add(in_cache, in_nocache), out);
     }
 }
 

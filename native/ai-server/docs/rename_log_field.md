@@ -1,6 +1,6 @@
-# Runtime 字段名对照表（新 audit_json -> 旧列名）
+# Runtime audit_json 扁平字段对照表
 
-> runtime 产出 audit_json 时，按右列旧列名输出，ETL 同名直取。
+> runtime 产出 audit_json 时，除 usage 外继续按右列兼容列名输出；usage 使用稳定的基础计量项。
 
 | 当前 audit_json 路径                            | 改为旧列名               | 备注                                   |
 | ----------------------------------------------- | ------------------------ | -------------------------------------- |
@@ -51,17 +51,21 @@
 
 ## usage_json 内部字段对照
 
-usage 字段缺失或为 null 时按 `0` 处理。
+`usage_json` 只保存归一化基础用量。字段未被 Provider 返回或尚未在流式响应中观察到时输出
+`null`，不得改写为 `0`。
 
-| 当前 usage 字段           | 改为旧字段名       | 转换 |
-| ------------------------- | ------------------ | ---- |
-| `in_cache` + `in_nocache` | `promptTokens`     | 求和 |
-| `out`                     | `completionTokens` |      |
-| `total_tokens`            | `total_tokens`     |      |
+| 当前 usage 字段 | audit_json 字段 | 转换 |
+| --------------- | --------------- | ---- |
+| `in_cache`      | `in_cache`      | 无   |
+| `in_nocache`    | `in_nocache`    | 无   |
+| `out`           | `out`           | 无   |
+
+消费方在三项均为整数时计算 `total_tokens = in_cache + in_nocache + out`；输入合计为
+`in_cache + in_nocache`。Provider 自带的总量不进入审计契约。
 
 ## 保留的扁平诊断字段
 
-`schema_version=5` 继续保留 `event=llm_request`，并输出以下扁平诊断字段：
+`schema_version=6` 继续保留 `event=llm_request`，并输出以下扁平诊断字段：
 
 - `capture_complete`、`capture_error`、`auth_reason_code`；
 - `tool_arguments`；

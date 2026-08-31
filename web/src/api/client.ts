@@ -93,9 +93,12 @@ export interface LlmCallAudit {
   outcome: LlmCallOutcome
   durationMs: number
   usage: {
-    promptTokens: number
-    completionTokens: number
-    totalTokens: number
+    inCache: number | null
+    inNoCache: number | null
+    out: number | null
+    promptTokens: number | null
+    completionTokens: number | null
+    totalTokens: number | null
   }
   clientAborted: boolean
   captureComplete: boolean

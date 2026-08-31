@@ -15,9 +15,10 @@ struct LlmTokenUsage {
     std::optional<std::int64_t> in_cache;
     std::optional<std::int64_t> in_nocache;
     std::optional<std::int64_t> out;
-    std::optional<std::int64_t> total_tokens;
 
     [[nodiscard]] bool has_usage_fields() const noexcept { return in_cache || in_nocache || out; }
+
+    [[nodiscard]] std::optional<std::int64_t> sum() const noexcept;
 
     void merge(const LlmTokenUsage &next) noexcept;
 };

@@ -24,6 +24,10 @@ function duration(value: number): string {
   return `${(value / 1_000).toFixed(value < 10_000 ? 2 : 1)} s`
 }
 
+function tokenCount(value: number | null): string {
+  return value === null ? '—' : formatInteger(value)
+}
+
 function mergeCalls(current: LlmCallAudit[], incoming: LlmCallAudit[]): LlmCallAudit[] {
   const ids = new Set(current.map((item) => item.id))
   return [...current, ...incoming.filter((item) => !ids.has(item.id))]
@@ -225,10 +229,14 @@ export function MyLlmCallsPage({
                   <td>{duration(call.durationMs)}</td>
                   <td className="call-usage">
                     <span>
-                      输入 {formatInteger(call.usage.promptTokens)} · 输出{' '}
-                      {formatInteger(call.usage.completionTokens)}
+                      输入 {tokenCount(call.usage.promptTokens)} · 输出 {tokenCount(call.usage.out)}
                     </span>
-                    <small>合计 {formatInteger(call.usage.totalTokens)}</small>
+                    <small>
+                      {call.usage.inCache === null || call.usage.inNoCache === null
+                        ? '缓存明细未知'
+                        : `缓存 ${tokenCount(call.usage.inCache)} · 非缓存 ${tokenCount(call.usage.inNoCache)}`}
+                      {' · '}合计 {tokenCount(call.usage.totalTokens)}
+                    </small>
                   </td>
                 </tr>
               ))}

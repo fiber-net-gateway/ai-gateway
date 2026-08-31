@@ -7,6 +7,7 @@ import { marketplaceReleaseOrchestrationMigration } from './migrations/004-marke
 import { modelOwnedAccessGroupsMigration } from './migrations/005-model-owned-access-groups.js'
 import { llmCallAuditMigration } from './migrations/006-llm-call-audit.js'
 import { accessGroupPublicationEvidenceMigration } from './migrations/007-access-group-publication-evidence.js'
+import { llmCallAuditUsageComponentsMigration } from './migrations/008-llm-call-audit-usage-components.js'
 
 const migrations = [
   userModuleMigration,
@@ -16,6 +17,7 @@ const migrations = [
   modelOwnedAccessGroupsMigration,
   llmCallAuditMigration,
   accessGroupPublicationEvidenceMigration,
+  llmCallAuditUsageComponentsMigration,
 ]
 
 export async function runMigrations(pool: Pool): Promise<void> {

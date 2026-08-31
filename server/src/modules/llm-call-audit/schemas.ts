@@ -6,6 +6,93 @@ const nonNegativeInteger = {
   maximum: safeIntegerMaximum,
 } as const
 
+const nullableNonNegativeInteger = {
+  type: ['integer', 'null'],
+  minimum: 0,
+  maximum: safeIntegerMaximum,
+} as const
+
+const auditRequiredFields = [
+  'schema_version',
+  'event',
+  'request_id',
+  'auth_user',
+  'requested_model',
+  'client_protocol',
+  'method',
+  'path',
+  'stream',
+  'status',
+  'duration_ms',
+  'usage_json',
+] as const
+
+const auditCommonProperties = {
+  event: { const: 'llm_request' },
+  request_id: { type: 'string', minLength: 1, maxLength: 1024 },
+  auth_user: { type: 'string', minLength: 1, maxLength: 64 },
+  requested_model: { type: 'string', maxLength: 255 },
+  client_protocol: { type: 'string', minLength: 1, maxLength: 32 },
+  method: {
+    type: 'string',
+    minLength: 1,
+    maxLength: 16,
+    pattern: '^[A-Za-z]+$',
+  },
+  path: { type: 'string', minLength: 1, maxLength: 2048 },
+  stream: { type: 'boolean' },
+  status: { type: 'integer', minimum: 0, maximum: 999 },
+  duration_ms: nonNegativeInteger,
+  client_aborted: { type: 'boolean' },
+  error_json: { type: 'string' },
+  capture_complete: { type: 'boolean' },
+  message_count: nonNegativeInteger,
+  tool_count: nonNegativeInteger,
+  request_body_bytes: nonNegativeInteger,
+  response_body_bytes: nonNegativeInteger,
+} as const
+
+const v5AuditSchema = {
+  type: 'object',
+  additionalProperties: true,
+  required: auditRequiredFields,
+  properties: {
+    ...auditCommonProperties,
+    schema_version: { const: 5 },
+    usage_json: {
+      type: 'object',
+      additionalProperties: true,
+      required: ['promptTokens', 'completionTokens', 'total_tokens'],
+      properties: {
+        promptTokens: nonNegativeInteger,
+        completionTokens: nonNegativeInteger,
+        total_tokens: nonNegativeInteger,
+      },
+    },
+  },
+} as const
+
+const v6AuditSchema = {
+  type: 'object',
+  additionalProperties: true,
+  required: auditRequiredFields,
+  properties: {
+    ...auditCommonProperties,
+    schema_version: { const: 6 },
+    usage_json: {
+      type: 'object',
+      additionalProperties: true,
+      propertyNames: { enum: ['in_cache', 'in_nocache', 'out'] },
+      required: ['in_cache', 'in_nocache', 'out'],
+      properties: {
+        in_cache: nullableNonNegativeInteger,
+        in_nocache: nullableNonNegativeInteger,
+        out: nullableNonNegativeInteger,
+      },
+    },
+  },
+} as const
+
 export const auditIngestBodySchema = {
   type: 'object',
   additionalProperties: false,
@@ -29,59 +116,7 @@ export const auditIngestBodySchema = {
         required: ['occurredAt', 'audit'],
         properties: {
           occurredAt: { type: 'string', format: 'date-time' },
-          audit: {
-            type: 'object',
-            additionalProperties: true,
-            required: [
-              'schema_version',
-              'event',
-              'request_id',
-              'auth_user',
-              'requested_model',
-              'client_protocol',
-              'method',
-              'path',
-              'stream',
-              'status',
-              'duration_ms',
-              'usage_json',
-            ],
-            properties: {
-              schema_version: { const: 5 },
-              event: { const: 'llm_request' },
-              request_id: { type: 'string', minLength: 1, maxLength: 1024 },
-              auth_user: { type: 'string', minLength: 1, maxLength: 64 },
-              requested_model: { type: 'string', maxLength: 255 },
-              client_protocol: { type: 'string', minLength: 1, maxLength: 32 },
-              method: {
-                type: 'string',
-                minLength: 1,
-                maxLength: 16,
-                pattern: '^[A-Za-z]+$',
-              },
-              path: { type: 'string', minLength: 1, maxLength: 2048 },
-              stream: { type: 'boolean' },
-              status: { type: 'integer', minimum: 0, maximum: 999 },
-              duration_ms: nonNegativeInteger,
-              usage_json: {
-                type: 'object',
-                additionalProperties: true,
-                required: ['promptTokens', 'completionTokens', 'total_tokens'],
-                properties: {
-                  promptTokens: nonNegativeInteger,
-                  completionTokens: nonNegativeInteger,
-                  total_tokens: nonNegativeInteger,
-                },
-              },
-              client_aborted: { type: 'boolean' },
-              error_json: { type: 'string' },
-              capture_complete: { type: 'boolean' },
-              message_count: nonNegativeInteger,
-              tool_count: nonNegativeInteger,
-              request_body_bytes: nonNegativeInteger,
-              response_body_bytes: nonNegativeInteger,
-            },
-          },
+          audit: { oneOf: [v5AuditSchema, v6AuditSchema] },
         },
       },
     },

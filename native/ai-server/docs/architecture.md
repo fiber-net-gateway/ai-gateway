@@ -288,7 +288,7 @@ no-follow、普通文件限定、权限强制、不完整尾部恢复和 message
 Provider token、BT1 token 或配置 secret 写入响应。
 
 请求审计由请求级 RAII owner 聚合。请求结束时，当前 HTTP worker 把
-`schema_version=5` 扁平对象直接编码到一条 `ai_server.audit` 日志记录中。记录随后
+`schema_version=6` 扁平对象直接编码到一条 `ai_server.audit` 日志记录中。记录随后
 提交给进程共享的 log EventLoop，该线程是 stderr 和审计文件的唯一正常 writer；
 审计 logger 关闭 additive，不会复制到 stderr；专用 FileAppender 只写 message 和
 换行，因此文件中每个物理行都是可直接解析的完整 JSON。
@@ -310,13 +310,13 @@ Provider token、BT1 token 或配置 secret 写入响应。
 `client_aborted` 和 `error_json` 为准。
 Provider 非 2xx 错误正文不会被当成模型输出。
 
-`usage_json` 统一输出 `promptTokens`、`completionTokens` 和 `total_tokens`：
-`promptTokens` 是 `in_cache + in_nocache`，`completionTokens` 来自 `out`，缺失值
-按零处理。内部 token 提取规则为：
+`usage_json` 只输出 `in_cache`、`in_nocache` 和 `out` 三项归一化基础用量，缺失值输出
+`null`。输入合计和总量由消费方在所需分项均存在时安全相加，不进入审计记录。内部 token
+提取规则为：
 OpenAI 用 `prompt_tokens_details.cached_tokens` 作为缓存输入并从
 `prompt_tokens` 中扣除；Anthropic 只把 `cache_read_input_tokens` 计入缓存命中，
-`input_tokens + cache_creation_input_tokens` 计入非缓存输入。有效 usage 同时写入
-CAT `LLMTokenUsage` 子 Event。
+`input_tokens + cache_creation_input_tokens` 计入非缓存输入。限流 settle 同样只在三项均存在
+且可安全相加时使用三项之和；有效 usage 同时写入 CAT `LLMTokenUsage` 子 Event。
 模型配置 `allow_user_groups` 时，每次检查还会生成 name 为 username 的 CAT `Auth`
 子 Event。最终放行时 status 为 `Success`，命中用户组时 `allowed_user_group` 为按
 模型配置顺序命中的第一个组；最终拒绝时 status 为 `Error`。现有 `zhangwang` 旁路

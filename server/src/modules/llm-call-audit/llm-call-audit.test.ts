@@ -29,11 +29,12 @@ function auditRecord(input: {
   status?: number
   protocol?: string
   secretMarker?: string
+  usage?: { in_cache: number | null; in_nocache: number | null; out: number | null }
 }) {
   return {
     occurredAt: input.occurredAt,
     audit: {
-      schema_version: 5,
+      schema_version: 6,
       event: 'llm_request',
       request_id: input.requestId,
       auth_user: input.username,
@@ -44,10 +45,10 @@ function auditRecord(input: {
       stream: true,
       status: input.status ?? 200,
       duration_ms: 842,
-      usage_json: {
-        promptTokens: 120,
-        completionTokens: 48,
-        total_tokens: 168,
+      usage_json: input.usage ?? {
+        in_cache: 20,
+        in_nocache: 100,
+        out: 48,
       },
       client_aborted: false,
       error_json: input.status && input.status >= 400 ? 'upstream_error' : '',
@@ -60,6 +61,22 @@ function auditRecord(input: {
       response_json: `answer-${input.secretMarker ?? 'private'}`,
       attempts_json: `provider-token-${input.secretMarker ?? 'private'}`,
       remote_addr: '203.0.113.4',
+    },
+  }
+}
+
+function legacyAuditRecord(input: Parameters<typeof auditRecord>[0]) {
+  const record = auditRecord(input)
+  return {
+    ...record,
+    audit: {
+      ...record.audit,
+      schema_version: 5,
+      usage_json: {
+        promptTokens: 120,
+        completionTokens: 48,
+        total_tokens: 168,
+      },
     },
   }
 }
@@ -117,8 +134,9 @@ test('audit ingest is authenticated, idempotent, minimized, and isolated by owne
         occurredAt: '2026-08-04T08:00:02.000Z',
         status: 500,
         protocol: 'openai',
+        usage: { in_cache: null, in_nocache: null, out: 48 },
       }),
-      auditRecord({
+      legacyAuditRecord({
         requestId: 'req-alice-001',
         username: 'alice',
         occurredAt: '2026-08-04T08:00:01.000Z',
@@ -178,6 +196,22 @@ test('audit ingest is authenticated, idempotent, minimized, and isolated by owne
   assert.equal(firstPage.body.includes(secretMarker), false)
   assert.equal(firstPage.body.includes('request_json'), false)
   assert.equal(firstPage.body.includes('sourceInstanceId'), false)
+  assert.deepEqual(firstPage.json().items[0].usage, {
+    inCache: 20,
+    inNoCache: 100,
+    out: 48,
+    promptTokens: 120,
+    completionTokens: 48,
+    totalTokens: 168,
+  })
+  assert.deepEqual(firstPage.json().items[1].usage, {
+    inCache: null,
+    inNoCache: null,
+    out: 48,
+    promptTokens: null,
+    completionTokens: 48,
+    totalTokens: null,
+  })
 
   const secondPage = await app.inject({
     method: 'GET',
@@ -188,6 +222,14 @@ test('audit ingest is authenticated, idempotent, minimized, and isolated by owne
     secondPage.json().items.map((item: { requestId: string }) => item.requestId),
     ['req-alice-001'],
   )
+  assert.deepEqual(secondPage.json().items[0].usage, {
+    inCache: null,
+    inNoCache: null,
+    out: 48,
+    promptTokens: 120,
+    completionTokens: 48,
+    totalTokens: 168,
+  })
   assert.equal(secondPage.json().nextCursor, null)
 
   const failedOpenAi = await app.inject({
@@ -285,7 +327,7 @@ test('audit ingest rejects unsupported schema and can be explicitly disabled', a
   const enabled = buildApp({ config })
   context.after(() => enabled.close())
   const unsupported = structuredClone(validPayload)
-  unsupported.records[0].audit.schema_version = 4 as 5
+  unsupported.records[0].audit.schema_version = 4 as 6
   const response = await enabled.inject({
     method: 'POST',
     url: '/api/internal/llm-call-audits/batches',
@@ -294,6 +336,18 @@ test('audit ingest rejects unsupported schema and can be explicitly disabled', a
   })
   assert.equal(response.statusCode, 400)
   assert.equal(response.json().code, 'VALIDATION_FAILED')
+
+  const redundantUsage = structuredClone(validPayload)
+  const redundantUsageFields = redundantUsage.records[0].audit.usage_json as Record<string, unknown>
+  redundantUsageFields.total_tokens = 168
+  const redundantUsageResponse = await enabled.inject({
+    method: 'POST',
+    url: '/api/internal/llm-call-audits/batches',
+    headers: { authorization: `Bearer ${ingestToken}` },
+    payload: redundantUsage,
+  })
+  assert.equal(redundantUsageResponse.statusCode, 400)
+  assert.equal(redundantUsageResponse.json().code, 'VALIDATION_FAILED')
 
   config.auditIngest.bodyLimitBytes = 64 * 1024
   const limited = buildApp({ config })

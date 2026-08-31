@@ -107,13 +107,11 @@ fiber::async::DetachedTask record_worker_metrics(AiServerMetrics::Worker *worker
                               .in_cache = 2,
                               .in_nocache = 3,
                               .out = 5,
-                              .total_tokens = 10,
                       }
                     : LlmTokenUsage{
                               .in_cache = 7,
                               .in_nocache = 11,
                               .out = 13,
-                              .total_tokens = 31,
                       };
     worker->token_usage("alice", "primary", protocol, usage);
     worker->request_finished(protocol, response, 1500us);

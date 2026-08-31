@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -62,15 +63,17 @@ TEST(LlmProtocolTest, ExtractsAndMergesOpenAiUsage) {
     EXPECT_EQ(usage->in_cache, 3);
     EXPECT_EQ(usage->in_nocache, 9);
     EXPECT_EQ(usage->out, 5);
-    EXPECT_EQ(usage->total_tokens, 17);
+    EXPECT_EQ(usage->sum(), 17);
 
     mem::BufPool chunk_pool;
     auto next = extract_token_usage(LlmWireProtocol::OpenAiChatCompletions,
                                     R"({"usage":{"completion_tokens":8,"total_tokens":20}})", true, chunk_pool);
     ASSERT_TRUE(next.has_value());
     usage->merge(*next);
+    EXPECT_EQ(usage->in_cache, 3);
+    EXPECT_EQ(usage->in_nocache, 9);
     EXPECT_EQ(usage->out, 8);
-    EXPECT_EQ(usage->total_tokens, 20);
+    EXPECT_EQ(usage->sum(), 20);
 
     mem::BufPool no_cache_details_pool;
     auto no_cache_details =
@@ -80,7 +83,18 @@ TEST(LlmProtocolTest, ExtractsAndMergesOpenAiUsage) {
     EXPECT_EQ(no_cache_details->in_cache, 0);
     EXPECT_EQ(no_cache_details->in_nocache, 7);
     EXPECT_EQ(no_cache_details->out, 2);
-    EXPECT_EQ(no_cache_details->total_tokens, 9);
+    EXPECT_EQ(no_cache_details->sum(), 9);
+
+    mem::BufPool total_only_pool;
+    EXPECT_FALSE(extract_token_usage(LlmWireProtocol::OpenAiChatCompletions, R"({"usage":{"total_tokens":9}})", false,
+                                     total_only_pool));
+
+    const LlmTokenUsage overflow{
+            .in_cache = std::numeric_limits<std::int64_t>::max(),
+            .in_nocache = 1,
+            .out = 0,
+    };
+    EXPECT_FALSE(overflow.sum());
 }
 
 TEST(LlmProtocolTest, ExtractsAnthropicResponseAndPartialEventUsage) {
@@ -93,7 +107,7 @@ TEST(LlmProtocolTest, ExtractsAnthropicResponseAndPartialEventUsage) {
     EXPECT_EQ(response->in_cache, 3);
     EXPECT_EQ(response->in_nocache, 12);
     EXPECT_EQ(response->out, 4);
-    EXPECT_EQ(response->total_tokens, 19);
+    EXPECT_EQ(response->sum(), 19);
 
     mem::BufPool event_pool;
     auto event = extract_token_usage(LlmWireProtocol::AnthropicMessages,
@@ -102,6 +116,7 @@ TEST(LlmProtocolTest, ExtractsAnthropicResponseAndPartialEventUsage) {
     EXPECT_FALSE(event->in_cache.has_value());
     EXPECT_FALSE(event->in_nocache.has_value());
     EXPECT_EQ(event->out, 7);
+    EXPECT_FALSE(event->sum());
 
     mem::BufPool no_cache_fields_pool;
     auto no_cache_fields =
@@ -111,7 +126,7 @@ TEST(LlmProtocolTest, ExtractsAnthropicResponseAndPartialEventUsage) {
     EXPECT_EQ(no_cache_fields->in_cache, 0);
     EXPECT_EQ(no_cache_fields->in_nocache, 6);
     EXPECT_EQ(no_cache_fields->out, 2);
-    EXPECT_EQ(no_cache_fields->total_tokens, 8);
+    EXPECT_EQ(no_cache_fields->sum(), 8);
 }
 
 TEST(LlmProtocolTest, AnalyzesOpenAiStreamingOutputTokens) {

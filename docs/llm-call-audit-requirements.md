@@ -7,16 +7,16 @@
 | 产品     | ai-server 管理控制台                                         |
 | 能力     | ai-server 审计日志 HTTP 上报、核心字段提取、个人调用记录查询 |
 | 需求状态 | P0 实施基线                                                  |
-| 上游基线 | `fiber-gateway-cpp/apps/ai-server` audit `schema_version=5`  |
+| 上游基线 | repository-owned `native/ai-server` audit `schema_version=6` |
 | 关联模块 | 用户与会话、环境、BT1、平台操作审计                          |
 
 本文档细化 ai-server 调用审计进入 console 后的产品目标和验收边界。它不改变现有平台
-操作审计，也不代表 ai-server 已具备 HTTP 上报能力；ai-server 侧异步发送器是后续独立工作。
+操作审计；ai-server 侧异步发送和文件审计链路由 native 模块独立负责。
 
 ## 2. 背景与问题
 
-ai-server 当前把每次 LLM 请求生成成一条 `schema_version=5` 的纯 JSON 审计记录，并通过
-独立的异步日志链路写入 NDJSON 文件。文件能用于离线采集，但 console 无法直接回答普通用户：
+ai-server 当前把每次 LLM 请求生成成一条 `schema_version=6` 的审计记录，通过独立的异步
+链路写入 NDJSON 文件或直接批量发送到 console。console 需要据此回答普通用户：
 
 - 我在什么时间调用过哪个接口和模型；
 - 请求使用了哪种协议、是否流式；
@@ -32,7 +32,7 @@ ai-server 当前把每次 LLM 请求生成成一条 `schema_version=5` 的纯 JS
 P0 必须完成：
 
 1. console 后端提供仅供受信 ai-server 使用的批量 HTTP 上报入口。
-2. 上报入口兼容 ai-server 当前 `schema_version=5`、`event=llm_request` 的扁平审计对象。
+2. 上报入口接收当前 `schema_version=6`，并在滚动升级期间兼容 v5 历史记录。
 3. console 从原始对象提取白名单字段，并在持久化前丢弃原始请求、响应和内部路由数据。
 4. 上报支持至少一次投递：同一实例、同一环境、同一 request ID 重试不会产生重复记录。
 5. 登录用户只能分页查询自己在已授权环境中的调用记录。
@@ -43,7 +43,7 @@ P0 必须完成：
 
 P0 不包含：
 
-- 修改 ai-server、实现其 HTTP 队列、重试、熔断或文件回补；
+- 让 console 参与 ai-server HTTP 队列、重试、熔断或文件回补；
 - 代理在线 LLM 流量，或让 console 参与 ai-server 请求成功与否的判定；
 - 保存或展示 prompt、模型回复、tool arguments、完整 Provider attempts；
 - 把上报成功解释为配置已发布或 ai-server 实例已接受某份配置；
@@ -79,7 +79,7 @@ ai-server 后续发送器按以下信封调用 console：
     {
       "occurredAt": "2026-08-04T08:00:02.431Z",
       "audit": {
-        "schema_version": 5,
+        "schema_version": 6,
         "event": "llm_request",
         "request_id": "4ab7-22cd",
         "auth_user": "alice",
@@ -91,9 +91,9 @@ ai-server 后续发送器按以下信封调用 console：
         "status": 200,
         "duration_ms": 842,
         "usage_json": {
-          "promptTokens": 120,
-          "completionTokens": 48,
-          "total_tokens": 168
+          "in_cache": 20,
+          "in_nocache": 100,
+          "out": 48
         }
       }
     }
@@ -109,7 +109,8 @@ ai-server 后续发送器按以下信封调用 console：
 - 每批 1 到 100 条；HTTP body 最大 8 MiB。
 - `instanceId` 1 到 128 个 ASCII 字符，在一个环境内稳定标识进程实例。
 - `request_id`、`auth_user` 和核心展示字段必须通过长度、类型与数值范围校验。
-- 只接受 `schema_version=5` 和 `event=llm_request`。不认识的 schema 必须显式拒绝，不能静默误解。
+- 接受 `schema_version=6`，并为滚动升级兼容 v5；其他 schema 必须显式拒绝，不能静默误解。
+- v6 的三个 usage 字段是非负安全整数或 `null`；消费方仅在所需分项均存在时计算输入合计和总量。
 - `sentAt` 用于诊断发送延迟；P0 不持久化它，也不据此覆盖逐条 `occurredAt`。
 - 上报凭据绑定 console 当前配置环境，客户端不能通过 body 任意选择环境。
 
@@ -135,7 +136,7 @@ console 使用审计记录的 `auth_user` 精确查找 console 用户，并在�
 | 时间 | occurred at、console received at                                       |
 | 接口 | method、path、requested model、client protocol、stream                 |
 | 结果 | response status、成功/失败/客户端中断、duration、client aborted        |
-| 用量 | prompt、completion、total tokens                                       |
+| 用量 | v6 的 in-cache、non-cache input、output tokens；v5 历史三项            |
 | 摘要 | message/tool 数、请求/响应字节、capture complete、安全截断后的错误标识 |
 
 ### 8.2 禁止持久化或返回

@@ -1347,7 +1347,7 @@ TEST(LlmProxyIntegrationTest, DnsTimeoutSkipsRemainingTokensAndBacksOffRepeatedL
 
     ASSERT_TRUE(fixture.wait_for_audit_records(2));
     const std::string audit = fixture.audit_contents();
-    EXPECT_NE(audit.find(R"("schema_version":5)"), std::string::npos);
+    EXPECT_NE(audit.find(R"("schema_version":6)"), std::string::npos);
     EXPECT_NE(audit.find(R"(\"failure_phase\":\"dns\")"), std::string::npos);
     EXPECT_NE(audit.find(R"(\"io_error\":\"timed_out\")"), std::string::npos);
     EXPECT_NE(audit.find(R"(\"failure_source\":\"io\")"), std::string::npos);
@@ -1405,8 +1405,7 @@ TEST(LlmProxyIntegrationTest, DnsTimeoutWithoutFallbackReturnsCurrentTransportEr
               std::string::npos);
     EXPECT_NE(audit.find(R"("provider_attempt_count":1,"provider_attempt_skipped_count":2)"), std::string::npos);
     EXPECT_NE(audit.find(R"("error_json":"transport_error")"), std::string::npos);
-    EXPECT_NE(audit.find(R"("usage_json":{"promptTokens":0,"completionTokens":0,"total_tokens":0})"),
-              std::string::npos);
+    EXPECT_NE(audit.find(R"("usage_json":{"in_cache":null,"in_nocache":null,"out":null})"), std::string::npos);
     (void) ::close(dns_fd);
 }
 
@@ -1839,8 +1838,7 @@ TEST(LlmProxyIntegrationTest, DrainsSseUsageAfterClientDisconnectAndDoesNotRetry
     EXPECT_NE(audit.find(R"(\"response_started\":true,\"outcome\":\"success\")"), std::string::npos);
     EXPECT_NE(audit.find(R"("output_complete":true,"output_canonical_complete":true)"), std::string::npos);
     EXPECT_NE(audit.find(R"("client_aborted":true,"error_json":"conn_reset")"), std::string::npos);
-    EXPECT_NE(audit.find(R"("usage_json":{"promptTokens":2,"completionTokens":3,"total_tokens":5})"),
-              std::string::npos);
+    EXPECT_NE(audit.find(R"("usage_json":{"in_cache":0,"in_nocache":2,"out":3})"), std::string::npos);
 }
 
 TEST(LlmProxyIntegrationTest, DoesNotRetryWhenUpstreamFailsWhileDrainingAfterClientDisconnect) {
@@ -1974,8 +1972,7 @@ TEST(LlmProxyIntegrationTest, DrainsSseWhenClientDisconnectsBeforeResponseHeader
     EXPECT_NE(audit.find(R"("provider_attempt_count":1)"), std::string::npos);
     EXPECT_NE(audit.find(R"(\"response_started\":false,\"outcome\":\"success\")"), std::string::npos);
     EXPECT_NE(audit.find(R"("client_aborted":true,"error_json":"conn_reset")"), std::string::npos) << audit;
-    EXPECT_NE(audit.find(R"("usage_json":{"promptTokens":4,"completionTokens":6,"total_tokens":10})"),
-              std::string::npos);
+    EXPECT_NE(audit.find(R"("usage_json":{"in_cache":0,"in_nocache":4,"out":6})"), std::string::npos);
     EXPECT_NE(audit.find(R"("response_header_sent":false)"), std::string::npos);
 }
 
@@ -2108,14 +2105,15 @@ TEST(LlmProxyIntegrationTest, EmitsOneJsonAuditLineWithInputAndOutput) {
     EXPECT_NE(audit_json.find("weather is sunny"), std::string_view::npos);
     EXPECT_NE(audit_json.find(R"(\"city\":\"Paris\")"), std::string_view::npos);
     EXPECT_NE(audit_json.find(R"("attempts_json":"[{\")"), std::string_view::npos);
-    EXPECT_NE(audit_json.find(R"("schema_version":5)"), std::string_view::npos);
+    EXPECT_NE(audit_json.find(R"("schema_version":6)"), std::string_view::npos);
     EXPECT_NE(audit_json.find(R"("requested_model":"logical","client_protocol":"openai")"), std::string_view::npos);
     EXPECT_NE(audit_json.find(R"("content_type":"json_text","stream":false,"message_count":2,"tool_count":1)"),
               std::string_view::npos);
     EXPECT_NE(audit_json.find(R"("request_json":"{)"), std::string_view::npos);
     EXPECT_NE(audit_json.find(R"("response_json":"weather is sunny")"), std::string_view::npos);
-    EXPECT_NE(audit_json.find(R"("usage_json":{"promptTokens":8,"completionTokens":6,"total_tokens":14})"),
-              std::string_view::npos);
+    EXPECT_NE(audit_json.find(R"("usage_json":{"in_cache":3,"in_nocache":5,"out":6})"), std::string_view::npos);
+    EXPECT_EQ(audit_json.find("promptTokens"), std::string_view::npos);
+    EXPECT_EQ(audit_json.find("completionTokens"), std::string_view::npos);
     EXPECT_NE(audit_json.find(R"("user_agent":"audit-client/1.0","host":"127.0.0.1","real_ip":"203.0.113.9")"),
               std::string_view::npos);
     EXPECT_NE(audit_json.find(R"("error_json":"")"), std::string_view::npos);

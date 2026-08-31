@@ -1,7 +1,6 @@
 export type LlmCallOutcome = 'SUCCEEDED' | 'FAILED' | 'ABORTED'
 
-export interface V5AuditInput {
-  schema_version: 5
+interface AuditInputBase {
   event: 'llm_request'
   request_id: string
   auth_user: string
@@ -12,11 +11,6 @@ export interface V5AuditInput {
   stream: boolean
   status: number
   duration_ms: number
-  usage_json: {
-    promptTokens: number
-    completionTokens: number
-    total_tokens: number
-  }
   client_aborted?: boolean
   error_json?: string
   capture_complete?: boolean
@@ -27,13 +21,33 @@ export interface V5AuditInput {
   [key: string]: unknown
 }
 
+export interface V5AuditInput extends AuditInputBase {
+  schema_version: 5
+  usage_json: {
+    promptTokens: number
+    completionTokens: number
+    total_tokens: number
+  }
+}
+
+export interface V6AuditInput extends AuditInputBase {
+  schema_version: 6
+  usage_json: {
+    in_cache: number | null
+    in_nocache: number | null
+    out: number | null
+  }
+}
+
+export type LlmAuditInput = V5AuditInput | V6AuditInput
+
 export interface AuditIngestEnvelope {
   schemaVersion: 1
   instanceId: string
   sentAt: string
   records: Array<{
     occurredAt: string
-    audit: V5AuditInput
+    audit: LlmAuditInput
   }>
 }
 
@@ -45,7 +59,7 @@ export interface NewLlmCallAuditRecord {
   subjectUsername: string
   sourceInstanceId: string
   sourceRequestId: string
-  sourceSchemaVersion: number
+  sourceSchemaVersion: 5 | 6
   occurredAt: string
   receivedAt: string
   method: string
@@ -56,9 +70,12 @@ export interface NewLlmCallAuditRecord {
   responseStatus: number
   outcome: LlmCallOutcome
   durationMs: number
-  promptTokens: number
-  completionTokens: number
-  totalTokens: number
+  inCacheTokens: number | null
+  inNoCacheTokens: number | null
+  outTokens: number | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
   clientAborted: boolean
   captureComplete: boolean
   messageCount: number
@@ -101,9 +118,12 @@ export interface LlmCallAuditView {
   outcome: LlmCallOutcome
   durationMs: number
   usage: {
-    promptTokens: number
-    completionTokens: number
-    totalTokens: number
+    inCache: number | null
+    inNoCache: number | null
+    out: number | null
+    promptTokens: number | null
+    completionTokens: number | null
+    totalTokens: number | null
   }
   clientAborted: boolean
   captureComplete: boolean
