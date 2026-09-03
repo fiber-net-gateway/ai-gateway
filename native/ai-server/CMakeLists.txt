@@ -37,6 +37,7 @@ add_library(ai_server_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/TokenUsage.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/routing/ModelAuthorization.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/routing/ProviderRouteKey.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/server/HttpResponse.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/server/InitialConfigStartupGate.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/server/LlmRequestHandler.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/server/TokenRateLimitHttpHandler.cpp")
@@ -108,4 +109,17 @@ if (FIBER_BUILD_TESTS AND (GTest_FOUND OR TARGET GTest::gtest_main))
     endif()
 
     gtest_discover_tests(fiber_ai_server_tests)
+
+    add_executable(fiber_ai_server_http_tests
+        "${CMAKE_CURRENT_LIST_DIR}/tests/AiServerHttpTest.cpp")
+    target_link_libraries(fiber_ai_server_http_tests PRIVATE ai_server_core GTest::gtest_main)
+    set_target_properties(fiber_ai_server_http_tests PROPERTIES FOLDER "apps/ai-server")
+    fiber_link_runtime_allocator(fiber_ai_server_http_tests)
+
+    if (FIBER_ENABLE_LTO AND FIBER_IPO_SUPPORTED)
+        set_property(TARGET fiber_ai_server_http_tests PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    endif()
+
+    gtest_discover_tests(fiber_ai_server_http_tests TEST_PREFIX "AiServerHttp.")
+    add_dependencies(fiber_ai_server_tests fiber_ai_server_http_tests)
 endif()

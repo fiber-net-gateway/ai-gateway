@@ -82,9 +82,9 @@ Nacos 的多个 Data ID 不具备跨配置事务。配置后台即使按正确�
 
 当前 ai-server 提供：
 
-- `GET /health`：进程存活；
-- `GET /ready`：完整配置快照和限流成员环是否就绪；
-- `GET /metrics`：包括 `ai_server_config_generation`；
+- `GET|HEAD /health`：进程存活；
+- `GET|HEAD /ready`：完整配置快照和限流成员环是否就绪；
+- `GET|HEAD /metrics`：包括 `ai_server_config_generation`；
 - 进程内 `LlmConfigManager` 保存最后一次失败信息，但没有对外状态接口。
 
 仅靠上述接口无法证明某个 Data ID 的指定 MD5 是否被每个实例接受。控制台当前只记录

@@ -34,10 +34,12 @@
 | `POST /v1/message`                     | Anthropic 兼容别名      | BT1              |
 | `POST /internal/llm/rate-limit/check`  | owner 节点限流检查      | 无，必须网络隔离 |
 | `POST /internal/llm/rate-limit/settle` | owner 节点用量结算      | 无，必须网络隔离 |
-| `GET /health`                          | 进程存活探针            | 无               |
-| `GET /ready`                           | 配置和限流成员就绪探针  | 无               |
-| `GET /metrics`                         | Prometheus 文本指标     | 无               |
-| `GET /_metric_prometheus`              | 指标兼容别名            | 无               |
+| `GET, HEAD /health`                    | 进程存活探针            | 无               |
+| `GET, HEAD /ready`                     | 配置和限流成员就绪探针  | 无               |
+| `GET, HEAD /metrics`                   | Prometheus 文本指标     | 无               |
+| `GET, HEAD /_metric_prometheus`        | 指标兼容别名            | 无               |
+
+`HEAD` 返回与对应 `GET` 相同的状态码和表示元数据（包括 `Content-Length`），但不发送响应体。
 
 `/ready` 只有在 worker 已安装完整配置快照且限流成员环非空时返回 `200`；否则返回
 `503`。内部限流接口和指标接口没有应用层认证，生产部署必须通过监听地址、防火墙、

@@ -14,10 +14,10 @@ Nacos、CAT 和 Prometheus 设施，不机械复制 Java 对象图。
 - `POST /v1/message`
 - `POST /internal/llm/rate-limit/check`
 - `POST /internal/llm/rate-limit/settle`
-- `GET /health`
-- `GET /ready`
-- `GET /metrics`
-- `GET /_metric_prometheus`
+- `GET|HEAD /health`
+- `GET|HEAD /ready`
+- `GET|HEAD /metrics`
+- `GET|HEAD /_metric_prometheus`
 
 Provider 只执行与入站协议相同的协议。OpenAI/Anthropic 隐式协议桥接是项目已经
 确认的有意差异：不转换请求、响应或 SSE；缺少同协议候选时返回

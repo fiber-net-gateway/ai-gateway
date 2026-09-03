@@ -1,5 +1,7 @@
 #include "LlmRequestHandler.h"
 
+#include "HttpResponse.h"
+
 #include "../audit/LlmAuditLog.h"
 #include "../auth/LlmRequestAuthenticator.h"
 #include "../observability/AiServerCatRequest.h"
@@ -1562,18 +1564,7 @@ async::Task<void> send_body(http::HttpExchange &exchange, AiServerCatRequest *ca
         cat_request->inject_response_header(headers);
     }
     const std::size_t size = body ? body.readable() : 0;
-    auto sent_header = co_await exchange.send_header({
-            .kind = http::OutgoingHeaderKind::Final,
-            .status_code = status_code,
-            .headers = &headers,
-            .body = http::HttpBodySpec::ContentLength(size),
-            .connection_mode = http::ResponseConnectionMode::Auto,
-            .end_stream = size == 0,
-    });
-    if (!sent_header || size == 0) {
-        co_return;
-    }
-    (void) co_await exchange.write_all(body.readable_data(), size, true);
+    (void) co_await send_fixed_response(exchange, headers, status_code, body ? body.readable_data() : nullptr, size);
 }
 
 void record_cat_response_error(AiServerCatRequest *cat_request, const LlmError &error) noexcept {
@@ -1639,17 +1630,8 @@ async::Task<void> send_error(http::HttpExchange &exchange, AiServerCatRequest *c
     if (cat_request) {
         cat_request->inject_response_header(headers);
     }
-    auto sent_header = co_await exchange.send_header({
-            .kind = http::OutgoingHeaderKind::Final,
-            .status_code = error.status_code,
-            .headers = &headers,
-            .body = http::HttpBodySpec::ContentLength(encoded->readable()),
-            .connection_mode = http::ResponseConnectionMode::Auto,
-            .end_stream = encoded->readable() == 0,
-    });
-    if (sent_header && encoded->readable() > 0) {
-        (void) co_await exchange.write_all(encoded->readable_data(), encoded->readable(), true);
-    }
+    (void) co_await send_fixed_response(exchange, headers, error.status_code, encoded->readable_data(),
+                                        encoded->readable());
 }
 
 LlmError input_error(int status, std::string_view code, std::string_view message) noexcept {

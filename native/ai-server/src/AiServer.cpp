@@ -1,6 +1,7 @@
 #include "AiServer.h"
 #include "observability/AiServerCatRequest.h"
 #include "observability/AiServerLogCategories.h"
+#include "server/HttpResponse.h"
 #include "server/LlmRequestHandler.h"
 #include "server/TokenRateLimitHttpHandler.h"
 
@@ -52,36 +53,19 @@ http::HttpServerOptions make_server_options() noexcept {
 }
 
 async::Task<void> send_json(http::HttpExchange &exchange, const AiServerCatRequest &cat_request, int status_code,
-                            std::string_view body, bool allow_get = false) {
+                            std::string_view body, bool allow_get_and_head = false) {
     http::HttpHeaders headers(exchange.pool());
     headers.set_view("Content-Type", "application/json");
-    if (allow_get) {
-        headers.set_view("Allow", "GET");
+    if (allow_get_and_head) {
+        headers.set_view("Allow", "GET, HEAD");
     }
     cat_request.inject_response_header(headers);
 
-    auto header_result = co_await exchange.send_header({
-            .kind = http::OutgoingHeaderKind::Final,
-            .status_code = status_code,
-            .headers = &headers,
-            .body = http::HttpBodySpec::ContentLength(body.size()),
-            .connection_mode = http::ResponseConnectionMode::Auto,
-            .end_stream = body.empty(),
-    });
-    if (!header_result) {
-        LOG(LOG_HTTP, DEBUG) << "response header write failed path=" << fiber::log::quoted(exchange.uri().path)
-                             << " status=" << status_code << " io_error=" << common::io_err_name(header_result.error());
-        co_return;
-    }
-    if (body.empty()) {
-        co_return;
-    }
-
-    auto body_result =
-            co_await exchange.write_all(reinterpret_cast<const std::uint8_t *>(body.data()), body.size(), true);
-    if (!body_result) {
-        LOG(LOG_HTTP, DEBUG) << "response body write failed path=" << fiber::log::quoted(exchange.uri().path)
-                             << " status=" << status_code << " io_error=" << common::io_err_name(body_result.error());
+    auto sent = co_await send_fixed_response(exchange, headers, status_code,
+                                             reinterpret_cast<const std::uint8_t *>(body.data()), body.size());
+    if (!sent) {
+        LOG(LOG_HTTP, DEBUG) << "response write failed path=" << fiber::log::quoted(exchange.uri().path)
+                             << " status=" << status_code << " io_error=" << common::io_err_name(sent.error());
     }
 }
 
@@ -273,7 +257,7 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         co_return;
     }
     if (path == kMetricsPath || path == kMetricsAliasPath) {
-        if (exchange.method() != http::HttpMethod::Get) {
+        if (!is_get_or_head(exchange.method())) {
             co_await send_json(exchange, cat_request, 405, kMethodNotAllowedBody, true);
             co_return;
         }
@@ -299,19 +283,7 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         http::HttpHeaders headers(exchange.pool());
         headers.set_view("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
         cat_request.inject_response_header(headers);
-        const std::size_t size = collected->readable_bytes();
-        auto header = co_await exchange.send_header({
-                .kind = http::OutgoingHeaderKind::Final,
-                .status_code = 200,
-                .headers = &headers,
-                .body = http::HttpBodySpec::ContentLength(size),
-                .connection_mode = http::ResponseConnectionMode::Auto,
-                .end_stream = size == 0,
-        });
-        if (header && size != 0) {
-            collected->mark_complete();
-            (void) co_await exchange.write_all(std::move(*collected));
-        }
+        (void) co_await send_fixed_response(exchange, headers, 200, std::move(*collected));
         co_return;
     }
     if (path == kOpenAiChatPath || path == kAnthropicMessagesPath || path == kAnthropicMessageAliasPath) {
@@ -338,7 +310,7 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         co_await send_json(exchange, cat_request, 404, kNotFoundBody);
         co_return;
     }
-    if (exchange.method() != http::HttpMethod::Get) {
+    if (!is_get_or_head(exchange.method())) {
         co_await send_json(exchange, cat_request, 405, kMethodNotAllowedBody, true);
         co_return;
     }

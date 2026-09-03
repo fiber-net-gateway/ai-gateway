@@ -1,5 +1,7 @@
 #include "TokenRateLimitHttpHandler.h"
 
+#include "HttpResponse.h"
+
 #include "../limit/RateLimitHttpCodec.h"
 #include "../observability/AiServerCatRequest.h"
 
@@ -178,18 +180,8 @@ async::Task<void> send_json(http::HttpExchange &exchange, AiServerCatRequest *ca
     if (cat_request) {
         cat_request->inject_response_header(headers);
     }
-    auto sent = co_await exchange.send_header({
-            .kind = http::OutgoingHeaderKind::Final,
-            .status_code = status,
-            .headers = &headers,
-            .body = http::HttpBodySpec::ContentLength(body.size()),
-            .connection_mode = http::ResponseConnectionMode::Auto,
-            .end_stream = body.empty(),
-    });
-    if (!sent || body.empty()) {
-        co_return;
-    }
-    (void) co_await exchange.write_all(reinterpret_cast<const std::uint8_t *>(body.data()), body.size(), true);
+    (void) co_await send_fixed_response(exchange, headers, status, reinterpret_cast<const std::uint8_t *>(body.data()),
+                                        body.size());
 }
 
 async::Task<bool> prepare_request(http::HttpExchange &exchange, AiServerCatRequest *cat_request,
