@@ -87,12 +87,12 @@ http::Http1ClientConnectionOptions connection_options(const net::IpAddress &ip, 
     http::Http1ClientConnectionOptions options;
     options.peer_addr = net::SocketAddress(ip, endpoint.port);
     if (endpoint.tls()) {
-        options.tls.enabled = true;
+        options.tls.enable_tls = true;
         options.tls.verify_peer = true;
         if (endpoint.host_is_ip) {
             options.tls.verify_name = std::string(endpoint.host);
         } else {
-            options.tls.server_name = std::string(tls_server_name);
+            options.tls.sni_name = std::string(tls_server_name);
         }
     }
     return options;

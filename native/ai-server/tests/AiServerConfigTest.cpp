@@ -247,10 +247,17 @@ TEST(AiServerConfigTest, RejectsConfigurableNacosContextPath) {
 }
 
 TEST(AiServerConfigTest, RejectsInvalidValuesAndPartialCredentials) {
+    // Hostname NACOS servers are accepted since the shared DNS cache landed;
+    // parsing proceeds to the next missing required key instead of failing.
     auto hostname = AiServerConfig::load_from_string("NACOS_SERVER_ADDRESSES=nacos.internal\n");
     ASSERT_FALSE(hostname);
-    EXPECT_EQ(hostname.error().code, AiServerConfigErrorCode::InvalidValue);
-    EXPECT_EQ(hostname.error().key, "NACOS_SERVER_ADDRESSES");
+    EXPECT_EQ(hostname.error().code, AiServerConfigErrorCode::MissingRequiredKey);
+    EXPECT_EQ(hostname.error().key, "AI_SERVER_LOG_CONFIG_PATH");
+
+    auto invalid_hostname = AiServerConfig::load_from_string("NACOS_SERVER_ADDRESSES=nacos..internal\n");
+    ASSERT_FALSE(invalid_hostname);
+    EXPECT_EQ(invalid_hostname.error().code, AiServerConfigErrorCode::InvalidValue);
+    EXPECT_EQ(invalid_hostname.error().key, "NACOS_SERVER_ADDRESSES");
 
     auto invalid_port =
             AiServerConfig::load_from_string("NACOS_SERVER_ADDRESSES=127.0.0.1\nAI_SERVER_LISTEN_PORT=70000\n");

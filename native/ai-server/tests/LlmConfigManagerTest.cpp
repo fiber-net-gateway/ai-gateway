@@ -612,7 +612,8 @@ TEST(LlmConfigManagerTest, HttpWorkersInstallInitialSnapshotBeforeBind) {
     FakeNamingService naming;
     fiber::ai_server::LlmConfigManager manager(accept_loop, service, naming);
     auto initial_rejection = manager.subscribe_initial_rejection();
-    fiber::ai_server::AiServer server(accept_loop, workers);
+    fiber::dns::SharedDnsCache2 dns_cache;
+    fiber::ai_server::AiServer server(accept_loop, workers, dns_cache);
     bool completed = false;
 
     fiber::async::spawn(accept_loop, [&]() -> fiber::async::DetachedTask {

@@ -29,6 +29,7 @@
 #include <fiber/common/IoError.h>
 #include <fiber/common/json/JsonParse.h>
 #include <fiber/common/json/JsonStructDecode.h>
+#include <fiber/dns/DnsCache2.h>
 #include <fiber/event/EventLoop.h>
 #include <fiber/event/EventLoopGroup.h>
 #include <fiber/http/ClientHttp1Exchange.h>
@@ -485,7 +486,7 @@ public:
         service_rendezvous_(service_rendezvous), audit_max_record_bytes_(audit_max_record_bytes),
         enable_cat_(enable_cat), primary_dns_timeout_(primary_dns_timeout), fallback_enabled_(fallback_enabled),
         rate_limiters_(1), remote_client_(group), coordinator_(rate_limiters_, ring_, remote_client_),
-        connections_(group, std::move(dns_options)), provider_client_(connections_), metrics_(group),
+        connections_(group, dns_cache_, std::move(dns_options)), provider_client_(connections_), metrics_(group),
         cat_collector_(group.at(0)),
         provider_server_(group.at(0),
                          [this](fiber::http::HttpExchange &exchange) { return handle_provider(exchange); }),
@@ -497,7 +498,14 @@ public:
 
     fiber::async::DetachedTask start(std::promise<FixturePorts> *promise) noexcept {
         FixturePorts ports;
-        if (!metrics_.valid() || !coordinator_.init() || !co_await connections_.init()) {
+        if (!metrics_.valid() || !coordinator_.init()) {
+            promise->set_value(ports);
+            co_return;
+        }
+        // start() and shutdown() both run on group.at(0); the cache is bound to
+        // that loop so shutdown() can release it inline.
+        dns_cache_initialized_ = dns_cache_.init(fiber::event::EventLoop::current());
+        if (!dns_cache_initialized_ || !co_await connections_.init()) {
             promise->set_value(ports);
             co_return;
         }
@@ -572,6 +580,10 @@ public:
             co_await coordinator_.shutdown();
             co_await connections_.shutdown();
             initialized_ = false;
+        }
+        if (dns_cache_initialized_) {
+            dns_cache_.shutdown();
+            dns_cache_initialized_ = false;
         }
         entry_server_.close();
         co_await entry_server_.shutdown_and_wait();
@@ -1029,6 +1041,7 @@ private:
     fiber::ai_server::RateLimitShardRing ring_;
     fiber::ai_server::TokenRateLimitRemoteClient remote_client_;
     fiber::ai_server::TokenRateLimitCoordinator coordinator_;
+    fiber::dns::SharedDnsCache2 dns_cache_;
     fiber::ai_server::ProviderConnectionManager connections_;
     fiber::ai_server::ProviderHttpClient provider_client_;
     AiServerMetrics metrics_;
@@ -1040,6 +1053,7 @@ private:
     fiber::http::Http1Server failing_provider_server_;
     fiber::http::Http1Server entry_server_;
     bool initialized_ = false;
+    bool dns_cache_initialized_ = false;
 };
 
 class FixtureHarness {

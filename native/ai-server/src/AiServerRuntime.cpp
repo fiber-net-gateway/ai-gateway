@@ -246,6 +246,11 @@ AiServerRuntime::~AiServerRuntime() {
     FIBER_ASSERT(nacos_start_tasks_.empty());
     FIBER_ASSERT(cluster_start_tasks_.empty());
     FIBER_ASSERT(cat_start_tasks_.empty());
+    // In the Created state the DNS objects were never released on their owning
+    // loops (which may never have run), so their in-loop destructor assertions
+    // would fire. The owner is tearing down; leak them like create() failures.
+    // After Stopped, stop_dns() already released and reset every pointer.
+    leak_dns(dns_);
 }
 
 async::DetachedTask AiServerRuntime::start_cat() noexcept {

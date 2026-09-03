@@ -78,7 +78,10 @@ TEST(WorkerDnsServiceTest, SuppressesRepeatedTimeoutForNormalizedHostname) {
     workers.start();
     async::spawn(workers.at(0), [&]() -> async::DetachedTask {
         ResolveOutcome outcome;
-        outcome.initialized = co_await service.init(workers);
+        dns::SharedDnsCache2 cache;
+        if (cache.init(event::EventLoop::current())) {
+            outcome.initialized = co_await service.init(workers, cache);
+        }
         if (outcome.initialized) {
             auto first = co_await service.resolve("EXAMPLE.invalid.");
             if (!first) {
@@ -92,6 +95,7 @@ TEST(WorkerDnsServiceTest, SuppressesRepeatedTimeoutForNormalizedHostname) {
             }
         }
         co_await service.shutdown();
+        cache.shutdown();
         completed.set_value(outcome);
     });
 

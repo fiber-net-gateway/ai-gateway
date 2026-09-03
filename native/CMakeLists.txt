@@ -16,11 +16,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(FetchContent)
 
 set(AI_GATEWAY_FIBER_GATEWAY_REF
-    "05d88a300965f7e3755683ba954f9a58a04b80a7"
+    "1162be70a08521b14744650bffed8e7c1451ff37"
     CACHE STRING
     "Pinned fiber-gateway-cpp revision")
 set(AI_GATEWAY_FIBER_GATEWAY_SHA256
-    "96bfb30b1674adc48eb564445ef461af4c49117cb7b93cad313cc860b80ebec6"
+    "49625cd9e7ae0d0325b6b2f7d09bd380257f3ea30601375d960e76cb365cc4e0"
     CACHE STRING
     "SHA-256 of the pinned fiber-gateway-cpp source archive")
 set(AI_SERVER_AUDIT_TRANSPORT
