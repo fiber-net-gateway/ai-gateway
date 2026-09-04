@@ -160,8 +160,9 @@ AiServerRuntime::create(event::EventLoop &accept_loop, event::EventLoop &nacos_l
 #endif
     auto runtime = std::unique_ptr<AiServerRuntime>(new (std::nothrow) AiServerRuntime(
             accept_loop, nacos_loop, cat_loop, http_workers, config.listen_address(), listen_options,
-            config.initial_config_timeout(), config.advertise_address(), std::string(config.service_name()),
-            std::string(config.service_group()), config.nacos_cluster(), std::move(dns), std::move(cat_client),
+            config.initial_config_timeout(), config.advertise_address(), config.provider_pool(),
+            std::string(config.service_name()), std::string(config.service_group()), config.nacos_cluster(),
+            std::move(dns), std::move(cat_client),
 #if AI_SERVER_AUDIT_HTTP
             std::move(audit_sender),
 #endif
@@ -191,8 +192,8 @@ AiServerRuntime::AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop
                                  event::EventLoop &cat_loop, event::EventLoopGroup &http_workers,
                                  net::SocketAddress listen_address, net::ListenOptions listen_options,
                                  std::chrono::milliseconds initial_config_timeout, net::IpAddress advertise_address,
-                                 std::string service_name, std::string service_group, std::string nacos_cluster,
-                                 RuntimeDns dns, std::unique_ptr<cat::CatClient> cat_client,
+                                 ProviderPoolOptions provider_pool, std::string service_name, std::string service_group,
+                                 std::string nacos_cluster, RuntimeDns dns, std::unique_ptr<cat::CatClient> cat_client,
 #if AI_SERVER_AUDIT_HTTP
                                  std::unique_ptr<LlmAuditHttpSender> audit_sender,
 #endif
@@ -209,7 +210,8 @@ AiServerRuntime::AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop
     audit_sender_(std::move(audit_sender)),
 #endif
     config_manager_(nacos_loop, *config_service_, *naming_service_), dns_(std::move(dns)),
-    server_(accept_loop, http_workers, *dns_.cache, cat_client_.get(), audit_max_record_bytes, audit_appender_id
+    server_(accept_loop, http_workers, *dns_.cache, provider_pool, cat_client_.get(), audit_max_record_bytes,
+            audit_appender_id
 #if AI_SERVER_AUDIT_HTTP
             ,
             audit_sender_.get()

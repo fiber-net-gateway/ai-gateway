@@ -486,8 +486,8 @@ public:
         service_rendezvous_(service_rendezvous), audit_max_record_bytes_(audit_max_record_bytes),
         enable_cat_(enable_cat), primary_dns_timeout_(primary_dns_timeout), fallback_enabled_(fallback_enabled),
         rate_limiters_(1), remote_client_(group), coordinator_(rate_limiters_, ring_, remote_client_),
-        connections_(group, dns_cache_, std::move(dns_options)), provider_client_(connections_), metrics_(group),
-        cat_collector_(group.at(0)),
+        connections_(group, dns_cache_, fiber::ai_server::ProviderPoolOptions{}, std::move(dns_options)),
+        provider_client_(connections_), metrics_(group), cat_collector_(group.at(0)),
         provider_server_(group.at(0),
                          [this](fiber::http::HttpExchange &exchange) { return handle_provider(exchange); }),
         failing_provider_server_(

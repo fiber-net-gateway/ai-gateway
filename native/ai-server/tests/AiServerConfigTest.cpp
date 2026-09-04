@@ -55,6 +55,9 @@ CAT_ROUTER_ADDRESSES=127.0.0.10:8080,[2001:db8::10]:8081
 CAT_COLLECTOR_ADDRESSES=127.0.0.11:2280
 AI_SERVER_LOG_CONFIG_PATH=/tmp/custom-ai-server.logging.json
 AI_SERVER_INITIAL_CONFIG_TIMEOUT_MS=15000
+AI_SERVER_POOL_MAX_IDLE_PER_GROUP=32
+AI_SERVER_POOL_MAX_IDLE_TOTAL=512
+AI_SERVER_POOL_IDLE_TIMEOUT_MS=45000
 AI_SERVER_INSTANCE_ID=ai-server:gray-1
 AUDIT_INGEST_TOKEN=0123456789abcdef0123456789abcdef
 AUDIT_HTTP_QUEUE_CAPACITY_BYTES=1048576
@@ -98,6 +101,9 @@ AUDIT_HTTP_REQUEST_TIMEOUT_MS=7500
     ASSERT_EQ(result->cat_config()->bootstrap_collectors().size(), 1u);
     EXPECT_EQ(result->cat_config()->bootstrap_collectors()[0].to_string(), "127.0.0.11:2280");
     EXPECT_EQ(result->logging_config_path(), "/tmp/custom-ai-server.logging.json");
+    EXPECT_EQ(result->provider_pool().max_idle_per_group, 32u);
+    EXPECT_EQ(result->provider_pool().max_idle_total, 512u);
+    EXPECT_EQ(result->provider_pool().idle_timeout, std::chrono::milliseconds(45000));
 #if AI_SERVER_AUDIT_HTTP
     const auto &audit = result->audit_delivery_options();
     EXPECT_EQ(audit.instance_id, "ai-server:gray-1");
@@ -135,6 +141,9 @@ TEST(AiServerConfigTest, AppliesDefaultsForOptionalSettings) {
     EXPECT_EQ(result->nacos_cluster(), "daily1-dev");
     EXPECT_FALSE(result->cat_config());
     EXPECT_EQ(result->logging_config_path(), "ai-server.logging.json");
+    EXPECT_EQ(result->provider_pool().max_idle_per_group, 100u);
+    EXPECT_EQ(result->provider_pool().max_idle_total, 10000u);
+    EXPECT_EQ(result->provider_pool().idle_timeout, std::chrono::milliseconds(30000));
 #if AI_SERVER_AUDIT_HTTP
     EXPECT_EQ(result->audit_delivery_options().instance_id, "fiber-ai-server");
     EXPECT_TRUE(result->audit_delivery_options().ingest_token.empty());
@@ -158,6 +167,49 @@ TEST(AiServerConfigTest, RejectsInvalidAuditDeliverySettings) {
     EXPECT_EQ(oversized_batch.error().key, "AUDIT_HTTP_BATCH_SIZE");
 }
 #endif
+
+TEST(AiServerConfigTest, RejectsInvalidProviderPoolSettings) {
+    const auto load = [](std::string_view pool_lines) {
+        return AiServerConfig::load_from_string("NACOS_SERVER_ADDRESSES=127.0.0.1\n"
+                                                "AI_SERVER_LOG_CONFIG_PATH=ai-server.logging.json\n" +
+                                                std::string(pool_lines));
+    };
+
+    auto oversized_per_group = load("AI_SERVER_POOL_MAX_IDLE_PER_GROUP=1000001\n");
+    ASSERT_FALSE(oversized_per_group);
+    EXPECT_EQ(oversized_per_group.error().code, AiServerConfigErrorCode::InvalidValue);
+    EXPECT_EQ(oversized_per_group.error().key, "AI_SERVER_POOL_MAX_IDLE_PER_GROUP");
+
+    auto oversized_total = load("AI_SERVER_POOL_MAX_IDLE_TOTAL=10000001\n");
+    ASSERT_FALSE(oversized_total);
+    EXPECT_EQ(oversized_total.error().code, AiServerConfigErrorCode::InvalidValue);
+    EXPECT_EQ(oversized_total.error().key, "AI_SERVER_POOL_MAX_IDLE_TOTAL");
+
+    auto zero_timeout = load("AI_SERVER_POOL_IDLE_TIMEOUT_MS=0\n");
+    ASSERT_FALSE(zero_timeout);
+    EXPECT_EQ(zero_timeout.error().code, AiServerConfigErrorCode::InvalidValue);
+    EXPECT_EQ(zero_timeout.error().key, "AI_SERVER_POOL_IDLE_TIMEOUT_MS");
+
+    auto oversized_timeout = load("AI_SERVER_POOL_IDLE_TIMEOUT_MS=3600001\n");
+    ASSERT_FALSE(oversized_timeout);
+    EXPECT_EQ(oversized_timeout.error().code, AiServerConfigErrorCode::InvalidValue);
+    EXPECT_EQ(oversized_timeout.error().key, "AI_SERVER_POOL_IDLE_TIMEOUT_MS");
+
+    // The per-group limit is reported because its line wins the tie against the
+    // earlier total line, mirroring the Nacos cluster check.
+    auto per_group_above_total = load("AI_SERVER_POOL_MAX_IDLE_TOTAL=100\n"
+                                      "AI_SERVER_POOL_MAX_IDLE_PER_GROUP=200\n");
+    ASSERT_FALSE(per_group_above_total);
+    EXPECT_EQ(per_group_above_total.error().code, AiServerConfigErrorCode::InvalidValue);
+    EXPECT_EQ(per_group_above_total.error().key, "AI_SERVER_POOL_MAX_IDLE_PER_GROUP");
+    EXPECT_EQ(per_group_above_total.error().line, 4u);
+
+    auto disabled = load("AI_SERVER_POOL_MAX_IDLE_PER_GROUP=0\n"
+                         "AI_SERVER_POOL_MAX_IDLE_TOTAL=0\n");
+    ASSERT_TRUE(disabled) << disabled.error().detail;
+    EXPECT_EQ(disabled->provider_pool().max_idle_per_group, 0u);
+    EXPECT_EQ(disabled->provider_pool().max_idle_total, 0u);
+}
 
 TEST(AiServerConfigTest, UsesResolvedHostIpv4ForNacosAndCatDefaults) {
     auto result = AiServerConfig::load_from_string("NACOS_SERVER_ADDRESSES=127.0.0.1\n"
@@ -339,6 +391,9 @@ TEST(AiServerConfigTest, LoadsExampleFile) {
     ASSERT_EQ(result->nacos_config().server_hosts().size(), 1u);
     EXPECT_EQ(result->nacos_config().server_hosts()[0].value(), "127.0.0.1");
     EXPECT_EQ(result->initial_config_timeout(), std::chrono::milliseconds(60000));
+    EXPECT_EQ(result->provider_pool().max_idle_per_group, 100u);
+    EXPECT_EQ(result->provider_pool().max_idle_total, 10000u);
+    EXPECT_EQ(result->provider_pool().idle_timeout, std::chrono::milliseconds(30000));
     const auto expected_logging_path =
             (std::filesystem::path(FIBER_AI_SERVER_TEST_ENV_PATH).parent_path() / "ai-server.logging.json")
                     .lexically_normal();

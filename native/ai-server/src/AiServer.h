@@ -48,8 +48,8 @@ class LlmAuditHttpSender;
 class AiServer final : public common::NonCopyable, public common::NonMovable {
 public:
     AiServer(event::EventLoop &accept_loop, event::EventLoopGroup &worker_group, dns::SharedDnsCache2 &dns_cache,
-             cat::CatClient *cat_client = nullptr, std::size_t audit_max_record_bytes = 0,
-             log::AppenderId audit_appender_id = log::kInvalidAppenderId,
+             ProviderPoolOptions pool_options = {}, cat::CatClient *cat_client = nullptr,
+             std::size_t audit_max_record_bytes = 0, log::AppenderId audit_appender_id = log::kInvalidAppenderId,
              LlmAuditHttpSender *audit_http_sender = nullptr);
     ~AiServer();
 

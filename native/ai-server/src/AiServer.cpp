@@ -72,17 +72,17 @@ async::Task<void> send_json(http::HttpExchange &exchange, const AiServerCatReque
 } // namespace
 
 AiServer::AiServer(event::EventLoop &accept_loop, event::EventLoopGroup &worker_group, dns::SharedDnsCache2 &dns_cache,
-                   cat::CatClient *cat_client, std::size_t audit_max_record_bytes, log::AppenderId audit_appender_id,
-                   LlmAuditHttpSender *audit_http_sender) :
+                   ProviderPoolOptions pool_options, cat::CatClient *cat_client, std::size_t audit_max_record_bytes,
+                   log::AppenderId audit_appender_id, LlmAuditHttpSender *audit_http_sender) :
     accept_loop_(&accept_loop), worker_group_(&worker_group), cat_client_(cat_client),
     audit_max_record_bytes_(audit_max_record_bytes), audit_appender_id_(audit_appender_id),
     audit_http_sender_(audit_http_sender), workers_(worker_group.size()), rate_limiters_(worker_group.size()),
     rate_limit_remote_client_(worker_group),
     rate_limit_coordinator_(rate_limiters_, rate_limit_ring_, rate_limit_remote_client_),
-    provider_connections_(worker_group, dns_cache), provider_client_(provider_connections_), metrics_(worker_group),
-    server_(
-            accept_loop, [this](http::HttpExchange &exchange) { return handle(exchange); }, make_server_options(),
-            &worker_group) {
+    provider_connections_(worker_group, dns_cache, pool_options), provider_client_(provider_connections_),
+    metrics_(worker_group), server_(
+                                    accept_loop, [this](http::HttpExchange &exchange) { return handle(exchange); },
+                                    make_server_options(), &worker_group) {
     FIBER_ASSERT(worker_group.size() > 0);
     config_stop_publisher_ = config_stop_.acquire_publisher();
     FIBER_ASSERT(config_stop_publisher_.has_value());

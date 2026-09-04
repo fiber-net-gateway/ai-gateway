@@ -276,10 +276,14 @@ int main(int argc, char **argv) {
             co_return;
         }
         const fiber::net::SocketAddress bound_address(config.listen_address().ip(), *bound_port);
+        const auto &pool = config.provider_pool();
         LOG(LOG_LIFECYCLE, INFO) << "server listening scheme=http address="
                                  << fiber::log::quoted(bound_address.to_string())
                                  << " http_workers=" << http_workers.size()
-                                 << " nacos_servers=" << config.nacos_config().server_hosts().size();
+                                 << " nacos_servers=" << config.nacos_config().server_hosts().size()
+                                 << " provider_pool_idle_per_host=" << pool.max_idle_per_group
+                                 << " provider_pool_idle_total=" << pool.max_idle_total
+                                 << " provider_pool_idle_timeout_ms=" << pool.idle_timeout.count();
         std::cout << "ai-server listening on http://" << bound_address.to_string()
                   << ", http workers=" << http_workers.size()
                   << ", nacos servers=" << config.nacos_config().server_hosts().size() << std::endl;

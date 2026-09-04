@@ -4,6 +4,7 @@
 #include "../discovery/WeightedRendezvous.h"
 #include "ExecutionPlan.h"
 #include "ProviderEndpoint.h"
+#include "ProviderPoolOptions.h"
 #include "WorkerDnsService.h"
 
 #include <chrono>
@@ -18,7 +19,7 @@
 #include <fiber/common/NonCopyable.h>
 #include <fiber/common/NonMovable.h>
 #include <fiber/http/Http1ClientConnection.h>
-#include <fiber/http/LocalHttp1ConnectionPoolSet.h>
+#include <fiber/http/StealableHttp1ConnectionPoolSet.h>
 
 namespace fiber::event {
 class EventLoopGroup;
@@ -61,7 +62,7 @@ struct ProviderLoadBalanceLease {
 };
 
 struct ProviderConnectionLease {
-    http::LocalHttp1ConnectionPoolSet::Lease lease;
+    http::StealableHttp1ConnectionPoolSet::Lease lease;
     http::Http1ClientConnection *connection = nullptr;
     std::string host_header;
     std::string target;
@@ -70,9 +71,10 @@ struct ProviderConnectionLease {
 
 class ProviderConnectionManager final : public common::NonCopyable, public common::NonMovable {
 public:
-    explicit ProviderConnectionManager(event::EventLoopGroup &workers, dns::SharedDnsCache2 &dns_cache) noexcept;
+    explicit ProviderConnectionManager(event::EventLoopGroup &workers, dns::SharedDnsCache2 &dns_cache,
+                                       ProviderPoolOptions pool_options = {}) noexcept;
     ProviderConnectionManager(event::EventLoopGroup &workers, dns::SharedDnsCache2 &dns_cache,
-                              WorkerDnsService::Options dns_options) noexcept;
+                              ProviderPoolOptions pool_options, WorkerDnsService::Options dns_options) noexcept;
     ~ProviderConnectionManager();
 
     [[nodiscard]] async::Task<bool> init() noexcept;
@@ -88,7 +90,7 @@ private:
     event::EventLoopGroup *workers_ = nullptr;
     dns::SharedDnsCache2 *dns_cache_ = nullptr;
     WorkerDnsService dns_;
-    http::LocalHttp1ConnectionPoolSet pool_;
+    http::StealableHttp1ConnectionPoolSet pool_;
     bool pool_initialized_ = false;
     bool initialized_ = false;
 };

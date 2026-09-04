@@ -46,8 +46,11 @@ constexpr std::string_view kAuditBatchBytesKey = "AUDIT_HTTP_BATCH_MAX_BYTES";
 constexpr std::string_view kAuditFlushIntervalKey = "AUDIT_HTTP_FLUSH_INTERVAL_MS";
 constexpr std::string_view kAuditConnectTimeoutKey = "AUDIT_HTTP_CONNECT_TIMEOUT_MS";
 constexpr std::string_view kAuditRequestTimeoutKey = "AUDIT_HTTP_REQUEST_TIMEOUT_MS";
+constexpr std::string_view kPoolMaxIdlePerGroupKey = "AI_SERVER_POOL_MAX_IDLE_PER_GROUP";
+constexpr std::string_view kPoolMaxIdleTotalKey = "AI_SERVER_POOL_MAX_IDLE_TOTAL";
+constexpr std::string_view kPoolIdleTimeoutKey = "AI_SERVER_POOL_IDLE_TIMEOUT_MS";
 
-constexpr std::array<std::string_view, 30> kKnownKeys = {
+constexpr std::array<std::string_view, 33> kKnownKeys = {
         kListenAddressKey,
         kListenPortKey,
         kInitialConfigTimeoutKey,
@@ -78,6 +81,9 @@ constexpr std::array<std::string_view, 30> kKnownKeys = {
         kAuditFlushIntervalKey,
         kAuditConnectTimeoutKey,
         kAuditRequestTimeoutKey,
+        kPoolMaxIdlePerGroupKey,
+        kPoolMaxIdleTotalKey,
+        kPoolIdleTimeoutKey,
 };
 
 struct EnvEntry {
@@ -99,6 +105,8 @@ struct FieldLines {
     std::size_t cat_ip = 0;
     std::size_t cat_routers = 0;
     std::size_t cat_collectors = 0;
+    std::size_t pool_per_group = 0;
+    std::size_t pool_total = 0;
 };
 
 AiServerConfigError make_error(AiServerConfigErrorCode code, std::size_t line, std::string_view key,
@@ -464,7 +472,8 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
             std::chrono::milliseconds &initial_config_timeout, std::optional<net::IpAddress> &advertise_address,
             std::string &service_name, std::string &service_group, std::string &zone, std::string &cluster,
             cat::CatClientConfigParams &cat_params, bool &cat_setting_present,
-            nacos::NacosClientConfigParams &nacos_params, FieldLines &field_lines, std::string &logging_config_path
+            nacos::NacosClientConfigParams &nacos_params, FieldLines &field_lines, std::string &logging_config_path,
+            ProviderPoolOptions &pool_options
 #if AI_SERVER_AUDIT_HTTP
             ,
             LlmAuditDeliveryOptions &audit_options
@@ -629,6 +638,32 @@ apply_entry(const EnvEntry &entry, net::IpAddress &listen_ip, std::uint16_t &lis
         logging_config_path = entry.value;
         return {};
     }
+    if (entry.key == kPoolMaxIdlePerGroupKey) {
+        if (!parse_size(entry.value, 0, 1000000, pool_options.max_idle_per_group)) {
+            return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, entry.line, entry.key,
+                                              "expected 0 through 1000000 idle connections; 0 disables idle pooling"));
+        }
+        field_lines.pool_per_group = entry.line;
+        return {};
+    }
+    if (entry.key == kPoolMaxIdleTotalKey) {
+        if (!parse_size(entry.value, 0, 10000000, pool_options.max_idle_total)) {
+            return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, entry.line, entry.key,
+                                              "expected 0 through 10000000 idle connections; 0 disables idle pooling"));
+        }
+        field_lines.pool_total = entry.line;
+        return {};
+    }
+    if (entry.key == kPoolIdleTimeoutKey) {
+        std::chrono::milliseconds parsed;
+        if (!parse_milliseconds(entry.value, parsed) || parsed < std::chrono::milliseconds(1) ||
+            parsed > std::chrono::hours(1)) {
+            return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue, entry.line, entry.key,
+                                              "expected 1 through 3600000 milliseconds"));
+        }
+        pool_options.idle_timeout = parsed;
+        return {};
+    }
 #if AI_SERVER_AUDIT_HTTP
     if (entry.key == kAuditInstanceIdKey) {
         if (entry.value.empty() || entry.value.size() > 128) {
@@ -772,7 +807,8 @@ AiServerConfig::AiServerConfig(net::SocketAddress listen_address, nacos::NacosCl
                                std::chrono::milliseconds initial_config_timeout, net::IpAddress advertise_address,
                                std::optional<net::LocalIpv4Selection> detected_local_ipv4, std::string service_name,
                                std::string service_group, std::string zone, std::string cluster,
-                               std::optional<cat::CatClientConfig> cat_config, std::string logging_config_path
+                               std::optional<cat::CatClientConfig> cat_config, std::string logging_config_path,
+                               ProviderPoolOptions provider_pool
 #if AI_SERVER_AUDIT_HTTP
                                ,
                                LlmAuditDeliveryOptions audit_delivery_options
@@ -782,7 +818,8 @@ AiServerConfig::AiServerConfig(net::SocketAddress listen_address, nacos::NacosCl
     initial_config_timeout_(initial_config_timeout), advertise_address_(advertise_address),
     detected_local_ipv4_(std::move(detected_local_ipv4)), service_name_(std::move(service_name)),
     service_group_(std::move(service_group)), zone_(std::move(zone)), cluster_(std::move(cluster)),
-    cat_config_(std::move(cat_config)), logging_config_path_(std::move(logging_config_path))
+    cat_config_(std::move(cat_config)), logging_config_path_(std::move(logging_config_path)),
+    provider_pool_(provider_pool)
 #if AI_SERVER_AUDIT_HTTP
     ,
     audit_delivery_options_(std::move(audit_delivery_options))
@@ -853,6 +890,7 @@ std::expected<AiServerConfig, AiServerConfigError> AiServerConfig::load_from_str
     nacos_params.namespace_id = "public";
     FieldLines field_lines;
     std::string logging_config_path;
+    ProviderPoolOptions pool_options;
 #if AI_SERVER_AUDIT_HTTP
     LlmAuditDeliveryOptions audit_options;
     audit_options.instance_id = "fiber-ai-server";
@@ -860,7 +898,7 @@ std::expected<AiServerConfig, AiServerConfigError> AiServerConfig::load_from_str
     for (const EnvEntry &entry: *entries) {
         auto result = apply_entry(entry, listen_ip, listen_port, initial_config_timeout, advertise_address,
                                   service_name, service_group, zone, cluster, cat_params, cat_setting_present,
-                                  nacos_params, field_lines, logging_config_path
+                                  nacos_params, field_lines, logging_config_path, pool_options
 #if AI_SERVER_AUDIT_HTTP
                                   ,
                                   audit_options
@@ -875,6 +913,15 @@ std::expected<AiServerConfig, AiServerConfigError> AiServerConfig::load_from_str
         return std::unexpected(make_error(
                 AiServerConfigErrorCode::InvalidValue, report_cluster ? field_lines.cluster : field_lines.zone,
                 report_cluster ? kClusterKey : kZoneKey, "combined Nacos cluster name exceeds 255 bytes"));
+    }
+    if (pool_options.max_idle_total != 0 && pool_options.max_idle_per_group > pool_options.max_idle_total) {
+        // Report the explicitly configured key; ties fall to the later line like
+        // the Nacos cluster check above.
+        const bool report_per_group = field_lines.pool_per_group >= field_lines.pool_total;
+        return std::unexpected(make_error(AiServerConfigErrorCode::InvalidValue,
+                                          report_per_group ? field_lines.pool_per_group : field_lines.pool_total,
+                                          report_per_group ? kPoolMaxIdlePerGroupKey : kPoolMaxIdleTotalKey,
+                                          "per-host idle limit must not exceed the total idle limit"));
     }
     if (logging_config_path.empty()) {
         return std::unexpected(make_error(AiServerConfigErrorCode::MissingRequiredKey, 0, kLogConfigPathKey,
@@ -916,9 +963,9 @@ std::expected<AiServerConfig, AiServerConfigError> AiServerConfig::load_from_str
     return AiServerConfig(net::SocketAddress(listen_ip, listen_port), std::move(*nacos_config), initial_config_timeout,
                           *advertise_address, std::move(detected_local_ipv4), std::move(service_name),
                           std::move(service_group), std::move(zone), std::move(cluster), std::move(cat_config),
-                          std::move(logging_config_path)
+                          std::move(logging_config_path), pool_options
 #if AI_SERVER_AUDIT_HTTP
-                                  ,
+                          ,
                           std::move(audit_options)
 #endif
     );

@@ -9,6 +9,7 @@
 #include <fiber/event/EventLoop.h>
 #include <fiber/event/EventLoopGroup.h>
 #include <fiber/http/Http1ConnectionGroupKey.h>
+#include <fiber/http/HttpClientTlsOptions.h>
 #include <fiber/net/SocketAddress.h>
 
 namespace fiber::ai_server {
@@ -102,17 +103,18 @@ http::Http1ClientConnectionOptions connection_options(const net::IpAddress &ip, 
 
 } // namespace
 
-ProviderConnectionManager::ProviderConnectionManager(event::EventLoopGroup &workers,
-                                                     dns::SharedDnsCache2 &dns_cache) noexcept :
-    ProviderConnectionManager(workers, dns_cache, {}) {}
+ProviderConnectionManager::ProviderConnectionManager(event::EventLoopGroup &workers, dns::SharedDnsCache2 &dns_cache,
+                                                     ProviderPoolOptions pool_options) noexcept :
+    ProviderConnectionManager(workers, dns_cache, pool_options, {}) {}
 
 ProviderConnectionManager::ProviderConnectionManager(event::EventLoopGroup &workers, dns::SharedDnsCache2 &dns_cache,
+                                                     ProviderPoolOptions pool_options,
                                                      WorkerDnsService::Options dns_options) noexcept :
     workers_(&workers), dns_cache_(&dns_cache), dns_(std::move(dns_options)),
     pool_(workers, http::Http1ConnectionPoolCore::Options{
-                           .max_idle_per_group = 4,
-                           .max_idle_total = 256,
-                           .idle_timeout = std::chrono::seconds(30),
+                           .max_idle_per_group = pool_options.max_idle_per_group,
+                           .max_idle_total = pool_options.max_idle_total,
+                           .idle_timeout = pool_options.idle_timeout,
                            .initial_group_capacity = 16,
                    }) {}
 
@@ -207,7 +209,7 @@ ProviderConnectionManager::acquire(const ResolvedProviderAttempt &attempt, std::
 
     ProviderConnectionLease output;
     output.load_balance = std::move(dial.load_balance);
-    output.lease = pool_.acquire(*dial.key);
+    output.lease = co_await pool_.acquire(*dial.key);
     if (!output.lease.valid()) {
         co_return std::unexpected(error(ProviderConnectionErrorCode::PoolShutdown,
                                         "provider connection pool is shutting down", common::IoErr::Canceled));
@@ -231,7 +233,7 @@ ProviderConnectionManager::acquire(const ResolvedProviderAttempt &attempt, std::
     common::IoErr last_error = common::IoErr::NotFound;
     for (std::uint16_t i = 0; i < dial.addresses.size; ++i) {
         if (i > 0) {
-            output.lease = pool_.acquire(*dial.key);
+            output.lease = co_await pool_.acquire(*dial.key);
             if (!output.lease.valid()) {
                 co_return std::unexpected(error(ProviderConnectionErrorCode::PoolShutdown,
                                                 "provider connection pool is shutting down", common::IoErr::Canceled));

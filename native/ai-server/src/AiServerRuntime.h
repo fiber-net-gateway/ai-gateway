@@ -117,8 +117,9 @@ private:
     AiServerRuntime(event::EventLoop &accept_loop, event::EventLoop &nacos_loop, event::EventLoop &cat_loop,
                     event::EventLoopGroup &http_workers, net::SocketAddress listen_address,
                     net::ListenOptions listen_options, std::chrono::milliseconds initial_config_timeout,
-                    net::IpAddress advertise_address, std::string service_name, std::string service_group,
-                    std::string nacos_cluster, RuntimeDns dns, std::unique_ptr<cat::CatClient> cat_client,
+                    net::IpAddress advertise_address, ProviderPoolOptions provider_pool, std::string service_name,
+                    std::string service_group, std::string nacos_cluster, RuntimeDns dns,
+                    std::unique_ptr<cat::CatClient> cat_client,
 #if AI_SERVER_AUDIT_HTTP
                     std::unique_ptr<LlmAuditHttpSender> audit_sender,
 #endif
