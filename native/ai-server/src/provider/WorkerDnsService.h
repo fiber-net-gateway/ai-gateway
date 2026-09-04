@@ -44,7 +44,10 @@ class WorkerDnsService final : public common::NonCopyable, public common::NonMov
 public:
     struct Options {
         std::optional<net::SocketAddress> nameserver;
-        std::chrono::milliseconds timeout{2000};
+        // Per-attempt deadline. Upstream recursive resolvers (CoreDNS forward) retry internally on
+        // their own ~2s deadline, answering just past 2s after a single UDP loss; keep this above
+        // that so one lost packet is absorbed by the first attempt instead of failing the query.
+        std::chrono::milliseconds timeout{3000};
         std::chrono::milliseconds transient_failure_ttl{2000};
         std::uint8_t attempts = 2;
     };
