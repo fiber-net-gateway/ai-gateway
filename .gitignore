@@ -20,3 +20,6 @@ native/build*/
 .idea/
 .vscode/
 *.log
+
+# Local gateway verification runs: minted BT1 tokens, Nacos key material.
+.local-test/

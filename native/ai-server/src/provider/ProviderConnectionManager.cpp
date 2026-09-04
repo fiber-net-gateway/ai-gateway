@@ -87,13 +87,15 @@ http::Http1ClientConnectionOptions connection_options(const net::IpAddress &ip, 
     http::Http1ClientConnectionOptions options;
     options.peer_addr = net::SocketAddress(ip, endpoint.port);
     if (endpoint.tls()) {
-        options.tls.enable_tls = true;
-        options.tls.verify_peer = true;
+        http::HttpClientTlsOptions tls;
+        // Null trust_store falls back to the process-wide system trust roots.
+        tls.security.verify_peer = true;
         if (endpoint.host_is_ip) {
-            options.tls.verify_name = std::string(endpoint.host);
+            tls.verify_name = std::string(endpoint.host);
         } else {
-            options.tls.sni_name = std::string(tls_server_name);
+            tls.server_name = std::string(tls_server_name);
         }
+        options.tls = std::move(tls);
     }
     return options;
 }
