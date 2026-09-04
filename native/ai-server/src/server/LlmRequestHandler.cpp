@@ -722,6 +722,7 @@ struct ProviderAttemptAudit {
     std::string_view io_error;
     std::string_view failure_source;
     std::string_view retry_target;
+    FixedAuditText<128> upstream_request_id;
     std::size_t index = 0;
     std::size_t total = 0;
     std::size_t skipped_attempts = 0;
@@ -743,6 +744,7 @@ struct ProviderAttemptObservation {
     ProviderHttpErrorCode failure_code = ProviderHttpErrorCode::Count;
     int status = 0;
     bool response_started = false;
+    std::string_view upstream_request_id;
 };
 
 std::string_view provider_failure_phase(const ProviderAttemptObservation &observation) noexcept {
@@ -779,6 +781,9 @@ void add_provider_upstream_error_data(cat::Event &event, const ProviderAttemptOb
     }
     if (observation.response_started) {
         (void) event.add_data("response_started", "true");
+    }
+    if (!observation.upstream_request_id.empty()) {
+        (void) event.add_data("upstream_request_id", observation.upstream_request_id);
     }
     if (observation.status > 0) {
         std::array<char, 16> status_text{};
@@ -999,6 +1004,7 @@ public:
                                           : common::io_err_name(observation.io_error);
                 record.failure_source = observation.failure_source;
                 record.retry_target = provider_retry_target_name(observation.retry.retry_target);
+                record.upstream_request_id.assign(observation.upstream_request_id);
                 record.index = index + 1;
                 record.total = total;
                 record.skipped_attempts = observation.retry.skipped_attempts;
@@ -1073,6 +1079,11 @@ private:
             json.field("protocol", protocol_name(protocol_));
             json.field("upstream_model", attempt.upstream_model);
             json.field("path", attempt.path);
+            if (attempt.upstream_request_id.empty()) {
+                json.null_field("upstream_request_id");
+            } else {
+                json.field("upstream_request_id", attempt.upstream_request_id.view());
+            }
             json.field("provider_config_version", attempt.provider_config_version);
             json.field("fallback", attempt.fallback);
             json.field("status", attempt.status);
@@ -1949,6 +1960,59 @@ common::IoErr sse_parser_io_error(SseParseError error) noexcept {
     return common::IoErr::Invalid;
 }
 
+// Ends an in-flight SSE relay after an upstream failure by emitting a
+// protocol-shaped terminal error event, so clients observe an explicit error
+// instead of a silently truncated stream. Returns false when the event could
+// not be delivered, in which case the caller should abort the exchange.
+async::Task<bool> finish_sse_with_error(http::HttpExchange &exchange, LlmWireProtocol protocol,
+                                        common::IoErr error) noexcept {
+    const std::string_view io_name = common::io_err_name(error);
+    std::array<char, 256> storage{};
+    const int length =
+            protocol == LlmWireProtocol::AnthropicMessages
+                    ? std::snprintf(storage.data(), storage.size(),
+                                    "event: error\r\n"
+                                    "data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":"
+                                    "\"upstream stream ended prematurely (io_error=%.*s)\"}}\r\n\r\n",
+                                    static_cast<int>(io_name.size()), io_name.data())
+                    : std::snprintf(storage.data(), storage.size(),
+                                    "data: {\"error\":{\"message\":"
+                                    "\"upstream stream ended prematurely (io_error=%.*s)\",\"type\":\"server_error\","
+                                    "\"param\":null,\"code\":null}}\r\n\r\n",
+                                    static_cast<int>(io_name.size()), io_name.data());
+    if (length <= 0 || static_cast<std::size_t>(length) >= storage.size()) {
+        co_return false;
+    }
+    mem::IoBuf body = mem::IoBuf::allocate(static_cast<std::size_t>(length));
+    if (!body) {
+        co_return false;
+    }
+    std::memcpy(body.writable_data(), storage.data(), static_cast<std::size_t>(length));
+    body.commit(static_cast<std::size_t>(length));
+    mem::IoBufChain chain(event::EventLoop::current().io_buf_node_pool());
+    if (!chain.append(std::move(body))) {
+        co_return false;
+    }
+    chain.mark_complete();
+    const auto written = co_await exchange.write_all(std::move(chain));
+    co_return written.has_value();
+}
+
+// Drains the downstream half of a relay whose upstream failed mid-stream:
+// best-effort error event first, hard abort only when that delivery fails.
+async::Task<void> terminate_downstream_after_upstream_error(http::HttpExchange &exchange, LlmWireProtocol protocol,
+                                                            common::IoErr error, bool &downstream_delivery_open,
+                                                            bool &downstream_delivery_failed) noexcept {
+    if (!downstream_delivery_open) {
+        co_return;
+    }
+    downstream_delivery_open = false;
+    if (!co_await finish_sse_with_error(exchange, protocol, error)) {
+        downstream_delivery_failed = true;
+        (void) exchange.abort(error);
+    }
+}
+
 async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttpResponseStream &upstream,
                                       LlmWireProtocol protocol, bool downstream_delivery_open,
                                       std::optional<LlmTokenUsage> &usage, LlmRequestAudit &audit) noexcept {
@@ -1991,7 +2055,8 @@ async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttp
                 downstream_delivery_failed = true;
             }
             if (downstream_delivery_open) {
-                (void) exchange.abort(chunk.error());
+                co_await terminate_downstream_after_upstream_error(
+                        exchange, protocol, chunk.error(), downstream_delivery_open, downstream_delivery_failed);
             }
             co_return SseRelayResult{
                     .upstream_error = chunk.error(),
@@ -2015,7 +2080,8 @@ async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttp
                 const common::IoErr error = sse_parser_io_error(parser.error());
                 (void) upstream.abort(error);
                 if (downstream_delivery_open) {
-                    (void) exchange.abort(error);
+                    co_await terminate_downstream_after_upstream_error(
+                            exchange, protocol, error, downstream_delivery_open, downstream_delivery_failed);
                 }
                 co_return SseRelayResult{
                         .upstream_error = error,
@@ -2028,7 +2094,8 @@ async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttp
                         status == SseParseStatus::Error ? sse_parser_io_error(parser.error()) : common::IoErr::Invalid;
                 (void) upstream.abort(error);
                 if (downstream_delivery_open) {
-                    (void) exchange.abort(error);
+                    co_await terminate_downstream_after_upstream_error(
+                            exchange, protocol, error, downstream_delivery_open, downstream_delivery_failed);
                 }
                 co_return SseRelayResult{
                         .upstream_error = error,
@@ -2042,7 +2109,8 @@ async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttp
                 const common::IoErr error = sse_parser_io_error(parser.error());
                 (void) upstream.abort(error);
                 if (downstream_delivery_open) {
-                    (void) exchange.abort(error);
+                    co_await terminate_downstream_after_upstream_error(
+                            exchange, protocol, error, downstream_delivery_open, downstream_delivery_failed);
                 }
                 co_return SseRelayResult{
                         .upstream_error = error,
@@ -2055,7 +2123,8 @@ async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttp
                         status == SseParseStatus::Error ? sse_parser_io_error(parser.error()) : common::IoErr::Invalid;
                 (void) upstream.abort(error);
                 if (downstream_delivery_open) {
-                    (void) exchange.abort(error);
+                    co_await terminate_downstream_after_upstream_error(
+                            exchange, protocol, error, downstream_delivery_open, downstream_delivery_failed);
                 }
                 co_return SseRelayResult{
                         .upstream_error = error,
@@ -2400,6 +2469,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                 .outcome = "upstream_error",
                                 .retry = selection,
                                 .status = buffered->status_code,
+                                .upstream_request_id = buffered->request_id,
                         },
                         provider_cat_transaction);
                 if (selection.retry_performed) {
@@ -2440,6 +2510,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                                .io_error = common::IoErr::Invalid,
                                                .failure_code = ProviderHttpErrorCode::InvalidResponse,
                                                .status = started->status_code(),
+                                               .upstream_request_id = started->request_id(),
                                        },
                                        provider_cat_transaction);
                 (void) started->abort(common::IoErr::Invalid);
@@ -2500,6 +2571,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                                                    : ProviderHttpErrorCode::ReadBody,
                                            .status = started->status_code(),
                                            .response_started = response_started,
+                                           .upstream_request_id = started->request_id(),
                                    },
                                    provider_cat_transaction);
             audit.usage(usage, attempt);
@@ -2571,6 +2643,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                            .timing = response->timing,
                                            .outcome = "success",
                                            .status = response->status_code,
+                                           .upstream_request_id = response->request_id,
                                    },
                                    provider_cat_transaction);
             audit.usage(usage, attempt);
@@ -2603,6 +2676,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                        .outcome = "upstream_error",
                                        .retry = selection,
                                        .status = response->status_code,
+                                       .upstream_request_id = response->request_id,
                                },
                                provider_cat_transaction);
         if (selection.retry_performed) {

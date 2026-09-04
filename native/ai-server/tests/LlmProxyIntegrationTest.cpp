@@ -90,6 +90,7 @@ struct MockReply {
     std::string content_type = "application/json";
     std::string body;
     std::string retry_after;
+    std::string request_id;
     std::vector<std::string> chunks;
     bool stream = false;
     bool abort_before_header = false;
@@ -920,6 +921,9 @@ private:
         if (!reply.retry_after.empty()) {
             headers.set("Retry-After", reply.retry_after);
         }
+        if (!reply.request_id.empty()) {
+            headers.set("X-Request-Id", reply.request_id);
+        }
         const std::size_t body_size = reply.stream ? 0 : reply.body.size();
         auto sent = co_await exchange.send_header({
                 .kind = fiber::http::OutgoingHeaderKind::Final,
@@ -1743,6 +1747,7 @@ TEST(LlmProxyIntegrationTest, RelaysSseBytesUnchangedAndNeverRetriesAfterRespons
                     MockReply{
                             .status = 200,
                             .content_type = "text/event-stream",
+                            .request_id = "req-truncated-1",
                             .chunks =
                                     {
                                             "data: {\"choices\":[]}\n\n",
@@ -1777,6 +1782,9 @@ TEST(LlmProxyIntegrationTest, RelaysSseBytesUnchangedAndNeverRetriesAfterRespons
     EXPECT_TRUE(truncated.complete);
     EXPECT_EQ(truncated.trace_id, "sse-truncated-root");
     EXPECT_EQ(truncated.body.find("data: [DONE]"), std::string::npos);
+    // The mid-stream upstream failure surfaces as a terminal OpenAI-shaped error event.
+    EXPECT_NE(truncated.body.find("\"type\":\"server_error\""), std::string::npos);
+    EXPECT_NE(truncated.body.find("io_error="), std::string::npos);
     EXPECT_EQ(fixture.observed().size(), 2u);
     EXPECT_TRUE(fixture.wait_for_cat_frame("upstream_model=upstream-primary", "body_transfer_us="));
     EXPECT_FALSE(fixture.cat_frame_contains("upstream_model=upstream-primary", "time_to_first_token_us="));
@@ -2047,6 +2055,7 @@ TEST(LlmProxyIntegrationTest, EmitsOneJsonAuditLineWithInputAndOutput) {
             MockReply{
                     .status = 200,
                     .body = R"({"id":"ok","choices":[{"message":{"role":"assistant","content":"weather is sunny","tool_calls":[{"type":"function","function":{"name":"weather","arguments":"{\"city\":\"Paris\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":8,"completion_tokens":6,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":3}}})",
+                    .request_id = "req-audit-42",
             },
     });
     ASSERT_TRUE(fixture.valid());
@@ -2112,6 +2121,12 @@ TEST(LlmProxyIntegrationTest, EmitsOneJsonAuditLineWithInputAndOutput) {
               fiber::json::ParseStatus::Done);
     ASSERT_TRUE(parsed_attempts.is_array());
     ASSERT_EQ(parsed_attempts.as_array().size(), 1u);
+    const fiber::json::JsonAny &attempt = parsed_attempts.as_array()[0];
+    ASSERT_TRUE(attempt.is_object());
+    const auto *upstream_request_id_field = attempt.as_object().find("upstream_request_id");
+    ASSERT_NE(upstream_request_id_field, nullptr);
+    ASSERT_TRUE(upstream_request_id_field->value.is_text());
+    EXPECT_EQ(upstream_request_id_field->value.as_text(), "req-audit-42");
 
     EXPECT_NE(audit_json.find("answer briefly"), std::string_view::npos);
     EXPECT_NE(audit_json.find("weather in Paris"), std::string_view::npos);
