@@ -8,14 +8,14 @@
 #include <fiber/common/Assert.h>
 #include <fiber/event/EventLoop.h>
 #include <fiber/event/EventLoopGroup.h>
-#include <fiber/http/Http1ConnectionGroupKey.h>
 #include <fiber/http/HttpClientTlsOptions.h>
+#include <fiber/http/HttpConnectionGroupKey.h>
 #include <fiber/net/SocketAddress.h>
 
 namespace fiber::ai_server {
 namespace {
 
-using ConnectionKey = http::Http1ConnectionGroupKey;
+using ConnectionKey = http::HttpConnectionGroupKey;
 
 struct DialTarget {
     ParsedProviderEndpoint endpoint;
@@ -83,22 +83,23 @@ std::optional<ConnectionKey> connection_key(const ParsedProviderEndpoint &endpoi
     return ConnectionKey::from_name(endpoint.host, endpoint.port, scheme);
 }
 
-http::Http1ClientConnectionOptions connection_options(const net::IpAddress &ip, const ParsedProviderEndpoint &endpoint,
-                                                      std::string_view tls_server_name) {
-    http::Http1ClientConnectionOptions options;
-    options.peer_addr = net::SocketAddress(ip, endpoint.port);
-    if (endpoint.tls()) {
-        http::HttpClientTlsOptions tls;
-        // Null trust_store falls back to the process-wide system trust roots.
-        tls.security.verify_peer = true;
-        if (endpoint.host_is_ip) {
-            tls.verify_name = std::string(endpoint.host);
-        } else {
-            tls.server_name = std::string(tls_server_name);
-        }
-        options.tls = std::move(tls);
+// TLS settings for dialing `endpoint`. The returned views borrow the endpoint's
+// host and `tls_server_name`, so both must outlive the connect() call that
+// takes the result (HttpClientTlsOptions is non-owning).
+std::optional<http::HttpClientTlsOptions> connection_tls(const ParsedProviderEndpoint &endpoint,
+                                                         std::string_view tls_server_name) {
+    if (!endpoint.tls()) {
+        return std::nullopt;
     }
-    return options;
+    http::HttpClientTlsOptions tls;
+    // Null trust_store falls back to the process-wide system trust roots.
+    tls.security.verify_peer = true;
+    if (endpoint.host_is_ip) {
+        tls.verify_name = endpoint.host;
+    } else {
+        tls.server_name = tls_server_name;
+    }
+    return tls;
 }
 
 } // namespace
@@ -182,8 +183,8 @@ ProviderConnectionManager::acquire(const ResolvedProviderAttempt &attempt, std::
         dial.addresses.addresses[0] = selected_ip;
         dial.addresses.size = 1;
         dial.host_header = std::string(selected->authority());
-        dial.key = http::Http1ConnectionGroupKey::from_ip(selected_ip, selected->port(),
-                                                          http::Http1ConnectionGroupKey::Scheme::Http);
+        dial.key = http::HttpConnectionGroupKey::from_ip(selected_ip, selected->port(),
+                                                         http::HttpConnectionGroupKey::Scheme::Http);
         dial.load_balance = ProviderLoadBalanceLease{
                 .instance = std::move(*selected),
         };
@@ -245,14 +246,20 @@ ProviderConnectionManager::acquire(const ResolvedProviderAttempt &attempt, std::
                 co_return std::move(output);
             }
         }
-        auto connection = output.lease.emplace_connection(
-                connection_options(dial.addresses.addresses[i], dial.endpoint, dial.tls_server_name));
+        auto connection = output.lease.emplace_connection();
         if (!connection) {
             last_error = connection.error();
             output.lease.reset();
             continue;
         }
-        auto connected = co_await (*connection)->connect(connect_timeout);
+        const std::optional<http::HttpClientTlsOptions> tls = connection_tls(dial.endpoint, dial.tls_server_name);
+        const net::SocketAddress peer(dial.addresses.addresses[i], dial.endpoint.port);
+        common::IoResult<void> connected = std::unexpected(common::IoErr::Invalid);
+        if (tls.has_value()) {
+            connected = co_await (*connection)->connect(peer, connect_timeout, *tls);
+        } else {
+            connected = co_await (*connection)->connect(peer, connect_timeout);
+        }
         if (connected) {
             output.connection = *connection;
             output.host_header = std::move(dial.host_header);

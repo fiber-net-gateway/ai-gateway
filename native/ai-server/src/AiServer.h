@@ -30,7 +30,8 @@
 #include "fiber/dns/DnsCache2.h"
 #include "fiber/event/EventLoop.h"
 #include "fiber/event/EventLoopGroup.h"
-#include "fiber/http/Http1Server.h"
+#include "fiber/http/Server.h"
+#include "fiber/http/endpoint/Http1Endpoint.h"
 #include "fiber/log/LogConfig.h"
 #include "fiber/net/SocketAddress.h"
 #include "fiber/net/TcpListener.h"
@@ -100,7 +101,8 @@ private:
     ProviderConnectionManager provider_connections_;
     ProviderHttpClient provider_client_;
     AiServerMetrics metrics_;
-    http::Http1Server server_;
+    http::Server server_;
+    http::Http1Endpoint *http1_endpoint_ = nullptr;
 };
 
 } // namespace fiber::ai_server

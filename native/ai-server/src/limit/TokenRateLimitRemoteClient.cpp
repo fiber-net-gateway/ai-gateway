@@ -13,8 +13,8 @@
 #include <fiber/event/EventLoop.h>
 #include <fiber/http/ClientHttp1Exchange.h>
 #include <fiber/http/ClientHttp1Types.h>
-#include <fiber/http/Http1ConnectionGroupKey.h>
 #include <fiber/http/HttpBodySpec.h>
+#include <fiber/http/HttpConnectionGroupKey.h>
 #include <fiber/http/HttpHeaders.h>
 #include <fiber/net/IpAddress.h>
 #include <fiber/net/SocketAddress.h>
@@ -142,7 +142,7 @@ TokenRateLimitRemoteClient::post(const RateLimitNode &node, std::string_view pat
     if (node.port == 0 || !net::IpAddress::parse(node.host, ip) || !ip.is_v4() || ip.is_unspecified()) {
         co_return std::unexpected(error(RateLimitRemoteErrorCode::InvalidNode, common::IoErr::Invalid));
     }
-    const auto key = http::Http1ConnectionGroupKey::from_ip(ip, node.port, http::Http1ConnectionGroupKey::Scheme::Http);
+    const auto key = http::HttpConnectionGroupKey::from_ip(ip, node.port, http::HttpConnectionGroupKey::Scheme::Http);
     auto lease = pool_.acquire(key);
     if (!lease.valid()) {
         co_return std::unexpected(error(RateLimitRemoteErrorCode::PoolUnavailable, common::IoErr::Canceled));
@@ -150,14 +150,12 @@ TokenRateLimitRemoteClient::post(const RateLimitNode &node, std::string_view pat
     http::Http1ClientConnection *connection = lease.get();
     const auto deadline = event::EventLoop::current().now() + kRequestTimeout;
     if (!connection) {
-        auto emplaced = lease.emplace_connection(http::Http1ClientConnectionOptions{
-                .peer_addr = net::SocketAddress(ip, node.port),
-        });
+        auto emplaced = lease.emplace_connection();
         if (!emplaced) {
             co_return std::unexpected(error(RateLimitRemoteErrorCode::Connect, emplaced.error()));
         }
         connection = *emplaced;
-        auto connected = co_await connection->connect(remaining(deadline));
+        auto connected = co_await connection->connect(net::SocketAddress(ip, node.port), remaining(deadline));
         if (!connected) {
             co_return std::unexpected(error(RateLimitRemoteErrorCode::Connect, connected.error()));
         }

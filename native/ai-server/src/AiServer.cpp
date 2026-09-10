@@ -46,8 +46,8 @@ std::int64_t wall_now_millis() noexcept {
             .count();
 }
 
-http::HttpServerOptions make_server_options() noexcept {
-    http::HttpServerOptions options;
+http::Http1ServerOptions make_server_options() noexcept {
+    http::Http1ServerOptions options;
     options.drain_unread_body = true;
     return options;
 }
@@ -80,9 +80,8 @@ AiServer::AiServer(event::EventLoop &accept_loop, event::EventLoopGroup &worker_
     rate_limit_remote_client_(worker_group),
     rate_limit_coordinator_(rate_limiters_, rate_limit_ring_, rate_limit_remote_client_),
     provider_connections_(worker_group, dns_cache, pool_options), provider_client_(provider_connections_),
-    metrics_(worker_group), server_(
-                                    accept_loop, [this](http::HttpExchange &exchange) { return handle(exchange); },
-                                    make_server_options(), &worker_group) {
+    metrics_(worker_group),
+    server_(accept_loop, [this](http::HttpExchange &exchange) { return handle(exchange); }, &worker_group) {
     FIBER_ASSERT(worker_group.size() > 0);
     config_stop_publisher_ = config_stop_.acquire_publisher();
     FIBER_ASSERT(config_stop_publisher_.has_value());
@@ -203,16 +202,24 @@ async::DetachedTask AiServer::watch_config(std::size_t worker_index,
 
 common::IoResult<void> AiServer::bind(const net::SocketAddress &address, const net::ListenOptions &options) {
     FIBER_ASSERT(accept_loop_->in_loop());
-    return server_.bind(address, options);
+    http::Http1Endpoint::Options endpoint_options;
+    endpoint_options.address = address;
+    endpoint_options.listen = options;
+    endpoint_options.http1 = make_server_options();
+    http1_endpoint_ = server_.add_endpoint<http::Http1Endpoint>(std::move(endpoint_options));
+    if (http1_endpoint_ == nullptr) {
+        return std::unexpected(common::IoErr::NoMem);
+    }
+    return server_.start();
 }
 
-async::DetachedTask AiServer::serve() { return server_.serve(); }
+async::DetachedTask AiServer::serve() { co_await server_.serve(); }
 
-void AiServer::close() { server_.close(); }
+void AiServer::close() { server_.stop(); }
 
 async::Task<void> AiServer::shutdown_and_wait() {
     FIBER_ASSERT(accept_loop_->in_loop());
-    co_await server_.shutdown_and_wait();
+    co_await server_.stop_and_wait();
     co_await detach_cat_workers();
     if (config_workers_started_ && !config_workers_stopping_) {
         config_workers_stopping_ = true;
@@ -226,7 +233,7 @@ async::Task<void> AiServer::shutdown_and_wait() {
     co_await metrics_.wait_for_idle();
 }
 
-int AiServer::fd() const noexcept { return server_.fd(); }
+int AiServer::fd() const noexcept { return http1_endpoint_ != nullptr ? http1_endpoint_->listener_fd() : -1; }
 
 std::shared_ptr<const LlmConfigSnapshot> AiServer::current_config() const noexcept {
     const event::EventLoop &loop = event::EventLoop::current();

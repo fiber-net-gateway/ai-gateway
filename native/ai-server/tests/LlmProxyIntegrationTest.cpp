@@ -35,10 +35,11 @@
 #include <fiber/http/ClientHttp1Exchange.h>
 #include <fiber/http/ClientHttp1Types.h>
 #include <fiber/http/Http1ClientConnection.h>
-#include <fiber/http/Http1Server.h>
 #include <fiber/http/HttpBodySpec.h>
 #include <fiber/http/HttpExchange.h>
 #include <fiber/http/HttpHeaders.h>
+#include <fiber/http/Server.h>
+#include <fiber/http/endpoint/Http1Endpoint.h>
 #include <fiber/log/LoggerManager.h>
 #include <fiber/net/SocketAddress.h>
 #include <fiber/net/TcpListener.h>
@@ -150,6 +151,21 @@ fiber::common::IoResult<std::uint16_t> bound_port(int fd) noexcept {
         return std::unexpected(fiber::common::IoErr::Invalid);
     }
     return address.port();
+}
+
+fiber::common::IoResult<fiber::http::Http1Endpoint *> bind_http1(fiber::http::Server &server,
+                                                                 const fiber::net::SocketAddress &address) {
+    fiber::http::Http1Endpoint::Options options;
+    options.address = address;
+    fiber::http::Http1Endpoint *endpoint = server.add_endpoint<fiber::http::Http1Endpoint>(std::move(options));
+    if (endpoint == nullptr) {
+        return std::unexpected(fiber::common::IoErr::NoMem);
+    }
+    auto started = server.start();
+    if (!started) {
+        return std::unexpected(started.error());
+    }
+    return endpoint;
 }
 
 int bind_dropping_dns_socket(std::uint16_t &port) noexcept {
@@ -309,10 +325,9 @@ RawHttpResponse post_json(std::uint16_t port, std::string_view token, std::strin
             [&loop, port, token = std::string(token), body = std::string(body), cat_headers = std::move(cat_headers),
              target = std::string(target), &promise]() mutable -> fiber::async::DetachedTask {
                 RawHttpResponse response;
-                fiber::http::Http1ClientConnectionOptions options;
-                options.peer_addr = fiber::net::SocketAddress(fiber::net::IpAddress::loopback_v4(), port);
-                fiber::http::Http1ClientConnection connection(loop, std::move(options));
-                auto connected = co_await connection.connect(5s);
+                const fiber::net::SocketAddress peer(fiber::net::IpAddress::loopback_v4(), port);
+                fiber::http::Http1ClientConnection connection(loop);
+                auto connected = co_await connection.connect(peer, 5s);
                 if (!connected) {
                     response.system_error = static_cast<int>(connected.error());
                     promise.set_value(std::move(response));
@@ -517,11 +532,13 @@ public:
         }
 
         const fiber::net::SocketAddress address(fiber::net::IpAddress::loopback_v4(), 0);
-        if (!provider_server_.bind(address, {})) {
+        auto provider_bound = bind_http1(provider_server_, address);
+        if (!provider_bound) {
             promise->set_value(ports);
             co_return;
         }
-        auto provider_port = bound_port(provider_server_.fd());
+        provider_endpoint_ = *provider_bound;
+        auto provider_port = bound_port(provider_endpoint_->listener_fd());
         if (!provider_port) {
             promise->set_value(ports);
             co_return;
@@ -529,11 +546,13 @@ public:
         ports.provider = *provider_port;
         std::uint16_t failing_provider_port = 0;
         if (service_rendezvous_) {
-            if (!failing_provider_server_.bind(address, {})) {
+            auto failing_bound = bind_http1(failing_provider_server_, address);
+            if (!failing_bound) {
                 promise->set_value(ports);
                 co_return;
             }
-            auto failed_port = bound_port(failing_provider_server_.fd());
+            failing_provider_endpoint_ = *failing_bound;
+            auto failed_port = bound_port(failing_provider_endpoint_->listener_fd());
             if (!failed_port) {
                 promise->set_value(ports);
                 co_return;
@@ -543,11 +562,13 @@ public:
         config_ = make_config(*provider_port, failing_provider_port);
         runtime_.reconcile(*config_->project);
 
-        if (!entry_server_.bind(address, {})) {
+        auto entry_bound = bind_http1(entry_server_, address);
+        if (!entry_bound) {
             promise->set_value(ports);
             co_return;
         }
-        auto entry_port = bound_port(entry_server_.fd());
+        entry_endpoint_ = *entry_bound;
+        auto entry_port = bound_port(entry_endpoint_->listener_fd());
         if (!entry_port) {
             promise->set_value(ports);
             co_return;
@@ -563,19 +584,19 @@ public:
             promise->set_value({});
             co_return;
         }
-        fiber::async::spawn([this]() { return provider_server_.serve(); });
+        fiber::async::spawn([this]() -> fiber::async::DetachedTask { co_await provider_server_.serve(); });
         if (service_rendezvous_) {
-            fiber::async::spawn([this]() { return failing_provider_server_.serve(); });
+            fiber::async::spawn([this]() -> fiber::async::DetachedTask { co_await failing_provider_server_.serve(); });
         }
-        fiber::async::spawn([this]() { return entry_server_.serve(); });
+        fiber::async::spawn([this]() -> fiber::async::DetachedTask { co_await entry_server_.serve(); });
         promise->set_value(ports);
     }
 
     fiber::async::DetachedTask shutdown(std::promise<void> *promise) noexcept {
         release_provider();
-        provider_server_.close();
+        provider_server_.stop();
         if (service_rendezvous_) {
-            failing_provider_server_.close();
+            failing_provider_server_.stop();
         }
         if (initialized_) {
             co_await coordinator_.shutdown();
@@ -586,11 +607,11 @@ public:
             dns_cache_.shutdown();
             dns_cache_initialized_ = false;
         }
-        entry_server_.close();
-        co_await entry_server_.shutdown_and_wait();
-        co_await provider_server_.shutdown_and_wait();
+        entry_server_.stop();
+        co_await entry_server_.stop_and_wait();
+        co_await provider_server_.stop_and_wait();
         if (service_rendezvous_) {
-            co_await failing_provider_server_.shutdown_and_wait();
+            co_await failing_provider_server_.stop_and_wait();
         }
         if (cat_client_) {
             (void) co_await cat_client_->detach_current_event_loop();
@@ -1053,9 +1074,12 @@ private:
     std::shared_ptr<const LlmConfigSnapshot> config_;
     fiber::net::TcpListener cat_collector_;
     fiber::async::WaitGroup cat_collector_tasks_;
-    fiber::http::Http1Server provider_server_;
-    fiber::http::Http1Server failing_provider_server_;
-    fiber::http::Http1Server entry_server_;
+    fiber::http::Server provider_server_;
+    fiber::http::Server failing_provider_server_;
+    fiber::http::Server entry_server_;
+    fiber::http::Http1Endpoint *provider_endpoint_ = nullptr;
+    fiber::http::Http1Endpoint *failing_provider_endpoint_ = nullptr;
+    fiber::http::Http1Endpoint *entry_endpoint_ = nullptr;
     bool initialized_ = false;
     bool dns_cache_initialized_ = false;
 };
