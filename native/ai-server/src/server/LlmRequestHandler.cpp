@@ -1998,6 +1998,11 @@ async::Task<bool> finish_sse_with_error(http::HttpExchange &exchange, LlmWirePro
     co_return written.has_value();
 }
 
+// The transport already noticed the client is gone (peer reset surfaces as a terminal
+// channel without a write attempt), so nothing on the write path will record why
+// delivery stopped. Abort with ConnReset to keep the error in the response stats.
+void record_downstream_reset(http::HttpExchange &exchange) noexcept { (void) exchange.abort(common::IoErr::ConnReset); }
+
 // Drains the downstream half of a relay whose upstream failed mid-stream:
 // best-effort error event first, hard abort only when that delivery fails.
 async::Task<void> terminate_downstream_after_upstream_error(http::HttpExchange &exchange, LlmWireProtocol protocol,
@@ -2053,6 +2058,7 @@ async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttp
             if (downstream_delivery_open && exchange.response_channel_closed()) {
                 downstream_delivery_open = false;
                 downstream_delivery_failed = true;
+                record_downstream_reset(exchange);
             }
             if (downstream_delivery_open) {
                 co_await terminate_downstream_after_upstream_error(
@@ -2066,6 +2072,7 @@ async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttp
         if (downstream_delivery_open && exchange.response_channel_closed()) {
             downstream_delivery_open = false;
             downstream_delivery_failed = true;
+            record_downstream_reset(exchange);
         }
         const bool complete = chunk->complete();
         const std::size_t expected_bytes = chunk->readable_bytes();

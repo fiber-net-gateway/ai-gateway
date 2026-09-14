@@ -142,8 +142,13 @@ TokenRateLimitRemoteClient::post(const RateLimitNode &node, std::string_view pat
     if (node.port == 0 || !net::IpAddress::parse(node.host, ip) || !ip.is_v4() || ip.is_unspecified()) {
         co_return std::unexpected(error(RateLimitRemoteErrorCode::InvalidNode, common::IoErr::Invalid));
     }
-    const auto key = http::HttpConnectionGroupKey::from_ip(ip, node.port, http::HttpConnectionGroupKey::Scheme::Http);
-    auto lease = pool_.acquire(key);
+    // node.host is a validated IPv4 literal here, so make() always succeeds.
+    const auto key =
+            http::HttpConnectionGroupKey::make(node.host, node.port, http::HttpConnectionGroupKey::Scheme::Http);
+    if (!key) {
+        co_return std::unexpected(error(RateLimitRemoteErrorCode::InvalidNode, common::IoErr::Invalid));
+    }
+    auto lease = pool_.acquire(*key);
     if (!lease.valid()) {
         co_return std::unexpected(error(RateLimitRemoteErrorCode::PoolUnavailable, common::IoErr::Canceled));
     }

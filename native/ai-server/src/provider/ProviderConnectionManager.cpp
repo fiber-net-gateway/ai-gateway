@@ -77,10 +77,9 @@ std::string request_target(std::string_view base_path, std::string_view protocol
 
 std::optional<ConnectionKey> connection_key(const ParsedProviderEndpoint &endpoint) noexcept {
     const ConnectionKey::Scheme scheme = endpoint.tls() ? ConnectionKey::Scheme::Https : ConnectionKey::Scheme::Http;
-    if (endpoint.host_is_ip) {
-        return ConnectionKey::from_ip(endpoint.ip, endpoint.port, scheme);
-    }
-    return ConnectionKey::from_name(endpoint.host, endpoint.port, scheme);
+    // make() accepts both DNS names and IP literals; it rejects Https with a literal host
+    // (RFC 6066 §3 forbids literal SNI), which surfaces as an InvalidEndpoint upstream error.
+    return ConnectionKey::make(endpoint.host, endpoint.port, scheme);
 }
 
 // TLS settings for dialing `endpoint`. The returned views borrow the endpoint's
@@ -183,8 +182,8 @@ ProviderConnectionManager::acquire(const ResolvedProviderAttempt &attempt, std::
         dial.addresses.addresses[0] = selected_ip;
         dial.addresses.size = 1;
         dial.host_header = std::string(selected->authority());
-        dial.key = http::HttpConnectionGroupKey::from_ip(selected_ip, selected->port(),
-                                                         http::HttpConnectionGroupKey::Scheme::Http);
+        dial.key = http::HttpConnectionGroupKey::make(selected_ip.to_string(), selected->port(),
+                                                      http::HttpConnectionGroupKey::Scheme::Http);
         dial.load_balance = ProviderLoadBalanceLease{
                 .instance = std::move(*selected),
         };
