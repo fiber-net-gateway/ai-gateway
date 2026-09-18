@@ -22,6 +22,8 @@ add_library(ai_server_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/src/observability/AiServerCatRequest.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/observability/AiServerMetrics.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/observability/ProcessMetrics.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/pii/PiiDetector.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/pii/Regex.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/provider/ProviderConnectionManager.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/provider/ProviderErrorClassifier.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/provider/ExecutionPlan.cpp"
@@ -92,6 +94,8 @@ if (FIBER_BUILD_TESTS AND (GTest_FOUND OR TARGET GTest::gtest_main))
             "${CMAKE_CURRENT_LIST_DIR}/tests/LlmProxyIntegrationTest.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/LlmRateLimitTest.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/LlmRoutingTest.cpp"
+            "${CMAKE_CURRENT_LIST_DIR}/tests/NfaRegexTest.cpp"
+            "${CMAKE_CURRENT_LIST_DIR}/tests/PiiDetectorTest.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/WeightedRendezvousTest.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/WorkerDnsServiceTest.cpp")
     endif()
