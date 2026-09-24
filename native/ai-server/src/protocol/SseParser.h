@@ -25,6 +25,7 @@ enum class SseParseError : std::uint8_t {
 
 struct SseEventView {
     std::string_view data;
+    bool ended_by_delimiter = false;
 };
 
 class SseParser {
@@ -38,6 +39,7 @@ public:
     [[nodiscard]] SseParseStatus next() noexcept;
 
     [[nodiscard]] const SseEventView &event() const noexcept { return event_; }
+    [[nodiscard]] bool at_event_boundary() const noexcept { return boundary_; }
     [[nodiscard]] SseParseError error() const noexcept { return error_; }
 
 private:
@@ -56,7 +58,7 @@ private:
     void retain_borrowed_data() noexcept;
     void reset_line() noexcept;
     void reset_event() noexcept;
-    void publish_event() noexcept;
+    void publish_event(bool ended_by_delimiter) noexcept;
 
     std::size_t max_data_bytes_ = 0;
     http::SseCursor cursor_;
@@ -76,6 +78,9 @@ private:
     bool event_pending_ = false;
     bool final_ = false;
     bool failed_ = false;
+    bool boundary_ = true;
+    bool line_nonempty_ = false;
+    bool previous_cr_ = false;
 };
 
 } // namespace fiber::ai_server

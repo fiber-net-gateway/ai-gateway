@@ -86,13 +86,17 @@ std::expected<mem::IoBufChain, LlmBodyError> ParsedLlmBody::rewrite(std::string_
         });
     }
 
+    if (protocol_ == LlmWireProtocol::OpenAiResponses && upstream_model.size() > 512) {
+        return std::unexpected(LlmBodyError{.code = LlmBodyErrorCode::InvalidReplacement,
+                                            .message = "Responses model exceeds 512 bytes"});
+    }
     auto encoded_model = encode_json_string(upstream_model);
     if (!encoded_model) {
         return std::unexpected(encoded_model.error());
     }
     std::optional<mem::IoBuf> encoded_stream;
-    if (stream) {
-        auto value = encode_json_bool(*stream);
+    if (stream || protocol_ == LlmWireProtocol::OpenAiResponses) {
+        auto value = encode_json_bool(stream.value_or(false));
         if (!value) {
             return std::unexpected(value.error());
         }
@@ -100,6 +104,47 @@ std::expected<mem::IoBufChain, LlmBodyError> ParsedLlmBody::rewrite(std::string_
     }
 
     mem::IoBufChain output(node_pool);
+    if (protocol_ == LlmWireProtocol::OpenAiResponses) {
+        constexpr std::string_view syntax = "{,\"store\":false,\"background\":false}";
+        auto punctuation = mem::IoBuf::allocate(syntax.size());
+        if (!punctuation)
+            return std::unexpected(LlmBodyError{.code = LlmBodyErrorCode::OutOfMemory});
+        std::memcpy(punctuation.writable_data(), syntax.data(), syntax.size());
+        punctuation.commit(syntax.size());
+        bool first = true;
+        if (!output.append(punctuation.retain_slice(0, 1))) {
+            return std::unexpected(LlmBodyError{.code = LlmBodyErrorCode::OutOfMemory});
+        }
+        for (const auto &member: responses_members_) {
+            if (member.begin > member.value_begin || member.value_begin > member.end ||
+                member.end > raw_body_.readable()) {
+                return std::unexpected(LlmBodyError{.code = LlmBodyErrorCode::InvalidPatch});
+            }
+            if (member.kind == ResponsesMemberKind::Drop)
+                continue;
+            if (!first && !output.append(punctuation.retain_slice(1, 1))) {
+                return std::unexpected(LlmBodyError{.code = LlmBodyErrorCode::OutOfMemory});
+            }
+            first = false;
+            const bool replace =
+                    member.kind == ResponsesMemberKind::Model || member.kind == ResponsesMemberKind::Stream;
+            const std::size_t end = replace ? member.value_begin : member.end;
+            if (!append_buffer(output, raw_body_.retain_slice(member.begin, end - member.begin)) ||
+                (replace && !append_buffer(output, member.kind == ResponsesMemberKind::Model ? *encoded_model
+                                                                                             : *encoded_stream))) {
+                return std::unexpected(LlmBodyError{.code = LlmBodyErrorCode::OutOfMemory});
+            }
+        }
+        const std::size_t start = first ? 2 : 1;
+        if (!output.append(punctuation.retain_slice(start, syntax.size() - start))) {
+            return std::unexpected(LlmBodyError{.code = LlmBodyErrorCode::OutOfMemory});
+        }
+        if (output.readable_bytes() > 4 * 1024 * 1024 + 4096) {
+            return std::unexpected(LlmBodyError{.code = LlmBodyErrorCode::InvalidReplacement});
+        }
+        output.mark_complete();
+        return output;
+    }
     std::size_t cursor = 0;
     for (const LlmBodyPatchSite &site: patch_sites_) {
         const bool replace = site.kind == LlmBodyPatchKind::Model || encoded_stream.has_value();

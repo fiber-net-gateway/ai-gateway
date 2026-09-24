@@ -9,6 +9,8 @@ import { llmCallAuditMigration } from './migrations/006-llm-call-audit.js'
 import { accessGroupPublicationEvidenceMigration } from './migrations/007-access-group-publication-evidence.js'
 import { llmCallAuditUsageComponentsMigration } from './migrations/008-llm-call-audit-usage-components.js'
 
+import { openaiResponsesProtocolMigration } from './migrations/009-openai-responses-protocol.js'
+
 const migrations = [
   userModuleMigration,
   modelMarketplaceMigration,
@@ -18,6 +20,7 @@ const migrations = [
   llmCallAuditMigration,
   accessGroupPublicationEvidenceMigration,
   llmCallAuditUsageComponentsMigration,
+  openaiResponsesProtocolMigration,
 ]
 
 export async function runMigrations(pool: Pool): Promise<void> {

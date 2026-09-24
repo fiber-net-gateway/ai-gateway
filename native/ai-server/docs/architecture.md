@@ -10,6 +10,7 @@ Nacos、CAT 和 Prometheus 设施，不机械复制 Java 对象图。
 对外支持：
 
 - `POST /v1/chat/completions`
+- `POST /v1/responses`（强制无状态，支持 JSON 和 SSE）
 - `POST /v1/messages`
 - `POST /v1/message`
 - `POST /internal/llm/rate-limit/check`
@@ -22,6 +23,10 @@ Nacos、CAT 和 Prometheus 设施，不机械复制 Java 对象图。
 Provider 只执行与入站协议相同的协议。OpenAI/Anthropic 隐式协议桥接是项目已经
 确认的有意差异：不转换请求、响应或 SSE；缺少同协议候选时返回
 `provider_protocol_unsupported`。`openai-embedding` 配置可加载，但没有入站路由。
+
+Responses 仅使用显式 `openai-responses` 映射；强制 store/background 为 false 并删除历史引用。
+客户端完整管理 input 历史，网关不提供历史资源接口。详见
+[Responses 设计](../../../docs/openai-responses-stateless-design.md)。
 
 ## 2. 所有权模型
 

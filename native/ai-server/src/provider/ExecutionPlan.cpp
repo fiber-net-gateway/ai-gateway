@@ -33,8 +33,17 @@ struct CandidateGroup {
 };
 
 ProviderProtocolType provider_protocol_type(LlmWireProtocol protocol) noexcept {
-    return protocol == LlmWireProtocol::OpenAiChatCompletions ? ProviderProtocolType::OpenAiChatCompletions
-                                                              : ProviderProtocolType::AnthropicMessages;
+    switch (protocol) {
+        case LlmWireProtocol::OpenAiChatCompletions:
+            return ProviderProtocolType::OpenAiChatCompletions;
+        case LlmWireProtocol::AnthropicMessages:
+            return ProviderProtocolType::AnthropicMessages;
+        case LlmWireProtocol::OpenAiResponses:
+            return ProviderProtocolType::OpenAiResponses;
+        case LlmWireProtocol::Count:
+            std::unreachable();
+    }
+    std::unreachable();
 }
 
 bool service_ready(const ProjectProvider &provider) noexcept {

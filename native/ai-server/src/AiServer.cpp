@@ -28,6 +28,7 @@ DEFINE_LOGGER(LOG_HTTP, kAiServerHttpLogger);
 constexpr std::string_view kHealthPath = "/health";
 constexpr std::string_view kHealthBody = "{\"status\":\"ok\"}\n";
 constexpr std::string_view kReadyPath = "/ready";
+constexpr std::string_view kOpenAiResponsesPath = "/v1/responses";
 constexpr std::string_view kOpenAiChatPath = "/v1/chat/completions";
 constexpr std::string_view kAnthropicMessagesPath = "/v1/messages";
 constexpr std::string_view kAnthropicMessageAliasPath = "/v1/message";
@@ -293,10 +294,12 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         (void) co_await send_fixed_response(exchange, headers, 200, std::move(*collected));
         co_return;
     }
-    if (path == kOpenAiChatPath || path == kAnthropicMessagesPath || path == kAnthropicMessageAliasPath) {
+    if (path == kOpenAiResponsesPath || path == kOpenAiChatPath || path == kAnthropicMessagesPath ||
+        path == kAnthropicMessageAliasPath) {
         WorkerState &worker = current_worker();
-        const LlmWireProtocol protocol =
-                path == kOpenAiChatPath ? LlmWireProtocol::OpenAiChatCompletions : LlmWireProtocol::AnthropicMessages;
+        const LlmWireProtocol protocol = path == kOpenAiResponsesPath ? LlmWireProtocol::OpenAiResponses
+                                         : path == kOpenAiChatPath    ? LlmWireProtocol::OpenAiChatCompletions
+                                                                      : LlmWireProtocol::AnthropicMessages;
         AiServerMetrics::Worker &metrics = metrics_.worker(event::EventLoop::current().group_index());
         metrics.request_started(protocol);
         const auto started = event::EventLoop::current().now();
@@ -311,6 +314,12 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         metrics.request_finished(
                 protocol, exchange.response_stats(),
                 std::chrono::duration_cast<std::chrono::microseconds>(event::EventLoop::current().now() - started));
+        co_return;
+    }
+    if (path.starts_with("/v1/responses/") || path == "/v1/conversations" || path.starts_with("/v1/conversations/")) {
+        co_await send_json(
+                exchange, cat_request, 404,
+                R"({"error":{"type":"invalid_request_error","code":"unsupported_endpoint","param":null,"message":"This endpoint is not supported by the stateless gateway."}})");
         co_return;
     }
     if (path != kHealthPath && path != kReadyPath) {

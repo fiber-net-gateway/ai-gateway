@@ -9,11 +9,13 @@ import { int64JsonLiteral } from './config-contract.js'
 const protocolOrder = {
   OPENAI_CHAT_COMPLETIONS: 0,
   ANTHROPIC_MESSAGES: 1,
+  OPENAI_RESPONSES: 2,
 } as const
 
 const protocolType = {
   OPENAI_CHAT_COMPLETIONS: 'openai-chat-completions',
   ANTHROPIC_MESSAGES: 'anthropic-messages',
+  OPENAI_RESPONSES: 'openai-responses',
 } as const
 
 function stringifyConfig(value: unknown): string {

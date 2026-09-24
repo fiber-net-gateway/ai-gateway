@@ -43,6 +43,7 @@ public:
     [[nodiscard]] cat::Transaction *root_transaction() noexcept { return root_ && root_->valid() ? &*root_ : nullptr; }
     [[nodiscard]] std::string_view request_id() const noexcept;
     [[nodiscard]] std::string_view trace_state() const noexcept { return trace_state_; }
+    void set_model_failed(bool failed) noexcept { model_failed_ = failed; }
     void inject_response_header(http::HttpHeaders &headers) const noexcept;
     cat::RecordError add_root_data(std::string_view key, std::string_view value) noexcept;
     cat::RecordError set_root_model_name(std::string_view model) noexcept;
@@ -62,6 +63,7 @@ private:
     std::optional<cat::MessageTraceContext> context_;
     std::string_view trace_state_;
     std::string_view user_agent_;
+    bool model_failed_ = false;
 };
 
 } // namespace fiber::ai_server

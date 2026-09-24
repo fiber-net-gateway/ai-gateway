@@ -152,7 +152,7 @@ AiServerCatRequest::~AiServerCatRequest() {
         (void) add_root_data("user_agent", user_agent_.substr(0, kMaxAiServerCatUserAgentBytes));
     }
     const bool success = response.completed && response.terminal_error == common::IoErr::None &&
-                         response.status_code >= 200 && response.status_code < 400;
+                         response.status_code >= 200 && response.status_code < 400 && !model_failed_;
     (void) root_->complete(success ? cat::status::Success : cat::status::Fail);
 }
 

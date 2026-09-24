@@ -1255,21 +1255,22 @@ async function refreshProjection(
       const provider = providerById.get(binding.providerId)
       return provider ? [provider] : []
     })
-    const coverage: { openai: ProtocolCoverage; anthropic: ProtocolCoverage } = protocolCoverage(
-      model,
-      input.providers,
-    )
+    const coverage: {
+      openai: ProtocolCoverage
+      anthropic: ProtocolCoverage
+      responses: ProtocolCoverage
+    } = protocolCoverage(model, input.providers)
     const issues = validateModelGraph(model, input.providers)
     await executor.query(
       `INSERT INTO model_marketplace_projections
         (environment_id, view_kind, model_id, source_version_id, source_revision,
          logical_model_name, display_name, description_excerpt, openai_coverage,
-         anthropic_coverage, provider_count, configured_token_count, tokenless_provider_count,
+         anthropic_coverage, responses_coverage, provider_count, configured_token_count, tokenless_provider_count,
          access_mode, draft_state, publication_state, activation_state,
          latest_release_id, latest_release_at, validation_error_count,
          validation_warning_count, updated_at)
        VALUES (UUID_TO_BIN(?), 'ADMIN_DRAFT', UUID_TO_BIN(?), UUID_TO_BIN(?), ?,
-               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.environmentId,
         model.id,
@@ -1280,6 +1281,7 @@ async function refreshProjection(
         model.description.slice(0, 300),
         coverage.openai,
         coverage.anthropic,
+        coverage.responses,
         model.providerBindings.length,
         boundProviders.reduce((sum, provider) => sum + provider.tokens.length, 0),
         boundProviders.filter((provider) => provider.tokens.length === 0).length,

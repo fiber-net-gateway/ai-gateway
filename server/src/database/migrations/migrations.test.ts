@@ -10,6 +10,8 @@ import { llmCallAuditMigration } from './006-llm-call-audit.js'
 import { accessGroupPublicationEvidenceMigration } from './007-access-group-publication-evidence.js'
 import { llmCallAuditUsageComponentsMigration } from './008-llm-call-audit-usage-components.js'
 
+import { openaiResponsesProtocolMigration } from './009-openai-responses-protocol.js'
+
 const migrations = [
   userModuleMigration,
   modelMarketplaceMigration,
@@ -19,6 +21,7 @@ const migrations = [
   llmCallAuditMigration,
   accessGroupPublicationEvidenceMigration,
   llmCallAuditUsageComponentsMigration,
+  openaiResponsesProtocolMigration,
 ]
 
 test('every migration starts with the idempotent migration-table bootstrap', () => {
@@ -49,4 +52,16 @@ test('audit usage migration preserves v5 while adding nullable v6 component colu
   assert.match(statement, /MODIFY COLUMN completion_tokens BIGINT UNSIGNED NULL/)
   assert.match(statement, /MODIFY COLUMN total_tokens BIGINT UNSIGNED NULL/)
   assert.match(statement, /source_schema_version IN \(5, 6\)/)
+})
+
+test('Responses migration preserves historical coverage and existing protocols', () => {
+  assert.match(
+    openaiResponsesProtocolMigration.statements[1],
+    /'OPENAI_CHAT_COMPLETIONS', 'ANTHROPIC_MESSAGES', 'OPENAI_RESPONSES'/,
+  )
+  assert.match(openaiResponsesProtocolMigration.statements[2], /NOT NULL DEFAULT 'UNSUPPORTED'/)
+  assert.match(
+    openaiResponsesProtocolMigration.statements[2],
+    /'SUPPORTED', 'UNSUPPORTED', 'INVALID'/,
+  )
 })

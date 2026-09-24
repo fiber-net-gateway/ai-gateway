@@ -279,5 +279,21 @@ TEST(AiServerHttpTest, HeadReturnsGetMetadataWithoutResponseBody) {
     EXPECT_FALSE(head_llm.header("Content-Length").empty());
 }
 
+TEST(AiServerHttpTest, ResponsesRouteUsesOpenAiEnvelopeAndRejectsHistoricalResources) {
+    AiServerHttpHarness server;
+    ASSERT_NE(server.port(), 0);
+    const auto create = request(server.port(), "POST", "/v1/responses");
+    EXPECT_EQ(create.status, 401);
+    EXPECT_NE(create.body.find("\"error\""), std::string::npos);
+    for (auto target:
+         {"/v1/responses/private-id", "/v1/responses/private-id/cancel", "/v1/responses/private-id/input_items",
+          "/v1/conversations", "/v1/conversations/private-id/items"}) {
+        const auto response = request(server.port(), "GET", target);
+        EXPECT_EQ(response.status, 404);
+        EXPECT_NE(response.body.find("unsupported_endpoint"), std::string::npos);
+        EXPECT_EQ(response.body.find("private-id"), std::string::npos);
+    }
+}
+
 } // namespace
 } // namespace fiber::ai_server

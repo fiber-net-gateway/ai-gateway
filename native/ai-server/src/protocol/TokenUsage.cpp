@@ -1,4 +1,5 @@
 #include "TokenUsage.h"
+#include "ResponsesObservation.h"
 
 #include <array>
 #include <limits>
@@ -220,6 +221,8 @@ void LlmTokenUsage::merge(const LlmTokenUsage &next) noexcept {
 
 std::optional<LlmTokenUsage> extract_token_usage(LlmWireProtocol protocol, std::string_view input, bool streaming_event,
                                                  mem::BufPool &pool) noexcept {
+    if (protocol == LlmWireProtocol::OpenAiResponses)
+        return observe_responses(input, streaming_event).usage;
     RawUsage raw;
     if (!extract_raw(protocol, input, streaming_event, pool, raw) || raw.empty()) {
         return std::nullopt;
@@ -229,6 +232,10 @@ std::optional<LlmTokenUsage> extract_token_usage(LlmWireProtocol protocol, std::
 
 LlmStreamEventObservation analyze_stream_event(LlmWireProtocol protocol, std::string_view input,
                                                mem::BufPool &pool) noexcept {
+    if (protocol == LlmWireProtocol::OpenAiResponses) {
+        const auto observed = observe_responses(input, true);
+        return {.usage = observed.usage, .output_token_observed = observed.output_token_observed};
+    }
     RawUsage raw;
     if (!extract_raw(protocol, input, true, pool, raw)) {
         return {};

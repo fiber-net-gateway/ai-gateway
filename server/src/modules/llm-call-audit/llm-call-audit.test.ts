@@ -4,6 +4,7 @@ import test from 'node:test'
 
 import { buildApp } from '../../app.js'
 import { loadConfig } from '../../config/env.js'
+import { projectAudit } from './projection.js'
 import { MemoryLlmCallAuditStore } from './memory-store.js'
 
 const ingestToken = 'audit-ingest-test-token-32-bytes!'
@@ -370,4 +371,47 @@ test('MySQL audit store uses strict single-table SQL', async () => {
   assert.doesNotMatch(source, /\(\s*SELECT\b/u)
   assert.doesNotMatch(source, /SELECT\s+COUNT\s*\(/u)
   assert.doesNotMatch(source, /INSERT[\s\S]{0,200}\bSELECT\b/u)
+})
+
+test('Responses HTTP 200 terminal failures remain failed and preserve nullable usage', () => {
+  for (const code of [
+    '',
+    'responses_failed',
+    'responses_incomplete',
+    'responses_error',
+    'upstream_missing_terminal_event',
+    'upstream_state_policy_violation',
+  ]) {
+    const audit = {
+      ...auditRecord({
+        requestId: 'responses-test',
+        username: 'alice',
+        occurredAt: '2026-09-24T00:00:00Z',
+        protocol: 'openai-responses',
+        usage: { in_cache: null, in_nocache: null, out: 3 },
+      }).audit,
+      schema_version: 6 as const,
+      event: 'llm_request' as const,
+      error_json: code,
+    }
+    const input = {
+      id: 'id',
+      environmentId: 'env',
+      ownerUserId: null,
+      instanceId: 'instance',
+      occurredAt: '2026-09-24T00:00:00Z',
+      receivedAt: '2026-09-24T00:00:00Z',
+      audit,
+    }
+    const projection = projectAudit(input)
+    assert.equal(projection.outcome, code ? 'FAILED' : 'SUCCEEDED')
+    assert.equal(projection.clientProtocol, 'openai-responses')
+    assert.equal(projection.inNoCacheTokens, null)
+    assert.equal(projection.outTokens, 3)
+    assert.equal('request_json' in projection, false)
+    assert.equal(
+      projectAudit({ ...input, audit: { ...audit, client_aborted: true } }).outcome,
+      'ABORTED',
+    )
+  }
 })

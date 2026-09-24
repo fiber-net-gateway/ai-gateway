@@ -90,6 +90,13 @@ const englishMessages: Record<string, string> = {
   静态协议覆盖矩阵: 'Static protocol coverage matrix',
   入站协议: 'Inbound protocol',
   静态候选: 'Static candidates',
+  '下面使用 SSE；普通 JSON 响应请将 stream 改为 false。':
+    'The example uses SSE. Set stream to false for a regular JSON response.',
+  '支持 OpenAI Responses': 'Supports OpenAI Responses',
+  '当前模型没有可执行的 OpenAI Responses 候选':
+    'This model has no executable OpenAI Responses candidate',
+  '强制无状态：不保存响应，不使用历史 ID；每次请求需提交完整上下文。':
+    'Stateless only: responses are not stored and history IDs are ignored. Send complete context with every request.',
   '复制 OpenAI 上游模型名': 'Copy OpenAI upstream model name',
   请求路径: 'Request path',
   供应商上游模型名: 'Provider upstream model name',
@@ -120,8 +127,8 @@ const englishMessages: Record<string, string> = {
   个提醒: ' warnings',
   错误: 'Error',
   提醒: 'Warning',
-  '仅处理 OpenAI 入站请求，不会转换为 Anthropic 协议。':
-    'Handles OpenAI inbound requests only; no conversion to Anthropic is performed.',
+  '仅处理 Chat Completions 请求，不转换为 Responses 或 Anthropic。':
+    'Handles Chat Completions requests only; no conversion to Responses or Anthropic is performed.',
   '仅处理 Anthropic 入站请求，供应商必须原生兼容该协议。':
     'Handles Anthropic inbound requests only; the Provider must support it natively.',
   控制台服务暂时不可用: 'The console service is temporarily unavailable',
