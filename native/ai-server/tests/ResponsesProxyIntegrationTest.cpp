@@ -86,6 +86,24 @@ TEST(ResponsesProxyIntegrationTest, StreamsOriginalEventsAndTerminalUsage) {
     ASSERT_TRUE(fixture.wait_for_audit_records(1));
     EXPECT_EQ(fixture.audit_contents().find("stream-private"), std::string::npos);
 }
+TEST(ResponsesProxyIntegrationTest, IgnoresChatCompletionsDoneSentinelAfterTerminalEvent) {
+    const std::string terminal =
+            "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":5,\"response\":" +
+            std::string(kCompleted) + "}\n\n";
+    FixtureHarness fixture({MockReply{.content_type = "text/event-stream",
+                                      .chunks = {terminal, "data: [DONE]\n\n"},
+                                      .stream = true}});
+    ASSERT_TRUE(fixture.valid());
+    auto response = responses(fixture, R"({"model":"logical","input":"hello","stream":true})");
+    EXPECT_EQ(response.status, 200);
+    EXPECT_TRUE(response.complete);
+    EXPECT_EQ(response.body, terminal + "data: [DONE]\n\n");
+    ASSERT_TRUE(fixture.wait_for_audit_records(1));
+    EXPECT_EQ(fixture.audit_contents().find("upstream_invalid_response"), std::string::npos);
+    auto metrics = fixture.settlement_metrics();
+    ASSERT_TRUE(metrics);
+    EXPECT_NE(metrics->find("result=\"completed\"} 1"), std::string::npos);
+}
 TEST(ResponsesProxyIntegrationTest, MissingTerminalGetsResponsesErrorAtBoundary) {
     FixtureHarness fixture({MockReply{
             .content_type = "text/event-stream",

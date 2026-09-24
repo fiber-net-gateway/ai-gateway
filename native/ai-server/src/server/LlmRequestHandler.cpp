@@ -2250,7 +2250,12 @@ async::Task<SseRelayResult> relay_responses(http::HttpExchange &exchange, Provid
             const auto status = parser.next();
             if (status != SseParseStatus::Event)
                 return status;
-            const auto observed = observe_responses(parser.event().data, true);
+            const std::string_view data = parser.event().data;
+            // Some Responses upstreams append a chat-completions style [DONE] sentinel (and empty
+            // keep-alive events); relay the bytes but do not feed them to the event observer.
+            if (data.empty() || data == std::string_view("[DONE]"))
+                continue;
+            const auto observed = observe_responses(data, true);
             if (!result.responses.observe(observed, parser.event().ended_by_delimiter))
                 return SseParseStatus::Error;
             if (observed.output_token_observed)
