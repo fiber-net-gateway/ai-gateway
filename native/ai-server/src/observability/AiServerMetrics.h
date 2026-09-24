@@ -3,6 +3,7 @@
 
 #include "../limit/TokenRateLimiter.h"
 #include "../protocol/PromptAffinity.h"
+#include "../protocol/ResponsesObservation.h"
 #include "../protocol/TokenUsage.h"
 #include "../provider/ProviderHttpClient.h"
 
@@ -83,6 +84,19 @@ public:
         void rate_limit_settle(RateLimitSettleMetric result) noexcept;
         void sse_failure(LlmWireProtocol protocol) noexcept;
         void sse_drain(LlmWireProtocol protocol, SseDrainMetric result) noexcept;
+        void responses_result(ResponsesResult result) noexcept {
+            responses_results_[static_cast<std::size_t>(result)].inc();
+        }
+        void responses_policy(const ResponsesBodyPolicyInfo &policy) noexcept {
+            if (policy.store_was_true)
+                responses_rewrites_[0].inc();
+            if (policy.background_was_true)
+                responses_rewrites_[1].inc();
+            if (policy.previous_response_removed)
+                responses_rewrites_[2].inc();
+            if (policy.conversation_removed)
+                responses_rewrites_[3].inc();
+        }
         void audit_generated() noexcept;
         void audit_generation_failed() noexcept;
         void audit_capture_incomplete() noexcept;
@@ -92,7 +106,7 @@ public:
     private:
         friend class AiServerMetrics;
 
-        static constexpr std::size_t kProtocolCount = 2;
+        static constexpr std::size_t kProtocolCount = static_cast<std::size_t>(LlmWireProtocol::Count);
         static constexpr std::size_t kRequestResultCount = 4;
         static constexpr std::size_t kRouteKeySourceCount = static_cast<std::size_t>(PromptRouteKeySource::Count);
 
@@ -114,6 +128,8 @@ public:
         std::array<prometheus::CounterRef, kProtocolCount> sse_failures_;
         std::array<std::array<prometheus::CounterRef, static_cast<std::size_t>(SseDrainMetric::Count)>, kProtocolCount>
                 sse_drains_;
+        std::array<prometheus::CounterRef, static_cast<std::size_t>(ResponsesResult::Count)> responses_results_;
+        std::array<prometheus::CounterRef, 4> responses_rewrites_;
         prometheus::CounterRef audit_generated_;
         prometheus::CounterRef audit_generation_failures_;
         prometheus::CounterRef audit_capture_incomplete_;

@@ -8,11 +8,15 @@ AI Gateway 是完整的 LLM 网关系统，包含 C++ 数据面、Web 管理控�
 
 项目面向平台管理员、应用开发者和运维人员，为应用代理 LLM 流量，但不是终端用户聊天页面。
 
+已支持 [OpenAI Responses 强制无状态接口](docs/openai-responses-stateless-design.md)：`POST /v1/responses`
+可返回 JSON 或 SSE。网关强制 `store:false`、`background:false`，删除历史响应与会话引用；
+客户端必须在 `input` 中携带完整上下文。
+
 ## 核心能力
 
 `native/ai-server/` 数据面提供：
 
-- OpenAI Chat Completions 和 Anthropic Messages 兼容接口；
+- OpenAI Chat Completions、强制无状态 OpenAI Responses 和 Anthropic Messages 兼容接口；
 - BT1 认证、模型授权、确定性 Provider/token 选择、路由、重试、fallback、熔断与 SSE 流式
   透传；
 - 基于 rnacos 的动态配置、`service://` 发现、实例注册与不可变运行时快照；

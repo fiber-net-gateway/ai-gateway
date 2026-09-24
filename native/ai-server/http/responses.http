@@ -1,0 +1,15 @@
+# Configure base_url and bt1_token in your private HTTP client environment.
+# This Provider must explicitly support openai-responses.
+### JSON response; state flags are forcibly normalized by the gateway
+POST {{base_url}}/v1/responses
+Authorization: Bearer {{bt1_token}}
+Content-Type: application/json
+
+{"model":"fiber-demo","input":"Hello","store":true,"background":true}
+
+### SSE; clients carry the complete history on every turn
+POST {{base_url}}/v1/responses
+Authorization: Bearer {{bt1_token}}
+Content-Type: application/json
+
+{"model":"fiber-demo","input":[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"},{"role":"user","content":"Continue"}],"stream":true}

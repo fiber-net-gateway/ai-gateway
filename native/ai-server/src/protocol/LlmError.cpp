@@ -168,7 +168,7 @@ std::expected<mem::IoBuf, LlmErrorEncodeError> encode_anthropic(const LlmError &
 
 std::expected<mem::IoBuf, LlmErrorEncodeError> encode_llm_error(LlmWireProtocol protocol,
                                                                 const LlmError &error) noexcept {
-    return protocol == LlmWireProtocol::OpenAiChatCompletions ? encode_openai(error) : encode_anthropic(error);
+    return uses_openai_error_envelope(protocol) ? encode_openai(error) : encode_anthropic(error);
 }
 
 } // namespace fiber::ai_server

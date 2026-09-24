@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { loadDemoBootstrapConfig } from './config/demo.js'
+import { demoProviderProtocols, demoProviderUpdate } from './demo-provider-config.js'
 
 interface EnvironmentAccess {
   environment: { id: string; name: string }
@@ -11,10 +12,11 @@ interface ProviderSummary {
   displayName: string
   baseUrl: string
   protocols: ProviderProtocol[]
+  tokens: ReadonlyArray<{ id: string }>
 }
 
 interface ProviderProtocol {
-  type: 'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES'
+  type: 'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES' | 'OPENAI_RESPONSES'
   path: string
   upstreamModelName: string
 }
@@ -85,19 +87,6 @@ class ConsoleClient {
 const config = loadDemoBootstrapConfig()
 const client = new ConsoleClient(config.consoleUrl)
 const deadline = Date.now() + config.timeoutMillis
-const demoProviderProtocols: ProviderProtocol[] = [
-  {
-    type: 'OPENAI_CHAT_COMPLETIONS',
-    path: '/v1/chat/completions',
-    upstreamModelName: 'fiber-demo-upstream',
-  },
-  {
-    type: 'ANTHROPIC_MESSAGES',
-    path: '/v1/messages',
-    upstreamModelName: 'fiber-demo-upstream',
-  },
-]
-
 function demoProviderMutation() {
   return {
     displayName: 'Fiber Demo Provider',
@@ -110,21 +99,6 @@ function demoProviderMutation() {
     },
     confirmProviderImpact: true,
   }
-}
-
-function demoProviderIsCurrent(provider: ProviderSummary): boolean {
-  return (
-    provider.baseUrl === config.providerBaseUrl &&
-    provider.protocols.length === demoProviderProtocols.length &&
-    demoProviderProtocols.every((expected) =>
-      provider.protocols.some(
-        (actual) =>
-          actual.type === expected.type &&
-          actual.path === expected.path &&
-          actual.upstreamModelName === expected.upstreamModelName,
-      ),
-    )
-  )
 }
 
 function log(message: string): void {
@@ -223,7 +197,10 @@ async function main(): Promise<void> {
     ).data
     changed = true
     log(`created demo Provider ${provider.id}`)
-  } else if (!demoProviderIsCurrent(provider)) {
+  } else if (demoProviderUpdate(provider, config.providerBaseUrl) === 'CUSTOM') {
+    log('existing demo Provider has custom settings; leaving it unchanged')
+    return
+  } else if (demoProviderUpdate(provider, config.providerBaseUrl) === 'UPGRADE') {
     provider = (
       await client.request<{ provider: ProviderSummary }>(
         `/api/environments/${environmentId}/drafts/${providers.data.draft.id}/providers/${provider.id}`,

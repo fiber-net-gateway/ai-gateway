@@ -10,11 +10,15 @@ external `fiber-gateway-cpp/apps/ai-server` application.
 The product is intended for platform administrators, application developers, and operators. It
 proxies application LLM traffic but is not an end-user chat interface.
 
+[OpenAI Responses](docs/openai-responses-stateless-design.md) is supported at `POST /v1/responses`,
+including SSE. Requests always use `store:false` and `background:false`; historical response and
+conversation references are removed. Clients must send the full conversation in `input`.
+
 ## Capabilities
 
 The data plane in `native/ai-server/` provides:
 
-- OpenAI Chat Completions and Anthropic Messages compatible endpoints.
+- OpenAI Chat Completions, stateless OpenAI Responses, and Anthropic Messages compatible endpoints.
 - BT1 authentication, model authorization, deterministic Provider and token selection, routing,
   retry, fallback, circuit breaking, and SSE streaming.
 - rnacos-backed dynamic configuration, `service://` discovery, instance registration, and

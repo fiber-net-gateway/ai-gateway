@@ -23,12 +23,13 @@ namespace fiber::ai_server {
 namespace {
 
 constexpr std::size_t kMaxMetricsOutputBytes = 16 * 1024 * 1024;
-constexpr std::array<std::string_view, 2> kProtocolNames{"openai", "anthropic"};
+constexpr std::array<std::string_view, static_cast<std::size_t>(LlmWireProtocol::Count)> kProtocolNames{
+        "openai", "anthropic", "openai-responses"};
 constexpr std::array<std::string_view, 3> kTokenTypes{"in_cache", "in_nocache", "out"};
 constexpr std::array<std::string_view, static_cast<std::size_t>(PromptRouteKeySource::Count)> kRouteKeySources{
         "openai_prompt_cache_key",         "openai_semantic_anchor",           "anthropic_metadata_user_id",
         "anthropic_explicit_cache_anchor", "anthropic_automatic_cache_anchor", "anthropic_conversation_anchor",
-        "principal_model_fallback",
+        "principal_model_fallback",        "responses_semantic_anchor",
 };
 constexpr std::array<std::string_view, static_cast<std::size_t>(ProviderHttpErrorCode::Count)> kFailurePhases{
         "invalid_endpoint", "no_service_endpoint", "dns",       "pool_shutdown",      "connect",          "send_header",
@@ -39,9 +40,7 @@ constexpr std::string_view kProviderTokenUsageMetric = "ai_server_provider_token
 constexpr std::size_t kMetricsChunkBytes = 4 * 1024;
 constexpr std::uint64_t kNanosecondsPerSecond = 1'000'000'000;
 
-constexpr std::size_t protocol_index(LlmWireProtocol protocol) noexcept {
-    return protocol == LlmWireProtocol::OpenAiChatCompletions ? 0 : 1;
-}
+constexpr std::size_t protocol_index(LlmWireProtocol protocol) noexcept { return llm_protocol_index(protocol); }
 
 std::size_t request_result_index(const http::HttpResponseStats &response) noexcept {
     if (response.terminal_error != common::IoErr::None || !response.completed) {
@@ -238,7 +237,7 @@ struct ProviderTokenUsageSeries {
     explicit ProviderTokenUsageSeries(std::string_view value) : provider_name(value) {}
 
     std::string provider_name;
-    std::array<TokenUsageCounters, 2> protocols;
+    std::array<TokenUsageCounters, kProtocolNames.size()> protocols;
 };
 
 [[nodiscard]] bool append_family_header(BoundedTextBuilder &output, std::string_view name, std::string_view help) {
@@ -509,6 +508,31 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
                                                    kProtocolLabel);
     auto sse_drains = registry_.register_counter(
             "ai_server_sse_drains_total", "Upstream SSE drains after downstream delivery failure.", kSseDrainLabels);
+    constexpr std::array<std::string_view, 7> response_results{"completed",   "failed",           "incomplete", "error",
+                                                               "interrupted", "invalid_response", "aborted"};
+    constexpr std::array<std::string_view, 4> response_fields{"store", "background", "previous_response_id",
+                                                              "conversation"};
+    auto responses_results = registry_.register_counter("ai_server_responses_results_total",
+                                                        "Responses model and delivery outcomes.", kResultLabel);
+    auto responses_rewrites = registry_.register_counter("ai_server_responses_policy_rewrites_total",
+                                                         "Responses state requests normalized.",
+                                                         std::array<std::string_view, 1>{"field"});
+    if (!responses_results || !responses_rewrites)
+        return false;
+    std::array<prometheus::SeriesId, response_results.size()> response_result_series;
+    std::array<prometheus::SeriesId, response_fields.size()> response_field_series;
+    for (std::size_t i = 0; i < response_results.size(); ++i) {
+        auto id = registry_.register_series(*responses_results, std::array<std::string_view, 1>{response_results[i]});
+        if (!id)
+            return false;
+        response_result_series[i] = *id;
+    }
+    for (std::size_t i = 0; i < response_fields.size(); ++i) {
+        auto id = registry_.register_series(*responses_rewrites, std::array<std::string_view, 1>{response_fields[i]});
+        if (!id)
+            return false;
+        response_field_series[i] = *id;
+    }
     auto audit_generated =
             registry_.register_counter("ai_server_audit_generated_records_total", "LLM audit records generated.");
     auto audit_generation_failures = registry_.register_counter("ai_server_audit_generation_failures_total",
@@ -529,19 +553,19 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
         return false;
     }
 
-    std::array<std::array<prometheus::SeriesId, 4>, 2> request_series;
-    std::array<prometheus::SeriesId, 2> duration_series;
-    std::array<prometheus::SeriesId, 2> inflight_series;
-    std::array<prometheus::SeriesId, 2> attempt_series;
-    std::array<prometheus::SeriesId, 2> failure_series;
-    std::array<prometheus::SeriesId, 2> retry_series;
-    std::array<std::array<prometheus::SeriesId, kFailurePhases.size()>, 2> transport_failure_series;
-    std::array<prometheus::SeriesId, 2> attempts_skipped_series;
-    std::array<prometheus::SeriesId, 2> dns_backoff_hit_series;
-    std::array<prometheus::SeriesId, 2> circuit_open_series;
-    std::array<std::array<prometheus::SeriesId, kRouteKeySources.size()>, 2> route_key_series;
-    std::array<prometheus::SeriesId, 2> sse_series;
-    std::array<std::array<prometheus::SeriesId, 3>, 2> sse_drain_series;
+    std::array<std::array<prometheus::SeriesId, 4>, kProtocolNames.size()> request_series;
+    std::array<prometheus::SeriesId, kProtocolNames.size()> duration_series;
+    std::array<prometheus::SeriesId, kProtocolNames.size()> inflight_series;
+    std::array<prometheus::SeriesId, kProtocolNames.size()> attempt_series;
+    std::array<prometheus::SeriesId, kProtocolNames.size()> failure_series;
+    std::array<prometheus::SeriesId, kProtocolNames.size()> retry_series;
+    std::array<std::array<prometheus::SeriesId, kFailurePhases.size()>, kProtocolNames.size()> transport_failure_series;
+    std::array<prometheus::SeriesId, kProtocolNames.size()> attempts_skipped_series;
+    std::array<prometheus::SeriesId, kProtocolNames.size()> dns_backoff_hit_series;
+    std::array<prometheus::SeriesId, kProtocolNames.size()> circuit_open_series;
+    std::array<std::array<prometheus::SeriesId, kRouteKeySources.size()>, kProtocolNames.size()> route_key_series;
+    std::array<prometheus::SeriesId, kProtocolNames.size()> sse_series;
+    std::array<std::array<prometheus::SeriesId, 3>, kProtocolNames.size()> sse_drain_series;
     std::array<prometheus::SeriesId, 4> check_series;
     std::array<prometheus::SeriesId, 3> settle_series;
     for (std::size_t protocol = 0; protocol < kProtocolNames.size(); ++protocol) {
@@ -648,6 +672,18 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
         }
         Worker &worker = workers_[worker_index];
         worker.owner_ = this;
+        for (std::size_t i = 0; i < response_results.size(); ++i) {
+            auto value = shard->counter(response_result_series[i]);
+            if (!value)
+                return false;
+            worker.responses_results_[i] = *value;
+        }
+        for (std::size_t i = 0; i < response_fields.size(); ++i) {
+            auto value = shard->counter(response_field_series[i]);
+            if (!value)
+                return false;
+            worker.responses_rewrites_[i] = *value;
+        }
         auto audit_generated_value = shard->counter(*audit_generated_series);
         auto audit_generation_failure_value = shard->counter(*audit_generation_failure_series);
         auto audit_capture_incomplete_value = shard->counter(*audit_capture_incomplete_series);

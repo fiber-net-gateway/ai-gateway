@@ -29,6 +29,20 @@ bool SseParser::feed(const mem::IoBuf &chunk) noexcept {
         failed_ = true;
         return false;
     }
+    for (const char byte: input) {
+        if (byte == '\n' && previous_cr_) {
+            previous_cr_ = false;
+            continue;
+        }
+        previous_cr_ = byte == '\r';
+        if (byte == '\r' || byte == '\n') {
+            boundary_ = !line_nonempty_;
+            line_nonempty_ = false;
+        } else {
+            line_nonempty_ = true;
+            boundary_ = false;
+        }
+    }
     current_input_ = &chunk;
     return true;
 }
@@ -195,13 +209,13 @@ void SseParser::reset_event() noexcept {
     event_has_data_ = false;
 }
 
-void SseParser::publish_event() noexcept {
+void SseParser::publish_event(bool ended_by_delimiter) noexcept {
     if (data_storage_ == DataStorage::Assembled) {
         data_view_ = io_buf_view(assembled_data_);
     } else if (data_storage_ == DataStorage::RetainedSlice) {
         data_view_ = io_buf_view(retained_data_);
     }
-    event_ = SseEventView{.data = data_view_};
+    event_ = SseEventView{.data = data_view_, .ended_by_delimiter = ended_by_delimiter};
     event_pending_ = true;
 }
 
@@ -256,7 +270,7 @@ SseParseStatus SseParser::next() noexcept {
             case http::SseCursorStatus::EventEnd:
                 reset_line();
                 if (event_has_data_) {
-                    publish_event();
+                    publish_event(true);
                     return SseParseStatus::Event;
                 }
                 reset_event();
@@ -270,7 +284,7 @@ SseParseStatus SseParser::next() noexcept {
             case http::SseCursorStatus::Complete:
                 current_input_ = nullptr;
                 if (event_has_data_) {
-                    publish_event();
+                    publish_event(false);
                     return SseParseStatus::Event;
                 }
                 return SseParseStatus::Complete;

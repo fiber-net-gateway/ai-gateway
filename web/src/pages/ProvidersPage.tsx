@@ -30,7 +30,7 @@ function emptyEditor(): ProviderEditorState {
     protocols: modelProtocols.map((protocol, index) => ({
       type: protocol.type,
       enabled: index === 0,
-      path: protocol.type === 'OPENAI_CHAT_COMPLETIONS' ? '/v1/chat/completions' : '/v1/messages',
+      path: protocol.defaultPath,
       upstreamModelName: '',
     })),
     authenticationMode: 'BEARER_TOKEN_POOL',
@@ -49,9 +49,7 @@ function editorFromDetail(provider: ProviderDetail): ProviderEditorState {
       return {
         type: definition.type,
         enabled: Boolean(current),
-        path:
-          current?.path ??
-          (definition.type === 'OPENAI_CHAT_COMPLETIONS' ? '/v1/chat/completions' : '/v1/messages'),
+        path: current?.path ?? definition.defaultPath,
         upstreamModelName: current?.upstreamModelName ?? '',
       }
     }),

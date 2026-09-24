@@ -162,6 +162,11 @@ export class ModelMarketplaceService {
         (model) => protocolCoverage(model, environment.draft.providers).openai === 'SUPPORTED',
       )
     }
+    if (query.protocol === 'responses') {
+      models = models.filter(
+        (model) => protocolCoverage(model, environment.draft.providers).responses === 'SUPPORTED',
+      )
+    }
     if (query.protocol === 'anthropic') {
       models = models.filter(
         (model) => protocolCoverage(model, environment.draft.providers).anthropic === 'SUPPORTED',
@@ -254,7 +259,7 @@ export class ModelMarketplaceService {
       .filter(
         (model) =>
           !query.protocol ||
-          model.protocols[query.protocol as 'openai' | 'anthropic'] === 'SUPPORTED',
+          model.protocols[query.protocol as 'openai' | 'anthropic' | 'responses'] === 'SUPPORTED',
       )
       .filter((model) => query.access !== 'accessible' || model.accessible)
     const limit = Math.min(Math.max(query.limit ?? 50, 1), 100)

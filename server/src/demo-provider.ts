@@ -159,6 +159,89 @@ async function messages(request: IncomingMessage, reply: ServerResponse): Promis
   })
 }
 
+async function responses(request: IncomingMessage, reply: ServerResponse): Promise<void> {
+  const body = await readJson(request)
+  const input =
+    typeof body.input === 'string'
+      ? body.input.slice(0, 120)
+      : lastUserText({ messages: body.input })
+  const content = `Fiber demo provider received: ${input}`
+  const id = `resp_demo_${randomUUID()}`
+  const itemId = `msg_demo_${randomUUID()}`
+  const response = {
+    id,
+    object: 'response',
+    created_at: Math.floor(Date.now() / 1_000),
+    model: typeof body.model === 'string' ? body.model : 'fiber-demo-upstream',
+    status: 'completed',
+    store: false,
+    background: false,
+    error: null,
+    incomplete_details: null,
+    output: [
+      {
+        id: itemId,
+        type: 'message',
+        role: 'assistant',
+        status: 'completed',
+        content: [{ type: 'output_text', text: content, annotations: [] }],
+      },
+    ],
+    usage: {
+      input_tokens: inputTokens(input),
+      output_tokens: 12,
+      total_tokens: inputTokens(input) + 12,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    },
+  }
+  if (body.stream !== true) {
+    json(reply, 200, response)
+    return
+  }
+  reply.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+  })
+  let sequence = 0
+  const event = (type: string, data: Record<string, unknown>) =>
+    anthropicEvent(reply, type, { type, sequence_number: sequence++, ...data })
+  event('response.created', {
+    response: { ...response, status: 'in_progress', output: [], usage: null },
+  })
+  event('response.output_item.added', {
+    output_index: 0,
+    item: { ...response.output[0], status: 'in_progress', content: [] },
+  })
+  event('response.content_part.added', {
+    item_id: itemId,
+    output_index: 0,
+    content_index: 0,
+    part: { type: 'output_text', text: '', annotations: [] },
+  })
+  event('response.output_text.delta', {
+    item_id: itemId,
+    output_index: 0,
+    content_index: 0,
+    delta: content,
+  })
+  event('response.output_text.done', {
+    item_id: itemId,
+    output_index: 0,
+    content_index: 0,
+    text: content,
+  })
+  event('response.content_part.done', {
+    item_id: itemId,
+    output_index: 0,
+    content_index: 0,
+    part: response.output[0]?.content[0],
+  })
+  event('response.output_item.done', { output_index: 0, item: response.output[0] })
+  event('response.completed', { response })
+  reply.end()
+}
+
 const server = createServer((request, reply) => {
   if (request.method === 'GET' && request.url === '/health') {
     json(reply, 200, { status: 'ok', service: 'fiber-demo-provider' })
@@ -166,6 +249,13 @@ const server = createServer((request, reply) => {
   }
   if (request.method === 'POST' && request.url === '/v1/chat/completions') {
     void chat(request, reply).catch(() => {
+      if (!reply.headersSent) json(reply, 400, { error: { message: 'invalid demo request' } })
+      else reply.destroy()
+    })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/v1/responses') {
+    void responses(request, reply).catch(() => {
       if (!reply.headersSent) json(reply, 400, { error: { message: 'invalid demo request' } })
       else reply.destroy()
     })

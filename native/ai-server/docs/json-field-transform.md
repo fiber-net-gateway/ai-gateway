@@ -127,3 +127,10 @@ replacement 是且仅是一个完整 JSON value，再用 `IoBuf` slice chain 拼
 ai-server 测试覆盖两种协议抽取、路由字段优先级、复杂 content、严格类型检查、
 未知字段词法保持、缺失字段不插入、重复字段全部替换、每次尝试独立改写、
 原始正文不变以及 replacement UTF-8 校验。
+
+## Responses 固定策略
+
+`OpenAiResponses` 使用同一次流式 JSON 扫描记录根字段切片，每次 Provider 尝试从原始正文改写。
+除替换 model/stream 外，删除所有顶层 store/background/previous_response_id/conversation，
+末尾添加唯一的 `store:false` 和 `background:false`。保留未知字段和完整 input items 的原始字节。
+重复路由字段、item_reference 和超过 4096 个根成员的请求会被拒绝。Chat/Anthropic 保持原有改写规则。

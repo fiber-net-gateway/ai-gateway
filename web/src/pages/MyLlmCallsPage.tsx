@@ -169,6 +169,7 @@ export function MyLlmCallsPage({
                 <option value="">全部协议</option>
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
+                <option value="openai-responses">OpenAI Responses</option>
               </select>
             </label>
           </form>

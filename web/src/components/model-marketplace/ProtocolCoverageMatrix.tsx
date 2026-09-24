@@ -1,11 +1,13 @@
 import { Check, Minus, X } from 'lucide-react'
 
+import { modelProtocols } from '../../data/model-protocols'
+
 import type { ProtocolCoverage } from '../../api/model-marketplace'
 
 export function ProtocolCoverageMatrix({
   coverage,
 }: {
-  coverage: { openai: ProtocolCoverage; anthropic: ProtocolCoverage }
+  coverage: { openai: ProtocolCoverage; anthropic: ProtocolCoverage; responses: ProtocolCoverage }
 }) {
   const cell = (value: ProtocolCoverage) => {
     if (value === 'SUPPORTED')
@@ -32,14 +34,12 @@ export function ProtocolCoverageMatrix({
         <b role="columnheader">入站协议</b>
         <b role="columnheader">静态候选</b>
       </div>
-      <div role="row">
-        <span role="cell">OpenAI Chat Completions</span>
-        {cell(coverage.openai)}
-      </div>
-      <div role="row">
-        <span role="cell">Anthropic Messages</span>
-        {cell(coverage.anthropic)}
-      </div>
+      {modelProtocols.map((protocol) => (
+        <div role="row" key={protocol.type}>
+          <span role="cell">{protocol.label}</span>
+          <span role="cell">{cell(coverage[protocol.coverageKey] ?? 'UNSUPPORTED')}</span>
+        </div>
+      ))}
     </div>
   )
 }

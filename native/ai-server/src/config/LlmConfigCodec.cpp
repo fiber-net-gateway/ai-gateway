@@ -210,6 +210,9 @@ std::string normalize_option(std::string_view value) {
 
 std::expected<ProviderProtocolType, LlmConfigError> parse_protocol_type(std::string_view value,
                                                                         std::string_view field) {
+    if (value == "openai-responses") {
+        return ProviderProtocolType::OpenAiResponses;
+    }
     if (value == "openai-chat-completions") {
         return ProviderProtocolType::OpenAiChatCompletions;
     }
@@ -644,6 +647,9 @@ parse_provider_config(std::string_view content, std::string_view md5, std::strin
         }
         if (model->empty()) {
             return std::unexpected(invalid_field(base_path + ".model", "must not be empty"));
+        }
+        if (*type == ProviderProtocolType::OpenAiResponses && model->size() > 512) {
+            return std::unexpected(invalid_field(base_path + ".model", "Responses model must not exceed 512 bytes"));
         }
         snapshot.protocols.push_back(
                 ProviderProtocol{.type = *type, .path = std::string(*path), .model = std::string(*model)});

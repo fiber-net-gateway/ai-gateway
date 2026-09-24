@@ -1,15 +1,17 @@
 import { Braces, MessageSquareText } from 'lucide-react'
 
+import { modelProtocols } from '../../data/model-protocols'
+
 import type { ProtocolCoverage } from '../../api/model-marketplace'
 
 export function ProtocolBadge({
   type,
   coverage,
 }: {
-  type: 'openai' | 'anthropic'
+  type: 'openai' | 'anthropic' | 'responses'
   coverage: ProtocolCoverage
 }) {
-  const label = type === 'openai' ? 'OpenAI' : 'Anthropic'
+  const label = modelProtocols.find((protocol) => protocol.coverageKey === type)!.shortLabel
   const Icon = type === 'openai' ? MessageSquareText : Braces
   return (
     <span

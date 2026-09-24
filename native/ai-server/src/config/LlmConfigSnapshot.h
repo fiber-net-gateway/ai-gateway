@@ -53,6 +53,7 @@ enum class ProviderProtocolType : std::uint8_t {
     OpenAiChatCompletions,
     OpenAiEmbedding,
     AnthropicMessages,
+    OpenAiResponses,
 };
 
 struct ProviderApiToken {

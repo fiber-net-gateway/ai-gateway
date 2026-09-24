@@ -3,11 +3,13 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
+import { demoProviderProtocols, demoProviderUpdate } from '../../demo-provider-config.js'
 import { buildApp } from '../../app.js'
 import { ValueCipher } from '../users/crypto.js'
 import type { MarketplaceConfigPublisher, RnacosConfigRead } from '../rnacos/config-client.js'
 import { MemoryMarketplaceSecretService } from './secret-service.js'
 import { renderModelsResource, renderProviderResources } from './renderer.js'
+import { protocolCoverage, validateModelGraph } from './validation.js'
 import type {
   MarketplaceVersionRecord,
   ModelMutationInput,
@@ -83,6 +85,7 @@ function providerMutation(secret: string): ProviderMutationInput {
     displayName: '供应商 A',
     baseUrl: 'https://api.vendor.example/',
     protocols: [
+      { type: 'OPENAI_RESPONSES', path: '/v1/responses', upstreamModelName: 'vendor-responses' },
       {
         type: 'OPENAI_CHAT_COMPLETIONS',
         path: '/v1/chat/completions',
@@ -210,6 +213,15 @@ test('model marketplace keeps draft, publication, activation and secrets separat
   assert.equal(created.json().draft.state, 'MODIFIED')
   assert.equal(created.json().published.state, 'NEVER')
   assert.equal(created.json().activation.state, 'UNKNOWN')
+
+  assert.equal(created.json().protocols.responses, 'SUPPORTED')
+  const responseModels = await app.inject({
+    method: 'GET',
+    url: `/api/environments/${environmentId}/models?view=admin&protocol=responses`,
+    headers: { cookie },
+  })
+  assert.equal(responseModels.statusCode, 200)
+  assert.equal(responseModels.json().items.length, 1)
 
   const providerList = await app.inject({
     method: 'GET',
@@ -692,6 +704,11 @@ test('renderer uses fixed Data IDs, deterministic ordering and exact int64 JSON 
         baseUrl: 'https://api.example.test/',
         protocols: [
           {
+            type: 'OPENAI_RESPONSES',
+            path: '/v1/responses',
+            upstreamModelName: 'responses-upstream',
+          },
+          {
             type: 'ANTHROPIC_MESSAGES',
             path: '/v1/messages',
             upstreamModelName: 'upstream',
@@ -758,8 +775,29 @@ test('renderer uses fixed Data IDs, deterministic ordering and exact int64 JSON 
   assert.equal(providerConfig.data['api-tokens'][0].token, 'renderer-secret')
   assert.deepEqual(
     providerConfig.data.protocol.map((protocol: { type: string }) => protocol.type),
-    ['openai-chat-completions', 'anthropic-messages'],
+    ['openai-chat-completions', 'anthropic-messages', 'openai-responses'],
   )
+
+  const responseOnly = {
+    ...version.providers[0],
+    protocols: version.providers[0].protocols.filter((p) => p.type === 'OPENAI_RESPONSES'),
+  }
+  assert.deepEqual(protocolCoverage(version.models[0], [responseOnly]), {
+    openai: 'UNSUPPORTED',
+    anthropic: 'UNSUPPORTED',
+    responses: 'SUPPORTED',
+  })
+  assert.equal(
+    validateModelGraph(version.models[0], [responseOnly]).some(
+      (issue) => issue.severity === 'ERROR',
+    ),
+    false,
+  )
+  const chatOnly = {
+    ...responseOnly,
+    protocols: version.providers[0].protocols.filter((p) => p.type === 'OPENAI_CHAT_COMPLETIONS'),
+  }
+  assert.equal(protocolCoverage(version.models[0], [chatOnly]).responses, 'UNSUPPORTED')
 
   const models = renderModelsResource(version)
   assert.equal(models.dataId, 'ploto.ai-llm.models')
@@ -786,4 +824,38 @@ test('marketplace MySQL runtime SQL remains single-table and free of subqueries'
   assert.doesNotMatch(source, /SELECT\s+COUNT\s*\(/u)
   assert.doesNotMatch(source, /\(\s*SELECT\b/u)
   assert.doesNotMatch(source, /INSERT[\s\S]{0,200}\bSELECT\b/u)
+})
+
+test('demo Responses upgrade is idempotent and preserves custom Provider settings', () => {
+  const baseUrl = 'http://127.0.0.1:8081'
+  const provider = { baseUrl, protocols: demoProviderProtocols, tokens: [] }
+  assert.equal(demoProviderUpdate(provider, baseUrl), 'CURRENT')
+  assert.equal(
+    demoProviderUpdate(
+      {
+        ...provider,
+        protocols: demoProviderProtocols.filter((p) => p.type !== 'OPENAI_RESPONSES'),
+      },
+      baseUrl,
+    ),
+    'UPGRADE',
+  )
+  assert.equal(
+    demoProviderUpdate({ ...provider, baseUrl: 'https://custom.invalid' }, baseUrl),
+    'CUSTOM',
+  )
+  assert.equal(
+    demoProviderUpdate({ ...provider, tokens: [{ id: 'custom-token' }] }, baseUrl),
+    'CUSTOM',
+  )
+  assert.equal(
+    demoProviderUpdate(
+      {
+        ...provider,
+        protocols: demoProviderProtocols.map((p) => ({ ...p, upstreamModelName: 'custom-model' })),
+      },
+      baseUrl,
+    ),
+    'CUSTOM',
+  )
 })

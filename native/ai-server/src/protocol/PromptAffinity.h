@@ -20,6 +20,7 @@ enum class PromptRouteKeySource : std::uint8_t {
     AnthropicAutomaticCacheAnchor,
     AnthropicConversationAnchor,
     PrincipalModelFallback,
+    ResponsesSemanticAnchor,
     Count,
 };
 

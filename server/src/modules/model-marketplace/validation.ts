@@ -21,7 +21,11 @@ function byteLength(value: string): number {
 }
 
 function validateProtocol(protocol: MarketplaceProtocolRecord, field: string): void {
-  if (protocol.type !== 'OPENAI_CHAT_COMPLETIONS' && protocol.type !== 'ANTHROPIC_MESSAGES') {
+  if (
+    protocol.type !== 'OPENAI_CHAT_COMPLETIONS' &&
+    protocol.type !== 'ANTHROPIC_MESSAGES' &&
+    protocol.type !== 'OPENAI_RESPONSES'
+  ) {
     fail('PROTOCOL_UNSUPPORTED', '不支持的供应商协议', `${field}/type`)
   }
   if (
@@ -263,6 +267,7 @@ export function protocolCoverage(
 ): {
   openai: ProtocolCoverage
   anthropic: ProtocolCoverage
+  responses: ProtocolCoverage
 } {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]))
   const activeProviders = model.providerBindings
@@ -280,6 +285,7 @@ export function protocolCoverage(
   return {
     openai: supports('OPENAI_CHAT_COMPLETIONS'),
     anthropic: supports('ANTHROPIC_MESSAGES'),
+    responses: supports('OPENAI_RESPONSES'),
   }
 }
 
@@ -305,7 +311,19 @@ export function validateModelGraph(
       severity: 'WARNING',
     })
   }
-  if (coverage.openai === 'UNSUPPORTED' && coverage.anthropic === 'UNSUPPORTED') {
+  if (coverage.responses === 'UNSUPPORTED') {
+    issues.push({
+      code: 'RESPONSES_PROTOCOL_UNSUPPORTED',
+      message: '当前模型没有可执行的 OpenAI Responses 候选',
+      field: `/models/${model.id}/protocols/OPENAI_RESPONSES`,
+      severity: 'WARNING',
+    })
+  }
+  if (
+    coverage.openai === 'UNSUPPORTED' &&
+    coverage.anthropic === 'UNSUPPORTED' &&
+    coverage.responses === 'UNSUPPORTED'
+  ) {
     issues.push({
       code: 'PROTOCOL_COVERAGE_EMPTY',
       message: '模型没有任何可执行协议',

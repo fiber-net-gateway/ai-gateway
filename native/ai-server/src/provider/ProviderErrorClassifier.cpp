@@ -34,8 +34,7 @@ bool token_limit_name(LlmWireProtocol protocol, std::string_view value) noexcept
     if (value == "rate_limit_error") {
         return true;
     }
-    return protocol == LlmWireProtocol::OpenAiChatCompletions &&
-           (value == "insufficient_quota" || value == "rate_limit_exceeded");
+    return uses_openai_error_envelope(protocol) && (value == "insufficient_quota" || value == "rate_limit_exceeded");
 }
 
 struct ErrorBodyContext {

@@ -1,6 +1,8 @@
 #include "LlmBody.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -94,7 +96,7 @@ struct AffinityState {
 class BodyParser {
 public:
     BodyParser(LlmWireProtocol protocol, std::string_view input, mem::BufPool &pool) noexcept :
-        protocol_(protocol), input_(input), pool_(&pool), patches_(pool) {}
+        protocol_(protocol), input_(input), pool_(&pool), patches_(pool), members_(pool) {}
 
     [[nodiscard]] bool run() noexcept {
         if (!parser_.feed(input_.data(), input_.size())) {
@@ -125,6 +127,8 @@ public:
         return set_error(LlmBodyErrorCode::InvalidJson, {}, "invalid parser state");
     }
 
+    [[nodiscard]] json::JsonArray<ResponsesBodyMember> members() const noexcept { return members_.finish(); }
+    [[nodiscard]] ResponsesBodyPolicyInfo policy() const noexcept { return policy_; }
     [[nodiscard]] LlmRoutingData routing() const noexcept { return routing_; }
     [[nodiscard]] json::JsonArray<LlmBodyPatchSite> patches() const noexcept { return patches_.finish(); }
     [[nodiscard]] const std::optional<LlmBodyError> &error() const noexcept { return error_; }
@@ -175,6 +179,9 @@ private:
     }
 
     [[nodiscard]] bool parse_root() noexcept {
+        if (protocol_ == LlmWireProtocol::OpenAiResponses) {
+            return parse_responses_root();
+        }
         if (!advance("expected an object member or closing brace")) {
             return false;
         }
@@ -254,6 +261,194 @@ private:
                 return false;
             }
         }
+        return true;
+    }
+
+    [[nodiscard]] bool responses_item_error(LlmBodyErrorCode code, std::size_t index) noexcept {
+        std::array<char, 48> path{};
+        std::memcpy(path.data(), "input[", 6);
+        auto result = std::to_chars(path.data() + 6, path.data() + path.size() - 1, index);
+        *result.ptr++ = ']';
+        std::string_view field;
+        if (!copy_text(*pool_, {path.data(), static_cast<std::size_t>(result.ptr - path.data())}, field)) {
+            return set_error(LlmBodyErrorCode::OutOfMemory, {}, "out of memory");
+        }
+        return set_error(code, field, "send a complete input item with one type discriminator");
+    }
+
+    [[nodiscard]] bool parse_responses_input() noexcept {
+        PromptDigestBuilder prefix;
+        if (current().kind == TokenKind::Text) {
+            routing_.messages_count = 1;
+            affinity_.openai_messages.available = !current().view.empty();
+            return hash_value(prefix) && prefix.snapshot(affinity_.openai_messages.full);
+        }
+        if (current().kind != TokenKind::StartArr) {
+            return set_error(LlmBodyErrorCode::InvalidFieldType, "input", "expected string or array input");
+        }
+        if (!advance("expected input item"))
+            return false;
+        bool anchor_open = true;
+        std::size_t index = 0;
+        while (current().kind != TokenKind::EndArr) {
+            if (current().kind != TokenKind::StartObj) {
+                return set_error(LlmBodyErrorCode::InvalidFieldType, "input", "expected input item object");
+            }
+            PromptDigestBuilder item;
+            if (!item.begin_object() || !advance("expected item member"))
+                return false;
+            bool type_seen = false;
+            bool message_type = true;
+            int role = 0;
+            while (current().kind != TokenKind::EndObj) {
+                const bool type = current().view == "type";
+                const bool is_role = current().view == "role";
+                if (type && type_seen)
+                    return responses_item_error(LlmBodyErrorCode::DuplicateField, index);
+                type_seen = type_seen || type;
+                if (anchor_open && !item.add_key(current().view))
+                    return false;
+                if (!advance("expected item value"))
+                    return false;
+                if (type) {
+                    if (current().kind != TokenKind::Text) {
+                        return set_error(LlmBodyErrorCode::InvalidFieldType, "input", "expected string item type");
+                    }
+                    if (current().view == "item_reference") {
+                        return responses_item_error(LlmBodyErrorCode::StatefulInputReference, index);
+                    }
+                    message_type = current().view == "message";
+                }
+                if (is_role) {
+                    role = current().kind != TokenKind::Text                               ? 0
+                           : current().view == "user"                                      ? 1
+                           : (current().view == "system" || current().view == "developer") ? 2
+                           : current().view == "assistant"                                 ? 3
+                                                                                           : 0;
+                }
+                if (!(anchor_open ? hash_value(item) : skip_value()) || !advance("expected item member"))
+                    return false;
+            }
+            if (message_type && role != 0)
+                ++routing_.messages_count;
+            if (anchor_open) {
+                if (message_type && (role == 1 || role == 2)) {
+                    PromptDigest digest;
+                    if (!item.end_object() || !item.snapshot(digest) || !prefix.add_component("message", digest) ||
+                        !prefix.snapshot(affinity_.openai_messages.full))
+                        return false;
+                    affinity_.openai_messages.available = true;
+                    if (role == 1)
+                        anchor_open = false;
+                } else {
+                    anchor_open = false;
+                }
+            }
+            ++index;
+            if (!advance("expected input item"))
+                return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool parse_responses_root() noexcept {
+        constexpr std::string_view fields[] = {"model",        "stream",     "input",
+                                               "instructions", "tools",      "prompt_cache_key",
+                                               "store",        "background", "previous_response_id",
+                                               "conversation"};
+        std::uint32_t seen = 0;
+        std::size_t count = 0;
+        if (!advance("expected object member"))
+            return false;
+        while (current().kind != TokenKind::EndObj) {
+            if (++count > 4096)
+                return set_error(LlmBodyErrorCode::TooManyFields, {}, "too many request fields");
+            const std::size_t begin = parser_.current_offset();
+            std::size_t field = std::size(fields);
+            for (std::size_t i = 0; i < std::size(fields); ++i) {
+                if (current().view == fields[i]) {
+                    field = i;
+                    break;
+                }
+            }
+            if (field < 6 && (seen & (1U << field))) {
+                return set_error(LlmBodyErrorCode::DuplicateField, fields[field], "duplicate request field");
+            }
+            if (field < std::size(fields))
+                seen |= 1U << field;
+            if (!advance("expected member value"))
+                return false;
+            ResponsesBodyMember member{.begin = begin, .value_begin = parser_.current_offset()};
+            bool ok = false;
+            switch (field) {
+                case 0:
+                    member.kind = ResponsesMemberKind::Model;
+                    ok = parse_model();
+                    break;
+                case 1:
+                    member.kind = ResponsesMemberKind::Stream;
+                    ok = parse_stream();
+                    if (ok && !routing_.stream.is_present())
+                        routing_.stream.set_present(false);
+                    break;
+                case 2:
+                    ok = parse_responses_input();
+                    break;
+                case 3: {
+                    if (current().kind != TokenKind::Null && current().kind != TokenKind::Text) {
+                        return set_error(LlmBodyErrorCode::InvalidFieldType, "instructions",
+                                         "expected string instructions");
+                    }
+                    affinity_.system.available = current().kind == TokenKind::Text && !current().view.empty();
+                    PromptDigestBuilder digest;
+                    ok = hash_value(digest) && digest.snapshot(affinity_.system.full);
+                    break;
+                }
+                case 4:
+                    if (current().kind != TokenKind::Null && current().kind != TokenKind::StartArr) {
+                        return set_error(LlmBodyErrorCode::InvalidFieldType, "tools", "expected tools array");
+                    }
+                    ok = parse_tools();
+                    break;
+                case 5:
+                    ok = parse_direct_key("prompt_cache_key", "openai-prompt-cache-key",
+                                          PromptRouteKeySource::OpenAiPromptCacheKey);
+                    break;
+                case 6:
+                case 7:
+                    member.kind = ResponsesMemberKind::Drop;
+                    if (current().kind != TokenKind::Null && current().kind != TokenKind::Bool) {
+                        return set_error(LlmBodyErrorCode::InvalidFieldType, fields[field],
+                                         "expected boolean policy field");
+                    }
+                    if (current().kind == TokenKind::Bool && current().bval) {
+                        (field == 6 ? policy_.store_was_true : policy_.background_was_true) = true;
+                    }
+                    ok = true;
+                    break;
+                case 8:
+                case 9:
+                    member.kind = ResponsesMemberKind::Drop;
+                    (field == 8 ? policy_.previous_response_removed : policy_.conversation_removed) = true;
+                    ok = skip_value();
+                    break;
+                default:
+                    ok = skip_value();
+                    break;
+            }
+            if (!ok)
+                return error_ ? false : set_error(LlmBodyErrorCode::OutOfMemory, {}, "failed to parse input");
+            member.end = parser_.current_end_offset();
+            if (!members_.append(member))
+                return set_error(LlmBodyErrorCode::OutOfMemory, {}, "out of memory");
+            if (!advance("expected object member"))
+                return false;
+        }
+        if (!routing_.model.is_present() || routing_.model->empty()) {
+            return set_error(LlmBodyErrorCode::InvalidFieldType, "model", "expected nonempty model");
+        }
+        if (!(seen & (1U << 2)))
+            return set_error(LlmBodyErrorCode::InvalidFieldType, "input", "input is required");
         return true;
     }
 
@@ -918,6 +1113,11 @@ private:
     }
 
     [[nodiscard]] bool finish_affinity() noexcept {
+        if (protocol_ == LlmWireProtocol::OpenAiResponses) {
+            return combine_candidate(PromptRouteKeySource::ResponsesSemanticAnchor, &affinity_.tools, &affinity_.system,
+                                     &affinity_.openai_messages, routing_.prompt_affinity) ||
+                   set_error(LlmBodyErrorCode::OutOfMemory, {}, "failed to hash prompt affinity");
+        }
         const bool ok = protocol_ == LlmWireProtocol::AnthropicMessages ? finish_anthropic_affinity()
                                                                         : finish_openai_affinity();
         return ok || set_error(LlmBodyErrorCode::OutOfMemory, {}, "failed to hash prompt affinity");
@@ -930,6 +1130,8 @@ private:
     LlmRoutingData routing_;
     AffinityState affinity_;
     RequestArrayBuilder<LlmBodyPatchSite> patches_;
+    RequestArrayBuilder<ResponsesBodyMember> members_;
+    ResponsesBodyPolicyInfo policy_;
     std::optional<LlmBodyError> error_;
 };
 
@@ -949,7 +1151,8 @@ std::expected<ParsedLlmBody, LlmBodyError> ParsedLlmBody::parse(LlmWireProtocol 
     if (!parser.run()) {
         return std::unexpected(*parser.error());
     }
-    return ParsedLlmBody(std::move(body), parser.routing(), parser.patches());
+    return ParsedLlmBody(std::move(body), parser.routing(), parser.patches(), protocol, parser.members(),
+                         parser.policy());
 }
 
 } // namespace fiber::ai_server

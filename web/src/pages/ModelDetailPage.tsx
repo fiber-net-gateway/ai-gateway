@@ -1,3 +1,4 @@
+import { modelProtocols } from '../data/model-protocols'
 import { ArrowLeft, CloudUpload, Edit3, Radio, Send, ShieldAlert, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
@@ -93,6 +94,10 @@ export function ModelDetailPage({
           <div className="protocol-row">
             <ProtocolBadge type="openai" coverage={available.protocols.openai} />
             <ProtocolBadge type="anthropic" coverage={available.protocols.anthropic} />
+            <ProtocolBadge
+              type="responses"
+              coverage={available.protocols.responses ?? 'UNSUPPORTED'}
+            />
           </div>
         </header>
         <div
@@ -150,6 +155,17 @@ export function ModelDetailPage({
           </div>
           <div className="detail-section">
             <pre>{`curl -H "Authorization: Bearer <YOUR_BT1_TOKEN>" \\\n+  -H "Content-Type: application/json" \\\n+  -d '{"model":"${available.logicalModelName}","messages":[...]}' \\\n+  https://<ai-server>/v1/chat/completions`}</pre>
+            {available.protocols.responses === 'SUPPORTED' && (
+              <>
+                <h3>OpenAI Responses</h3>
+                <p>强制无状态：不保存响应，不使用历史 ID；每次请求需提交完整上下文。</p>
+                <p>下面使用 SSE；普通 JSON 响应请将 stream 改为 false。</p>
+                <pre>{`curl https://<ai-server>/v1/responses \\
+  -H "Authorization: Bearer <YOUR_BT1_TOKEN>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${available.logicalModelName}","input":"Hello","stream":true}'`}</pre>
+              </>
+            )}
           </div>
         </section>
         <AccessRequestDialog
@@ -299,8 +315,9 @@ export function ModelDetailPage({
               <div className="protocol-row">
                 {provider.protocols.map((protocol) => (
                   <span className="protocol-badge protocol-supported" key={protocol.type}>
-                    {protocol.type === 'OPENAI_CHAT_COMPLETIONS' ? 'OpenAI' : 'Anthropic'} ·{' '}
-                    {protocol.upstreamModelName}
+                    {modelProtocols.find((definition) => definition.type === protocol.type)
+                      ?.label ?? protocol.type}{' '}
+                    · {protocol.upstreamModelName}
                   </span>
                 ))}
               </div>

@@ -13,14 +13,10 @@
 #include <fiber/common/mem/IoBuf.h>
 #include <fiber/common/mem/IoBufChain.h>
 
+#include "LlmWireProtocol.h"
 #include "PromptAffinity.h"
 
 namespace fiber::ai_server {
-
-enum class LlmWireProtocol : std::uint8_t {
-    OpenAiChatCompletions,
-    AnthropicMessages,
-};
 
 enum class LlmBodyErrorCode : std::uint8_t {
     InvalidJson,
@@ -29,6 +25,9 @@ enum class LlmBodyErrorCode : std::uint8_t {
     OutOfMemory,
     InvalidReplacement,
     InvalidPatch,
+    DuplicateField,
+    StatefulInputReference,
+    TooManyFields,
 };
 
 struct LlmBodyError {
@@ -58,6 +57,22 @@ struct LlmBodyPatchSite {
     LlmBodyPatchKind kind = LlmBodyPatchKind::Model;
 };
 
+enum class ResponsesMemberKind : std::uint8_t { Keep, Model, Stream, Drop };
+
+struct ResponsesBodyMember {
+    std::size_t begin = 0;
+    std::size_t value_begin = 0;
+    std::size_t end = 0;
+    ResponsesMemberKind kind = ResponsesMemberKind::Keep;
+};
+
+struct ResponsesBodyPolicyInfo {
+    bool store_was_true = false;
+    bool background_was_true = false;
+    bool previous_response_removed = false;
+    bool conversation_removed = false;
+};
+
 class ParsedLlmBody {
 public:
     ParsedLlmBody() noexcept = default;
@@ -71,6 +86,7 @@ public:
     [[nodiscard]] static std::expected<ParsedLlmBody, LlmBodyError> parse(LlmWireProtocol protocol, mem::IoBuf body,
                                                                           mem::BufPool &pool) noexcept;
 
+    [[nodiscard]] const ResponsesBodyPolicyInfo &responses_policy() const noexcept { return responses_policy_; }
     [[nodiscard]] const LlmRoutingData &routing() const noexcept { return routing_; }
     [[nodiscard]] const mem::IoBuf &raw_body() const noexcept { return raw_body_; }
     [[nodiscard]] std::size_t body_size() const noexcept { return raw_body_.readable(); }
@@ -80,12 +96,18 @@ public:
     rewrite(std::string_view upstream_model, std::optional<bool> stream, mem::IoBufNodePool &node_pool) const noexcept;
 
 private:
-    ParsedLlmBody(mem::IoBuf body, LlmRoutingData routing, json::JsonArray<LlmBodyPatchSite> patch_sites) noexcept :
-        raw_body_(std::move(body)), routing_(routing), patch_sites_(patch_sites) {}
+    ParsedLlmBody(mem::IoBuf body, LlmRoutingData routing, json::JsonArray<LlmBodyPatchSite> patch_sites,
+                  LlmWireProtocol protocol, json::JsonArray<ResponsesBodyMember> members,
+                  ResponsesBodyPolicyInfo policy) noexcept :
+        raw_body_(std::move(body)), routing_(routing), patch_sites_(patch_sites), protocol_(protocol),
+        responses_members_(members), responses_policy_(policy) {}
 
     mem::IoBuf raw_body_;
     LlmRoutingData routing_;
     json::JsonArray<LlmBodyPatchSite> patch_sites_;
+    LlmWireProtocol protocol_ = LlmWireProtocol::OpenAiChatCompletions;
+    json::JsonArray<ResponsesBodyMember> responses_members_;
+    ResponsesBodyPolicyInfo responses_policy_;
 };
 
 } // namespace fiber::ai_server

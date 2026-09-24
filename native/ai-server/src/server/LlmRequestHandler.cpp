@@ -7,6 +7,7 @@
 #include "../observability/AiServerCatRequest.h"
 #include "../observability/AiServerLogCategories.h"
 #include "../protocol/LlmError.h"
+#include "../protocol/ResponsesObservation.h"
 #include "../protocol/SseParser.h"
 #include "../protocol/TokenUsage.h"
 #include "../provider/ExecutionPlan.h"
@@ -62,10 +63,7 @@ constexpr std::chrono::seconds kProviderTimeout{300};
 
 std::int64_t wall_now_millis() noexcept;
 
-std::string_view protocol_name(LlmWireProtocol protocol) noexcept {
-    return protocol == LlmWireProtocol::OpenAiChatCompletions ? std::string_view("openai")
-                                                              : std::string_view("anthropic");
-}
+std::string_view protocol_name(LlmWireProtocol protocol) noexcept { return llm_protocol_name(protocol); }
 
 void add_cat_integer(cat::Event &event, std::string_view key, const std::optional<std::int64_t> &value) noexcept {
     if (!value) {
@@ -834,7 +832,28 @@ public:
 
     ~LlmRequestAudit() {
         const http::HttpResponseStats &response = exchange_->response_stats();
+        if (protocol_ == LlmWireProtocol::OpenAiResponses && responses_attempted_) {
+            const auto result = !response.completed && responses_result_ != ResponsesResult::Interrupted &&
+                                                responses_result_ != ResponsesResult::InvalidResponse
+                                        ? ResponsesResult::Aborted
+                                        : responses_result_;
+            metrics_->responses_result(result);
+        }
         emit(response);
+    }
+
+    void responses_attempt_started() noexcept { responses_attempted_ = true; }
+    void responses_final(ResponsesResult result, std::string_view error,
+                         std::optional<bool> client_aborted = {}) noexcept {
+        responses_client_aborted_ = client_aborted;
+        responses_result_ = result;
+        final_error_ = error;
+        final_outcome_set_ = true;
+        if (cat_request_) {
+            cat_request_->set_model_failed(!error.empty());
+            (void) cat_request_->add_root_data("responses_result",
+                                               error.empty() ? std::string_view("completed") : error);
+        }
     }
 
     void pin_config(std::shared_ptr<const LlmConfigSnapshot> config) noexcept { config_ = std::move(config); }
@@ -861,6 +880,8 @@ public:
             return;
         }
         body_size_ = body ? body.readable() : 0;
+        if (protocol_ == LlmWireProtocol::OpenAiResponses)
+            return;
 #if AI_SERVER_AUDIT_HTTP
         return;
 #else
@@ -895,7 +916,7 @@ public:
 
     void output(std::string_view json, bool streaming) noexcept {
 #if !AI_SERVER_AUDIT_HTTP
-        if (audit_enabled_ && !generation_disabled_) {
+        if (protocol_ != LlmWireProtocol::OpenAiResponses && audit_enabled_ && !generation_disabled_) {
             (void) output_.observe(protocol_, json, streaming);
         }
 #else
@@ -906,7 +927,8 @@ public:
 
     void output_complete(bool complete) noexcept {
 #if !AI_SERVER_AUDIT_HTTP
-        output_.complete(complete);
+        if (protocol_ != LlmWireProtocol::OpenAiResponses)
+            output_.complete(complete);
 #else
         (void) complete;
 #endif
@@ -1126,10 +1148,14 @@ private:
     }
 
     [[nodiscard]] std::string_view error_json(const http::HttpResponseStats &response) const noexcept {
+        if (final_outcome_set_ && !final_error_.empty())
+            return final_error_;
         const std::string_view terminal_error = common::io_err_name(response.terminal_error);
         if (terminal_error != "none") {
             return terminal_error;
         }
+        if (final_outcome_set_)
+            return final_error_;
         for (std::size_t i = attempts_size_; i != 0; --i) {
             const std::string_view outcome = attempts_[i - 1].outcome;
             if (outcome != "success") {
@@ -1225,7 +1251,7 @@ private:
         }
         json.field("status", response.status_code);
         json.field("response_body_bytes", static_cast<std::int64_t>(response.body_bytes_sent));
-        json.field("client_aborted", !response.completed);
+        json.field("client_aborted", responses_client_aborted_.value_or(!response.completed));
         json.field("error_json", error_json(response));
         json.key("response_json");
         if (output_.available()) {
@@ -1292,7 +1318,7 @@ private:
         json.field("status", response.status_code);
         json.field("duration_ms", std::max<std::int64_t>(duration_us / 1000, 0));
         encode_usage(json);
-        json.field("client_aborted", !response.completed);
+        json.field("client_aborted", responses_client_aborted_.value_or(!response.completed));
         json.field("error_json", error);
         json.field("capture_complete", capture_complete);
         json.field("message_count", static_cast<std::int64_t>(messages_count_));
@@ -1391,6 +1417,11 @@ private:
     bool audit_enabled_ = false;
     bool generation_disabled_ = false;
     bool capture_incomplete_ = false;
+    bool responses_attempted_ = false;
+    std::optional<bool> responses_client_aborted_;
+    bool final_outcome_set_ = false;
+    ResponsesResult responses_result_ = ResponsesResult::Error;
+    std::string_view final_error_;
 };
 
 enum class ReadRequestBodyError : std::uint8_t {
@@ -1616,13 +1647,12 @@ async::Task<void> send_error(http::HttpExchange &exchange, AiServerCatRequest *c
         const LlmError fallback_error{
                 .status_code = 500,
                 .code = "internal_error",
-                .type = protocol == LlmWireProtocol::OpenAiChatCompletions ? std::string_view("server_error")
-                                                                           : std::string_view("api_error"),
+                .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
+                                                             : std::string_view("api_error"),
                 .message = "internal server error",
         };
         record_cat_response_error(cat_request, fallback_error);
-        const std::string_view fallback =
-                protocol == LlmWireProtocol::OpenAiChatCompletions ? kOpenAiFallback : kAnthropicFallback;
+        const std::string_view fallback = uses_openai_error_envelope(protocol) ? kOpenAiFallback : kAnthropicFallback;
         mem::IoBuf body = mem::IoBuf::allocate(fallback.size());
         if (body) {
             std::memcpy(body.writable_data(), fallback.data(), fallback.size());
@@ -1678,8 +1708,8 @@ LlmError model_error(LlmWireProtocol protocol, const ModelAuthorizationError &er
             return LlmError{
                     .status_code = 503,
                     .code = "model_config_unavailable",
-                    .type = protocol == LlmWireProtocol::OpenAiChatCompletions ? std::string_view("server_error")
-                                                                               : std::string_view("api_error"),
+                    .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
+                                                                 : std::string_view("api_error"),
                     .message = error.message,
                     .field = "model",
             };
@@ -1687,9 +1717,8 @@ LlmError model_error(LlmWireProtocol protocol, const ModelAuthorizationError &er
             return LlmError{
                     .status_code = 403,
                     .code = "model_not_available",
-                    .type = protocol == LlmWireProtocol::OpenAiChatCompletions
-                                    ? std::string_view("invalid_request_error")
-                                    : std::string_view("permission_error"),
+                    .type = uses_openai_error_envelope(protocol) ? std::string_view("invalid_request_error")
+                                                                 : std::string_view("permission_error"),
                     .message = error.message,
                     .field = "model",
             };
@@ -1713,16 +1742,16 @@ LlmError plan_error(LlmWireProtocol protocol, const ExecutionPlanError &error) n
             return LlmError{
                     .status_code = 500,
                     .code = "internal_error",
-                    .type = protocol == LlmWireProtocol::OpenAiChatCompletions ? std::string_view("server_error")
-                                                                               : std::string_view("api_error"),
+                    .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
+                                                                 : std::string_view("api_error"),
                     .message = "internal server error",
             };
     }
     return LlmError{
             .status_code = 503,
             .code = code,
-            .type = protocol == LlmWireProtocol::OpenAiChatCompletions ? std::string_view("server_error")
-                                                                       : std::string_view("api_error"),
+            .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
+                                                         : std::string_view("api_error"),
             .message = error.message,
             .field = "model",
     };
@@ -1946,6 +1975,7 @@ struct SseRelayResult {
     common::IoErr upstream_error = common::IoErr::None;
     bool upstream_complete = false;
     bool downstream_delivery_failed = false;
+    ResponsesStreamState responses;
 };
 
 common::IoErr sse_parser_io_error(SseParseError error) noexcept {
@@ -2171,6 +2201,159 @@ async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttp
     }
 }
 
+async::Task<bool> finish_responses_error(http::HttpExchange &exchange, const ResponsesStreamState &state) noexcept {
+    if (state.max_sequence == std::numeric_limits<std::int64_t>::max())
+        co_return false;
+    const std::string_view code = state.failure.empty() ? std::string_view("upstream_stream_error") : state.failure;
+    std::array<char, 384> text{};
+    const int size =
+            std::snprintf(text.data(), text.size(),
+                          "event: error\r\ndata: {\"type\":\"error\",\"code\":\"%.*s\",\"message\":\"Upstream response "
+                          "stream ended prematurely.\",\"param\":null,\"sequence_number\":%lld}\r\n\r\n",
+                          static_cast<int>(code.size()), code.data(), static_cast<long long>(state.max_sequence + 1));
+    if (size <= 0 || static_cast<std::size_t>(size) >= text.size())
+        co_return false;
+    auto body = mem::IoBuf::allocate(static_cast<std::size_t>(size));
+    if (!body)
+        co_return false;
+    std::memcpy(body.writable_data(), text.data(), static_cast<std::size_t>(size));
+    body.commit(static_cast<std::size_t>(size));
+    mem::IoBufChain chain(event::EventLoop::current().io_buf_node_pool());
+    if (!chain.append(std::move(body)))
+        co_return false;
+    chain.mark_complete();
+    const auto written = co_await exchange.write_all(std::move(chain));
+    co_return written && *written == static_cast<std::size_t>(size);
+}
+
+async::Task<SseRelayResult> relay_responses(http::HttpExchange &exchange, ProviderHttpResponseStream &upstream,
+                                            bool delivery_open, std::optional<LlmTokenUsage> &usage) noexcept {
+    SseParser parser;
+    SseRelayResult result;
+    result.downstream_delivery_failed = !delivery_open;
+    bool downstream_boundary = true;
+    auto drain_deadline = event::EventLoop::current().now() + kProviderTimeout;
+    bool draining = !delivery_open;
+    auto observe_closed = [&]() noexcept {
+        if (delivery_open && exchange.response_channel_closed()) {
+            delivery_open = false;
+            result.downstream_delivery_failed = true;
+            record_downstream_reset(exchange);
+        }
+        if (!delivery_open && !draining) {
+            draining = true;
+            drain_deadline = event::EventLoop::current().now() + kProviderTimeout;
+        }
+    };
+    auto drain_parser = [&]() noexcept {
+        for (;;) {
+            const auto status = parser.next();
+            if (status != SseParseStatus::Event)
+                return status;
+            const auto observed = observe_responses(parser.event().data, true);
+            if (!result.responses.observe(observed, parser.event().ended_by_delimiter))
+                return SseParseStatus::Error;
+            if (observed.output_token_observed)
+                upstream.observe_first_token();
+            usage = result.responses.usage;
+        }
+    };
+    auto fail = [&](common::IoErr error) -> async::Task<void> {
+        result.upstream_error = error;
+        (void) upstream.abort(error);
+        observe_closed();
+        if (delivery_open) {
+            if (downstream_boundary && result.responses.terminal == ResponsesTerminal::None) {
+                if (!co_await finish_responses_error(exchange, result.responses)) {
+                    result.downstream_delivery_failed = true;
+                    (void) exchange.abort(error);
+                }
+            } else {
+                (void) exchange.abort(error);
+            }
+            delivery_open = false;
+        }
+    };
+    for (;;) {
+        observe_closed();
+        auto timeout = std::chrono::duration_cast<std::chrono::milliseconds>(kProviderTimeout);
+        if (draining) {
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    drain_deadline - event::EventLoop::current().now());
+            if (remaining <= std::chrono::milliseconds::zero()) {
+                co_await fail(common::IoErr::TimedOut);
+                co_return result;
+            }
+            timeout = std::min(timeout, remaining);
+        }
+        auto chunk = co_await upstream.read_body(kBodyChunkBytes, timeout);
+        if (!chunk) {
+            co_await fail(chunk.error());
+            co_return result;
+        }
+        observe_closed();
+        const bool complete = chunk->complete();
+        const std::size_t expected_bytes = chunk->readable_bytes();
+        mem::IoBufChain relay_chunk(event::EventLoop::current().io_buf_node_pool());
+        while (auto *node = chunk->pop_front_node()) {
+            const bool appended = relay_chunk.append_node(node);
+            FIBER_ASSERT(appended);
+            if (node->buf.readable() == 0)
+                continue;
+            if (!parser.feed(node->buf) || drain_parser() != SseParseStatus::NeedMore) {
+                if (result.responses.failure.empty())
+                    result.responses.failure = "upstream_invalid_response";
+                co_await fail(common::IoErr::Invalid);
+                co_return result;
+            }
+        }
+        if (complete) {
+            if (!parser.finish() || drain_parser() != SseParseStatus::Complete || !result.responses.finish()) {
+                if (result.responses.failure.empty())
+                    result.responses.failure = "upstream_invalid_response";
+                co_await fail(common::IoErr::Invalid);
+                co_return result;
+            }
+            result.upstream_complete = true;
+            relay_chunk.mark_complete();
+        }
+        if (delivery_open && (expected_bytes != 0 || complete)) {
+            auto written = co_await exchange.write_all(std::move(relay_chunk));
+            if (!written || *written != expected_bytes) {
+                result.downstream_delivery_failed = true;
+                delivery_open = false;
+                (void) exchange.abort(written ? common::IoErr::Invalid : written.error());
+            } else {
+                downstream_boundary = parser.at_event_boundary();
+            }
+        }
+        if (complete)
+            co_return result;
+    }
+}
+
+ProviderErrorDecision responses_error_decision(ResponsesErrorKind kind) noexcept {
+    switch (kind) {
+        case ResponsesErrorKind::Authentication:
+            return {.scope = ProviderErrorScope::ApiToken,
+                    .instance_outcome = InstanceReportOutcome::Neutral,
+                    .unavailable_ttl = std::chrono::minutes(5),
+                    .reason = "auth_error"};
+        case ResponsesErrorKind::RateLimit:
+            return {.scope = ProviderErrorScope::ApiToken,
+                    .instance_outcome = InstanceReportOutcome::Neutral,
+                    .unavailable_ttl = std::chrono::seconds(30),
+                    .reason = "rate_limit"};
+        case ResponsesErrorKind::Server:
+            return {.scope = ProviderErrorScope::Provider,
+                    .instance_outcome = InstanceReportOutcome::Failure,
+                    .reason = "server_error"};
+        case ResponsesErrorKind::Unknown:
+            return {.instance_outcome = InstanceReportOutcome::Neutral};
+    }
+    std::unreachable();
+}
+
 ProviderRetrySelection retry_selection(const http::HttpExchange &exchange,
                                        const json::JsonArray<ResolvedProviderAttempt> &attempts,
                                        std::size_t attempt_index, const ProviderErrorDecision &decision,
@@ -2230,9 +2413,8 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                 LlmError{
                                         .status_code = 500,
                                         .code = "internal_error",
-                                        .type = protocol == LlmWireProtocol::OpenAiChatCompletions
-                                                        ? std::string_view("server_error")
-                                                        : std::string_view("api_error"),
+                                        .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
+                                                                                     : std::string_view("api_error"),
                                         .message = "internal server error",
                                 });
         } else {
@@ -2245,11 +2427,50 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
 
     auto parsed = ParsedLlmBody::parse(protocol, std::move(*raw_body), exchange.pool());
     if (!parsed) {
-        co_await send_error(exchange, cat_request, protocol,
-                            input_error(400, "invalid_json", "invalid json request body"));
+        if (protocol == LlmWireProtocol::OpenAiResponses) {
+            const auto &error = parsed.error();
+            std::string_view code = "invalid_json";
+            switch (error.code) {
+                case LlmBodyErrorCode::DuplicateField:
+                    code = "duplicate_request_field";
+                    break;
+                case LlmBodyErrorCode::StatefulInputReference:
+                    code = "stateful_input_reference_unsupported";
+                    break;
+                case LlmBodyErrorCode::TooManyFields:
+                    code = "too_many_request_fields";
+                    break;
+                case LlmBodyErrorCode::InvalidFieldType:
+                    code = "invalid_request_field";
+                    break;
+                case LlmBodyErrorCode::OutOfMemory:
+                    code = "internal_error";
+                    break;
+                default:
+                    break;
+            }
+            const bool internal = error.code == LlmBodyErrorCode::OutOfMemory;
+            std::string_view field = error.field;
+            if (field.starts_with("$."))
+                field.remove_prefix(2);
+            co_await send_error(
+                    exchange, cat_request, protocol,
+                    LlmError{.status_code = internal ? 500 : 400,
+                             .code = code,
+                             .type = internal ? std::string_view("server_error")
+                                              : std::string_view("invalid_request_error"),
+                             .message = internal ? "internal server error"
+                                                 : "Invalid stateless Responses request; send complete input items.",
+                             .field = field});
+        } else {
+            co_await send_error(exchange, cat_request, protocol,
+                                input_error(400, "invalid_json", "invalid json request body"));
+        }
         co_return;
     }
     const LlmRoutingData &routing = parsed->routing();
+    if (protocol == LlmWireProtocol::OpenAiResponses)
+        metrics_->responses_policy(parsed->responses_policy());
     audit.input(routing);
     const std::string_view requested_model = routing.model.is_present() ? *routing.model : std::string_view{};
     auto authorized = authorize_model(authenticated->config(), authenticated->principal().username(), requested_model,
@@ -2271,9 +2492,8 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                             LlmError{
                                     .status_code = 500,
                                     .code = "internal_error",
-                                    .type = protocol == LlmWireProtocol::OpenAiChatCompletions
-                                                    ? std::string_view("server_error")
-                                                    : std::string_view("api_error"),
+                                    .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
+                                                                                 : std::string_view("api_error"),
                                     .message = "internal server error",
                             });
         co_return;
@@ -2353,12 +2573,19 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                 routing.stream.is_present() ? std::optional<bool>(*routing.stream) : std::nullopt,
                                 event::EventLoop::current().io_buf_node_pool());
         if (!rewritten) {
-            co_await send_error(exchange, cat_request, protocol,
-                                input_error(400, "invalid_json", "failed to modify request body"));
+            co_await send_error(
+                    exchange, cat_request, protocol,
+                    LlmError{.status_code = protocol == LlmWireProtocol::OpenAiResponses ? 500 : 400,
+                             .code = protocol == LlmWireProtocol::OpenAiResponses ? "internal_error" : "invalid_json",
+                             .type = protocol == LlmWireProtocol::OpenAiResponses ? "server_error"
+                                                                                  : "invalid_request_error",
+                             .message = "failed to modify request body"});
             co_return;
         }
 
         metrics_->provider_attempt(protocol);
+        if (protocol == LlmWireProtocol::OpenAiResponses)
+            audit.responses_attempt_started();
         const auto attempt_started = event::EventLoop::current().now();
         cat::Transaction provider_cat_transaction = audit.start_provider_transaction(attempt);
 
@@ -2403,7 +2630,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                     LlmError{
                                             .status_code = 502,
                                             .code = "provider_transport_error",
-                                            .type = protocol == LlmWireProtocol::OpenAiChatCompletions
+                                            .type = uses_openai_error_envelope(protocol)
                                                             ? std::string_view("server_error")
                                                             : std::string_view("api_error"),
                                             .message = "provider request failed",
@@ -2448,7 +2675,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                         LlmError{
                                                 .status_code = 502,
                                                 .code = "provider_transport_error",
-                                                .type = protocol == LlmWireProtocol::OpenAiChatCompletions
+                                                .type = uses_openai_error_envelope(protocol)
                                                                 ? std::string_view("server_error")
                                                                 : std::string_view("api_error"),
                                                 .message = "provider response failed",
@@ -2501,6 +2728,8 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                 co_return;
             }
             if (!is_event_stream_content_type(started->content_type())) {
+                if (protocol == LlmWireProtocol::OpenAiResponses)
+                    audit.responses_final(ResponsesResult::InvalidResponse, "upstream_invalid_response");
                 metrics_->provider_failure(protocol);
                 metrics_->provider_transport_failure(protocol, ProviderHttpErrorCode::InvalidResponse);
                 const ProviderErrorDecision decision =
@@ -2537,9 +2766,66 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
             const bool response_started = co_await send_sse_header(exchange, cat_request, started->status_code());
             std::optional<LlmTokenUsage> usage;
             const SseRelayResult relay_result =
-                    co_await relay_sse(exchange, *started, protocol, response_started, usage, audit);
+                    protocol == LlmWireProtocol::OpenAiResponses
+                            ? co_await relay_responses(exchange, *started, response_started, usage)
+                            : co_await relay_sse(exchange, *started, protocol, response_started, usage, audit);
             rate_limit.settle_async(usage ? usage->sum() : std::optional<std::int64_t>{});
             audit.output_complete(relay_result.upstream_complete);
+            if (protocol == LlmWireProtocol::OpenAiResponses) {
+                const auto &observed = relay_result.responses;
+                const std::string_view failure = !observed.failure.empty() ? observed.failure
+                                                 : !relay_result.upstream_complete
+                                                         ? std::string_view("upstream_stream_error")
+                                                         : responses_terminal_error(observed.terminal);
+                auto result = observed.failure == "upstream_missing_terminal_event" ? ResponsesResult::Interrupted
+                              : !observed.failure.empty()                           ? ResponsesResult::InvalidResponse
+                              : !relay_result.upstream_complete                     ? ResponsesResult::Interrupted
+                                                                : responses_result(observed.terminal);
+                if (relay_result.downstream_delivery_failed)
+                    result = ResponsesResult::Aborted;
+                audit.responses_final(result, failure, relay_result.downstream_delivery_failed);
+                const bool valid_response = relay_result.upstream_complete && observed.failure.empty();
+                const bool model_ok = observed.terminal == ResponsesTerminal::Completed ||
+                                      observed.terminal == ResponsesTerminal::Incomplete;
+                if (valid_response && model_ok) {
+                    started->report_instance(InstanceReportOutcome::Success);
+                    attempt.runtime->record_success(attempt.api_token ? attempt.api_token->name : std::string_view{});
+                } else {
+                    auto decision =
+                            valid_response
+                                    ? responses_error_decision(observed.error_kind)
+                                    : classify_provider_transport_error(ProviderHttpErrorCode::InvalidResponse, true);
+                    started->report_instance(decision.instance_outcome);
+                    apply_observed_provider_error(attempt, decision, event::EventLoop::current().now(), *metrics_,
+                                                  protocol);
+                    metrics_->provider_failure(protocol);
+                }
+                if (!valid_response || relay_result.downstream_delivery_failed)
+                    metrics_->sse_failure(protocol);
+                if (relay_result.downstream_delivery_failed)
+                    metrics_->sse_drain(protocol, valid_response ? SseDrainMetric::Completed
+                                                  : relay_result.upstream_error == common::IoErr::TimedOut
+                                                          ? SseDrainMetric::Timeout
+                                                          : SseDrainMetric::UpstreamError);
+                audit.provider_attempt(
+                        attempt, index, plan->attempts.size(),
+                        std::chrono::duration_cast<std::chrono::microseconds>(event::EventLoop::current().now() -
+                                                                              attempt_started),
+                        ProviderAttemptObservation{.timing = started->timing(),
+                                                   .failure_source = failure.empty() ? std::string_view{}
+                                                                                     : std::string_view("responses"),
+                                                   .outcome = failure.empty() ? std::string_view("success") : failure,
+                                                   .io_error = relay_result.upstream_error,
+                                                   .status = started->status_code(),
+                                                   .response_started = response_started,
+                                                   .upstream_request_id = started->request_id()},
+                        provider_cat_transaction);
+                audit.usage(usage, attempt);
+                if (usage)
+                    metrics_->token_usage(authenticated->principal().username(), attempt.provider->name, protocol,
+                                          *usage);
+                co_return;
+            }
             if (relay_result.upstream_complete) {
                 started->report_instance(InstanceReportOutcome::Success);
                 attempt.runtime->record_success(attempt.api_token ? attempt.api_token->name : std::string_view{});
@@ -2628,15 +2914,65 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                 LlmError{
                                         .status_code = 502,
                                         .code = "provider_transport_error",
-                                        .type = protocol == LlmWireProtocol::OpenAiChatCompletions
-                                                        ? std::string_view("server_error")
-                                                        : std::string_view("api_error"),
+                                        .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
+                                                                                     : std::string_view("api_error"),
                                         .message = "provider request failed",
                                 });
             co_return;
         }
 
         if (response->status_code >= 200 && response->status_code < 300) {
+            if (protocol == LlmWireProtocol::OpenAiResponses) {
+                const auto observed = observe_responses(io_buf_view(response->body), false);
+                const bool invalid = observed.invalid_json_or_shape || observed.state_policy_violation;
+                const std::string_view failure = observed.state_policy_violation
+                                                         ? std::string_view("upstream_state_policy_violation")
+                                                 : invalid ? std::string_view("upstream_invalid_response")
+                                                           : responses_terminal_error(observed.terminal);
+                audit.responses_final(invalid ? ResponsesResult::InvalidResponse : responses_result(observed.terminal),
+                                      failure);
+                if (!invalid && (observed.terminal == ResponsesTerminal::Completed ||
+                                 observed.terminal == ResponsesTerminal::Incomplete)) {
+                    response->load_balance.report(InstanceReportOutcome::Success);
+                    attempt.runtime->record_success(attempt.api_token ? attempt.api_token->name : std::string_view{});
+                } else {
+                    const auto decision =
+                            invalid ? classify_provider_transport_error(ProviderHttpErrorCode::InvalidResponse, false)
+                                    : responses_error_decision(observed.error_kind);
+                    response->load_balance.report(decision.instance_outcome);
+                    apply_observed_provider_error(attempt, decision, event::EventLoop::current().now(), *metrics_,
+                                                  protocol);
+                    metrics_->provider_failure(protocol);
+                }
+                audit.provider_attempt(
+                        attempt, index, plan->attempts.size(),
+                        std::chrono::duration_cast<std::chrono::microseconds>(event::EventLoop::current().now() -
+                                                                              attempt_started),
+                        ProviderAttemptObservation{.timing = response->timing,
+                                                   .failure_source = failure.empty() ? std::string_view{}
+                                                                                     : std::string_view("responses"),
+                                                   .outcome = failure.empty() ? std::string_view("success") : failure,
+                                                   .status = response->status_code,
+                                                   .upstream_request_id = response->request_id},
+                        provider_cat_transaction);
+                const auto usage = invalid ? std::optional<LlmTokenUsage>{} : observed.usage;
+                audit.usage(usage, attempt);
+                if (usage)
+                    metrics_->token_usage(authenticated->principal().username(), attempt.provider->name, protocol,
+                                          *usage);
+                rate_limit.settle_async(usage ? usage->sum() : std::optional<std::int64_t>{});
+                if (invalid) {
+                    co_await send_error(exchange, cat_request, protocol,
+                                        LlmError{.status_code = 502,
+                                                 .code = failure,
+                                                 .type = "server_error",
+                                                 .message = "Provider returned an invalid stateless response."});
+                } else {
+                    co_await send_body(exchange, cat_request, response->status_code, response->content_type,
+                                       response->body, response->request_id);
+                }
+                co_return;
+            }
             mem::BufPool usage_pool;
             auto usage = extract_token_usage(protocol, io_buf_view(response->body), false, usage_pool);
             audit.output(io_buf_view(response->body), false);
@@ -2712,9 +3048,8 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                         LlmError{
                                 .status_code = 503,
                                 .code = "provider_config_unavailable",
-                                .type = protocol == LlmWireProtocol::OpenAiChatCompletions
-                                                ? std::string_view("server_error")
-                                                : std::string_view("api_error"),
+                                .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
+                                                                             : std::string_view("api_error"),
                                 .message = "provider config is unavailable",
                                 .field = "model",
                         });

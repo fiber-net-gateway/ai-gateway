@@ -5,7 +5,7 @@ const protocolSchema = {
   properties: {
     type: {
       type: 'string',
-      enum: ['OPENAI_CHAT_COMPLETIONS', 'ANTHROPIC_MESSAGES'],
+      enum: ['OPENAI_CHAT_COMPLETIONS', 'ANTHROPIC_MESSAGES', 'OPENAI_RESPONSES'],
     },
     path: { type: 'string', minLength: 1, maxLength: 2_048 },
     upstreamModelName: { type: 'string', minLength: 1, maxLength: 512 },
@@ -65,7 +65,7 @@ export const providerSchema = {
   properties: {
     displayName: { type: 'string', minLength: 1, maxLength: 100 },
     baseUrl: { type: 'string', minLength: 1, maxLength: 2_048 },
-    protocols: { type: 'array', minItems: 1, maxItems: 2, items: protocolSchema },
+    protocols: { type: 'array', minItems: 1, maxItems: 3, items: protocolSchema },
     authentication: {
       type: 'object',
       additionalProperties: false,

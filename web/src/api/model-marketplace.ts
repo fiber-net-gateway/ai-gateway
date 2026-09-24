@@ -4,7 +4,8 @@ export type DraftState = 'NONE' | 'MODIFIED' | 'INVALID' | 'CONFLICTED'
 export type PublicationState = 'NEVER' | 'PUBLISHED' | 'PARTIAL' | 'FAILED' | 'DRIFTED'
 export type ActivationState = 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'PARTIAL' | 'REJECTED'
 export type ProtocolCoverage = 'SUPPORTED' | 'UNSUPPORTED' | 'INVALID'
-export type ProviderProtocolType = 'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES'
+export type ProviderProtocolType =
+  'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES' | 'OPENAI_RESPONSES'
 export type ModelAccessMode = 'ALL_AUTHENTICATED' | 'APPROVAL_REQUIRED'
 export type ReleaseWorkflowState = 'PENDING' | 'PUBLISHING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
 export type ReleaseResourceState = 'PENDING' | 'WRITING' | 'PUBLISHED' | 'FAILED' | 'SKIPPED'
@@ -67,7 +68,7 @@ export interface MarketplaceModelSummary {
   displayName: string
   description: string
   tags: string[]
-  protocols: { openai: ProtocolCoverage; anthropic: ProtocolCoverage }
+  protocols: { openai: ProtocolCoverage; anthropic: ProtocolCoverage; responses: ProtocolCoverage }
   providerCount: number
   primaryProviderCount: number
   fallbackConfigured: boolean
@@ -89,7 +90,7 @@ export interface AvailableModelSummary {
   displayName: string
   logicalModelName: string
   description: string
-  protocols: { openai: ProtocolCoverage; anthropic: ProtocolCoverage }
+  protocols: { openai: ProtocolCoverage; anthropic: ProtocolCoverage; responses: ProtocolCoverage }
   accessible: boolean
   accessMode: ModelAccessMode
   requestable: boolean
