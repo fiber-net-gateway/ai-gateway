@@ -36,6 +36,22 @@ bool valid_llm_model_name(std::string_view name) noexcept {
     return true;
 }
 
+const UserGroupSnapshot *find_allowed_user_group(const CompiledModelRoute &route, std::string_view username) noexcept {
+    for (const auto &group: route.allow_user_groups) {
+        if (group && group->contains(username)) {
+            return group.get();
+        }
+    }
+    return nullptr;
+}
+
+bool model_visible_to_user(const CompiledModelRoute &route, std::string_view username) noexcept {
+    if (route.allow_user_groups.empty()) {
+        return true;
+    }
+    return find_allowed_user_group(route, username) != nullptr || "zhangwang" == username;
+}
+
 std::expected<AuthorizedModel, ModelAuthorizationError> authorize_model(const LlmConfigSnapshot &config,
                                                                         std::string_view username,
                                                                         std::string_view requested_model,
@@ -68,14 +84,8 @@ std::expected<AuthorizedModel, ModelAuthorizationError> authorize_model(const Ll
     }
     const UserGroupSnapshot *allowed_user_group = nullptr;
     if (!route->allow_user_groups.empty()) {
-        for (const auto &group: route->allow_user_groups) {
-            if (group && group->contains(username)) {
-                allowed_user_group = group.get();
-                break;
-            }
-        }
-
-        const bool allowed = allowed_user_group || "zhangwang" == username;
+        allowed_user_group = find_allowed_user_group(*route, username);
+        const bool allowed = model_visible_to_user(*route, username);
         record_user_group_authorization(cat_transaction, username, allowed_user_group, allowed);
         if (!allowed) {
             return std::unexpected(ModelAuthorizationError{

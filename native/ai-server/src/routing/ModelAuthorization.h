@@ -32,6 +32,14 @@ struct AuthorizedModel {
 
 [[nodiscard]] bool valid_llm_model_name(std::string_view name) noexcept;
 
+// Shared visibility predicate: a model with no allow-user-groups is visible to every
+// authenticated user; otherwise the user must belong to one of the groups. Must stay in
+// lockstep with authorize_model so model listing and model calls agree on access.
+[[nodiscard]] const UserGroupSnapshot *find_allowed_user_group(const CompiledModelRoute &route,
+                                                               std::string_view username) noexcept;
+
+[[nodiscard]] bool model_visible_to_user(const CompiledModelRoute &route, std::string_view username) noexcept;
+
 [[nodiscard]] std::expected<AuthorizedModel, ModelAuthorizationError>
 authorize_model(const LlmConfigSnapshot &config, std::string_view username, std::string_view requested_model,
                 cat::Transaction *cat_transaction = nullptr) noexcept;

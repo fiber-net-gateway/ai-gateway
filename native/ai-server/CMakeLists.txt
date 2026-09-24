@@ -41,6 +41,7 @@ add_library(ai_server_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/src/server/HttpResponse.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/server/InitialConfigStartupGate.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/server/LlmRequestHandler.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/server/ModelListingHandler.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/server/TokenRateLimitHttpHandler.cpp")
 find_package(Threads REQUIRED)
 if (AI_SERVER_AUDIT_TRANSPORT STREQUAL "HTTP")
@@ -114,7 +115,8 @@ if (FIBER_BUILD_TESTS AND (GTest_FOUND OR TARGET GTest::gtest_main))
     gtest_discover_tests(fiber_ai_server_tests)
 
     add_executable(fiber_ai_server_http_tests
-        "${CMAKE_CURRENT_LIST_DIR}/tests/AiServerHttpTest.cpp")
+        "${CMAKE_CURRENT_LIST_DIR}/tests/AiServerHttpTest.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/tests/ModelListingTest.cpp")
     target_link_libraries(fiber_ai_server_http_tests PRIVATE ai_server_core GTest::gtest_main)
     set_target_properties(fiber_ai_server_http_tests PROPERTIES FOLDER "apps/ai-server")
     fiber_link_runtime_allocator(fiber_ai_server_http_tests)

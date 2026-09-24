@@ -3,6 +3,7 @@
 #include "observability/AiServerLogCategories.h"
 #include "server/HttpResponse.h"
 #include "server/LlmRequestHandler.h"
+#include "server/ModelListingHandler.h"
 #include "server/TokenRateLimitHttpHandler.h"
 
 #include <chrono>
@@ -32,6 +33,8 @@ constexpr std::string_view kOpenAiResponsesPath = "/v1/responses";
 constexpr std::string_view kOpenAiChatPath = "/v1/chat/completions";
 constexpr std::string_view kAnthropicMessagesPath = "/v1/messages";
 constexpr std::string_view kAnthropicMessageAliasPath = "/v1/message";
+constexpr std::string_view kModelsPath = "/v1/models";
+constexpr std::string_view kModelsPathPrefix = "/v1/models/";
 constexpr std::string_view kMetricsPath = "/metrics";
 constexpr std::string_view kMetricsAliasPath = "/_metric_prometheus";
 constexpr std::string_view kRateLimitCheckPath = "/internal/llm/rate-limit/check";
@@ -314,6 +317,13 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         metrics.request_finished(
                 protocol, exchange.response_stats(),
                 std::chrono::duration_cast<std::chrono::microseconds>(event::EventLoop::current().now() - started));
+        co_return;
+    }
+    if (path == kModelsPath || path.starts_with(kModelsPathPrefix)) {
+        WorkerState &worker = current_worker();
+        ModelListingHandler handler;
+        co_await handler.handle(exchange, worker.config, &cat_request,
+                                path == kModelsPath ? std::string_view{} : path.substr(kModelsPathPrefix.size()));
         co_return;
     }
     if (path.starts_with("/v1/responses/") || path == "/v1/conversations" || path.starts_with("/v1/conversations/")) {
