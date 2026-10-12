@@ -277,13 +277,11 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
 #if AI_SERVER_AUDIT_HTTP
         const LlmAuditDeliveryStats delivery_stats =
                 audit_http_sender_ ? audit_http_sender_->stats() : LlmAuditDeliveryStats{};
-        auto collected =
-                co_await metrics_.collect(event::EventLoop::current().io_buf_node_pool(), rate_limiters_.stats(),
-                                          ring ? ring->nodes.size() : 0, nullptr, &delivery_stats);
+        auto collected = co_await metrics_.collect(rate_limiters_.stats(), ring ? ring->nodes.size() : 0, nullptr,
+                                                   &delivery_stats);
 #else
         const log::AppenderStats audit_stats = log::LoggerManager::global().appender_stats(audit_appender_id_);
-        auto collected = co_await metrics_.collect(event::EventLoop::current().io_buf_node_pool(),
-                                                   rate_limiters_.stats(), ring ? ring->nodes.size() : 0, &audit_stats);
+        auto collected = co_await metrics_.collect(rate_limiters_.stats(), ring ? ring->nodes.size() : 0, &audit_stats);
 #endif
         if (!collected) {
             co_await send_json(exchange, cat_request, collected.error() == common::IoErr::Busy ? 503 : 500,

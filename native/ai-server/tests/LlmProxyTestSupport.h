@@ -669,8 +669,7 @@ public:
     fiber::async::DetachedTask
     collect_settlement_metrics(std::promise<fiber::common::IoResult<std::string>> *promise) noexcept {
         co_await coordinator_.shutdown();
-        auto collected = co_await metrics_.collect(fiber::event::EventLoop::current().io_buf_node_pool(),
-                                                   rate_limiters_.stats(), 1);
+        auto collected = co_await metrics_.collect(rate_limiters_.stats(), 1);
         if (!collected) {
             promise->set_value(std::unexpected(collected.error()));
         } else {

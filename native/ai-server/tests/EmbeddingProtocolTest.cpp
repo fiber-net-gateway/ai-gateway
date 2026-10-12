@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "LoopTestSupport.h"
 #include "protocol/EmbeddingObservation.h"
 #include "provider/ExecutionPlan.h"
 
@@ -22,33 +23,34 @@ std::string response(std::string_view data, std::string_view usage = R"({"prompt
 constexpr auto kVector = R"([{"object":"embedding","index":0,"embedding":[0.25,-1.0,3e-4]}])";
 
 TEST(EmbeddingProtocolTest, AcceptsAllInputShapesAndRewritesOnlyModel) {
-    for (auto input: {R"("hello")", R"(["hello","world"])", "[1,2,3]", "[[1,2],[3]]"}) {
-        fiber::mem::BufPool pool;
-        const auto original = std::string(R"({ "model":"logical","input":)") + input +
-                              R"(,"dimensions":3,"encoding_format":"base64","user":"u","extra":1.2300 })";
-        auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiEmbedding, buffer(original), pool);
-        ASSERT_TRUE(body) << input;
-        EXPECT_FALSE(body->routing().prompt_affinity.available);
-        EXPECT_FALSE(body->routing().stream.is_present());
-        EXPECT_EQ(body->routing().embedding.dimensions, 3);
-        EXPECT_TRUE(body->routing().embedding.base64);
-        const auto expected_count =
-                std::string_view(input).starts_with("[\"") || std::string_view(input).starts_with("[[") ? 2 : 1;
-        EXPECT_EQ(body->routing().embedding.input_count, expected_count);
-        fiber::mem::IoBufNodePool nodes;
-        for (auto model: {"first", "second"}) {
-            auto rewritten = body->rewrite(model, {}, nodes);
-            ASSERT_TRUE(rewritten);
-            std::vector<iovec> parts(rewritten->size());
-            const auto size = rewritten->fill_write_iov(parts.data(), static_cast<int>(parts.size()));
-            std::string actual;
-            for (int i = 0; i < size; ++i)
-                actual.append(static_cast<const char *>(parts[i].iov_base), parts[i].iov_len);
-            auto expected = original;
-            expected.replace(expected.find("logical"), 7, model);
-            EXPECT_EQ(actual, expected);
+    test::run_in_loop([&] {
+        for (auto input: {R"("hello")", R"(["hello","world"])", "[1,2,3]", "[[1,2],[3]]"}) {
+            fiber::mem::BufPool pool;
+            const auto original = std::string(R"({ "model":"logical","input":)") + input +
+                                  R"(,"dimensions":3,"encoding_format":"base64","user":"u","extra":1.2300 })";
+            auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiEmbedding, buffer(original), pool);
+            ASSERT_TRUE(body) << input;
+            EXPECT_FALSE(body->routing().prompt_affinity.available);
+            EXPECT_FALSE(body->routing().stream.is_present());
+            EXPECT_EQ(body->routing().embedding.dimensions, 3);
+            EXPECT_TRUE(body->routing().embedding.base64);
+            const auto expected_count =
+                    std::string_view(input).starts_with("[\"") || std::string_view(input).starts_with("[[") ? 2 : 1;
+            EXPECT_EQ(body->routing().embedding.input_count, expected_count);
+            for (auto model: {"first", "second"}) {
+                auto rewritten = body->rewrite(model, {});
+                ASSERT_TRUE(rewritten);
+                std::vector<iovec> parts(rewritten->size());
+                const auto size = rewritten->fill_write_iov(parts.data(), static_cast<int>(parts.size()));
+                std::string actual;
+                for (int i = 0; i < size; ++i)
+                    actual.append(static_cast<const char *>(parts[i].iov_base), parts[i].iov_len);
+                auto expected = original;
+                expected.replace(expected.find("logical"), 7, model);
+                EXPECT_EQ(actual, expected);
+            }
         }
-    }
+    });
 }
 TEST(EmbeddingProtocolTest, RejectsInvalidInputAndCriticalDuplicates) {
     for (auto input: {"null", "true", "{}", "[]", "\"\"", "[\"\"]", "[[]]", "[-1]", "[1.5]", "[1,\"a\"]", "[\"a\",[1]]",

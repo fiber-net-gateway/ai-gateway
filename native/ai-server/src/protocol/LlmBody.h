@@ -100,8 +100,8 @@ public:
     [[nodiscard]] std::size_t body_size() const noexcept { return raw_body_.readable(); }
     [[nodiscard]] const json::JsonArray<LlmBodyPatchSite> &patch_sites() const noexcept { return patch_sites_; }
 
-    [[nodiscard]] std::expected<mem::IoBufChain, LlmBodyError>
-    rewrite(std::string_view upstream_model, std::optional<bool> stream, mem::IoBufNodePool &node_pool) const noexcept;
+    [[nodiscard]] std::expected<mem::IoBufChain, LlmBodyError> rewrite(std::string_view upstream_model,
+                                                                       std::optional<bool> stream) const noexcept;
 
 private:
     ParsedLlmBody(mem::IoBuf body, LlmRoutingData routing, json::JsonArray<LlmBodyPatchSite> patch_sites,

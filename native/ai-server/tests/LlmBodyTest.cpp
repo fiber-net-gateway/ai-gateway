@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "LoopTestSupport.h"
 #include "protocol/LlmBody.h"
 
 namespace {
@@ -15,7 +16,8 @@ using fiber::ai_server::ParsedLlmBody;
 using fiber::mem::BufPool;
 using fiber::mem::IoBuf;
 using fiber::mem::IoBufChain;
-using fiber::mem::IoBufNodePool;
+
+namespace test = fiber::ai_server::test;
 
 IoBuf make_body(std::string_view text) {
     IoBuf body = IoBuf::allocate(text.size());
@@ -374,80 +376,85 @@ TEST(LlmBodyTest, RejectsInvalidBodyAndRoutingFieldTypes) {
 }
 
 TEST(LlmBodyTest, RewritesOnlyExistingFieldsAndPreservesOtherBytes) {
-    constexpr std::string_view input =
-            R"({ "unknown" : [1e+09, "\u0041"], "model" : "public", "stream" : false, "tail":null })";
-    BufPool pool;
-    IoBufNodePool nodes;
-    auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions, make_body(input), pool);
-    ASSERT_TRUE(body) << body.error().message;
+    test::run_in_loop([] {
+        constexpr std::string_view input =
+                R"({ "unknown" : [1e+09, "\u0041"], "model" : "public", "stream" : false, "tail":null })";
+        BufPool pool;
+        auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions, make_body(input), pool);
+        ASSERT_TRUE(body) << body.error().message;
 
-    auto rewritten = body->rewrite("upstream/\"model", true, nodes);
+        auto rewritten = body->rewrite("upstream/\"model", true);
 
-    ASSERT_TRUE(rewritten) << rewritten.error().message;
-    EXPECT_EQ(flatten(*rewritten),
-              R"({ "unknown" : [1e+09, "\u0041"], "model" : "upstream/\"model", "stream" : true, "tail":null })");
-    EXPECT_EQ(std::string_view(reinterpret_cast<const char *>(body->raw_body().readable_data()),
-                               body->raw_body().readable()),
-              input);
+        ASSERT_TRUE(rewritten) << rewritten.error().message;
+        EXPECT_EQ(flatten(*rewritten),
+                  R"({ "unknown" : [1e+09, "\u0041"], "model" : "upstream/\"model", "stream" : true, "tail":null })");
+        EXPECT_EQ(std::string_view(reinterpret_cast<const char *>(body->raw_body().readable_data()),
+                                   body->raw_body().readable()),
+                  input);
+    });
 }
 
 TEST(LlmBodyTest, MissingStreamRemainsAbsent) {
-    BufPool pool;
-    IoBufNodePool nodes;
-    auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions,
-                                     make_body(R"({"model":"public","temperature":0.25})"), pool);
-    ASSERT_TRUE(body) << body.error().message;
+    test::run_in_loop([] {
+        BufPool pool;
+        auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions,
+                                         make_body(R"({"model":"public","temperature":0.25})"), pool);
+        ASSERT_TRUE(body) << body.error().message;
 
-    auto rewritten = body->rewrite("provider-model", true, nodes);
+        auto rewritten = body->rewrite("provider-model", true);
 
-    ASSERT_TRUE(rewritten) << rewritten.error().message;
-    EXPECT_EQ(flatten(*rewritten), R"({"model":"provider-model","temperature":0.25})");
+        ASSERT_TRUE(rewritten) << rewritten.error().message;
+        EXPECT_EQ(flatten(*rewritten), R"({"model":"provider-model","temperature":0.25})");
+    });
 }
 
 TEST(LlmBodyTest, RewritesEveryDuplicateOccurrenceInInputOrder) {
-    BufPool pool;
-    IoBufNodePool nodes;
-    auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions,
-                                     make_body(R"({"model":"a","stream":false,"model":"b","stream":true})"), pool);
-    ASSERT_TRUE(body) << body.error().message;
+    test::run_in_loop([] {
+        BufPool pool;
+        auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions,
+                                         make_body(R"({"model":"a","stream":false,"model":"b","stream":true})"), pool);
+        ASSERT_TRUE(body) << body.error().message;
 
-    auto rewritten = body->rewrite("target", false, nodes);
+        auto rewritten = body->rewrite("target", false);
 
-    ASSERT_TRUE(rewritten) << rewritten.error().message;
-    EXPECT_EQ(flatten(*rewritten), R"({"model":"target","stream":false,"model":"target","stream":false})");
+        ASSERT_TRUE(rewritten) << rewritten.error().message;
+        EXPECT_EQ(flatten(*rewritten), R"({"model":"target","stream":false,"model":"target","stream":false})");
+    });
 }
 
 TEST(LlmBodyTest, CreatesIndependentBodiesForProviderAttempts) {
-    constexpr std::string_view input = R"({"model":"public","stream":true,"messages":[]})";
-    BufPool pool;
-    IoBufNodePool first_nodes;
-    IoBufNodePool second_nodes;
-    auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions, make_body(input), pool);
-    ASSERT_TRUE(body) << body.error().message;
+    test::run_in_loop([] {
+        constexpr std::string_view input = R"({"model":"public","stream":true,"messages":[]})";
+        BufPool pool;
+        auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions, make_body(input), pool);
+        ASSERT_TRUE(body) << body.error().message;
 
-    auto first = body->rewrite("provider-a", std::nullopt, first_nodes);
-    auto second = body->rewrite("provider-b", false, second_nodes);
+        auto first = body->rewrite("provider-a", std::nullopt);
+        auto second = body->rewrite("provider-b", false);
 
-    ASSERT_TRUE(first) << first.error().message;
-    ASSERT_TRUE(second) << second.error().message;
-    EXPECT_EQ(flatten(*first), R"({"model":"provider-a","stream":true,"messages":[]})");
-    EXPECT_EQ(flatten(*second), R"({"model":"provider-b","stream":false,"messages":[]})");
-    EXPECT_EQ(std::string_view(reinterpret_cast<const char *>(body->raw_body().readable_data()),
-                               body->raw_body().readable()),
-              input);
+        ASSERT_TRUE(first) << first.error().message;
+        ASSERT_TRUE(second) << second.error().message;
+        EXPECT_EQ(flatten(*first), R"({"model":"provider-a","stream":true,"messages":[]})");
+        EXPECT_EQ(flatten(*second), R"({"model":"provider-b","stream":false,"messages":[]})");
+        EXPECT_EQ(std::string_view(reinterpret_cast<const char *>(body->raw_body().readable_data()),
+                                   body->raw_body().readable()),
+                  input);
+    });
 }
 
 TEST(LlmBodyTest, RejectsInvalidUtf8Replacement) {
-    BufPool pool;
-    IoBufNodePool nodes;
-    auto body = ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions, make_body(R"({"model":"public"})"), pool);
-    ASSERT_TRUE(body) << body.error().message;
-    constexpr char invalid[] = {'x', static_cast<char>(0x80)};
+    test::run_in_loop([] {
+        BufPool pool;
+        auto body =
+                ParsedLlmBody::parse(LlmWireProtocol::OpenAiChatCompletions, make_body(R"({"model":"public"})"), pool);
+        ASSERT_TRUE(body) << body.error().message;
+        constexpr char invalid[] = {'x', static_cast<char>(0x80)};
 
-    auto rewritten = body->rewrite(std::string_view(invalid, sizeof(invalid)), std::nullopt, nodes);
+        auto rewritten = body->rewrite(std::string_view(invalid, sizeof(invalid)), std::nullopt);
 
-    ASSERT_FALSE(rewritten);
-    EXPECT_EQ(rewritten.error().code, LlmBodyErrorCode::InvalidReplacement);
+        ASSERT_FALSE(rewritten);
+        EXPECT_EQ(rewritten.error().code, LlmBodyErrorCode::InvalidReplacement);
+    });
 }
 
 } // namespace

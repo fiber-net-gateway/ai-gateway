@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
+#include "LoopTestSupport.h"
 #include "config/LlmConfigCodec.h"
 #include "protocol/LlmBody.h"
 #include "protocol/ResponsesObservation.h"
@@ -25,28 +26,29 @@ std::string flatten(const fiber::mem::IoBufChain &chain) {
     return value;
 }
 TEST(ResponsesProtocolTest, RewritesEveryStateFieldAndRetriesFromOriginalSlices) {
-    fiber::mem::BufPool pool;
-    auto body = ParsedLlmBody::parse(
-            LlmWireProtocol::OpenAiResponses,
-            buffer(R"({ "model":"logical","input":[{"type":"function_call_output","call_id":"call_1","output":"tool-secret"}],"store":true,"st\u006fre":null,"background":true,"previous_response_id":{"anything":1},"conversation":"conv_1","stream":null,"unknown":1.2300 })"),
-            pool);
-    ASSERT_TRUE(body);
-    EXPECT_TRUE(body->responses_policy().store_was_true);
-    EXPECT_TRUE(body->responses_policy().conversation_removed);
-    fiber::mem::IoBufNodePool nodes;
-    for (auto model: {"first", "second"}) {
-        auto rewritten = body->rewrite(model, false, nodes);
-        ASSERT_TRUE(rewritten);
-        auto text = flatten(*rewritten);
-        EXPECT_EQ(text.find("previous_response_id"), std::string::npos);
-        EXPECT_EQ(text.find("conversation"), std::string::npos);
-        EXPECT_EQ(text.find("st\\u006fre"), std::string::npos);
-        EXPECT_NE(text.find(R"("store":false,"background":false)"), std::string::npos);
-        EXPECT_NE(text.find(R"("call_id":"call_1","output":"tool-secret")"), std::string::npos);
-        EXPECT_NE(text.find(R"("unknown":1.2300)"), std::string::npos);
-        EXPECT_NE(text.find(std::string("\"model\":\"") + model + "\""), std::string::npos);
-    }
-    EXPECT_FALSE(body->rewrite(std::string(513, 'x'), false, nodes));
+    test::run_in_loop([&] {
+        fiber::mem::BufPool pool;
+        auto body = ParsedLlmBody::parse(
+                LlmWireProtocol::OpenAiResponses,
+                buffer(R"({ "model":"logical","input":[{"type":"function_call_output","call_id":"call_1","output":"tool-secret"}],"store":true,"st\u006fre":null,"background":true,"previous_response_id":{"anything":1},"conversation":"conv_1","stream":null,"unknown":1.2300 })"),
+                pool);
+        ASSERT_TRUE(body);
+        EXPECT_TRUE(body->responses_policy().store_was_true);
+        EXPECT_TRUE(body->responses_policy().conversation_removed);
+        for (auto model: {"first", "second"}) {
+            auto rewritten = body->rewrite(model, false);
+            ASSERT_TRUE(rewritten);
+            auto text = flatten(*rewritten);
+            EXPECT_EQ(text.find("previous_response_id"), std::string::npos);
+            EXPECT_EQ(text.find("conversation"), std::string::npos);
+            EXPECT_EQ(text.find("st\\u006fre"), std::string::npos);
+            EXPECT_NE(text.find(R"("store":false,"background":false)"), std::string::npos);
+            EXPECT_NE(text.find(R"("call_id":"call_1","output":"tool-secret")"), std::string::npos);
+            EXPECT_NE(text.find(R"("unknown":1.2300)"), std::string::npos);
+            EXPECT_NE(text.find(std::string("\"model\":\"") + model + "\""), std::string::npos);
+        }
+        EXPECT_FALSE(body->rewrite(std::string(513, 'x'), false));
+    });
 }
 TEST(ResponsesProtocolTest, RejectsAmbiguousOrStateOnlyRequests) {
     for (std::string_view text:

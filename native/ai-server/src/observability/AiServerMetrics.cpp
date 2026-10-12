@@ -803,12 +803,12 @@ void AiServerMetrics::set_config_generation(std::uint64_t generation) noexcept {
 }
 
 async::Task<common::IoResult<mem::IoBufChain>>
-AiServerMetrics::collect(mem::IoBufNodePool &node_pool, TokenRateLimiterStats limiter_stats, std::size_t cluster_nodes,
+AiServerMetrics::collect(TokenRateLimiterStats limiter_stats, std::size_t cluster_nodes,
                          const log::AppenderStats *audit_stats,
                          const LlmAuditDeliveryStats *audit_delivery_stats) noexcept {
-    auto collected = co_await registry_.collect_text(node_pool, prometheus::CollectOptions{
-                                                                        .max_output_bytes = kMaxMetricsOutputBytes,
-                                                                });
+    auto collected = co_await registry_.collect_text(prometheus::CollectOptions{
+            .max_output_bytes = kMaxMetricsOutputBytes,
+    });
     if (!collected) {
         co_return std::unexpected(collected.error());
     }
