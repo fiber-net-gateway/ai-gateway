@@ -77,8 +77,7 @@ bool append_buffer(mem::IoBufChain &output, mem::IoBuf buffer) noexcept {
 } // namespace
 
 std::expected<mem::IoBufChain, LlmBodyError> ParsedLlmBody::rewrite(std::string_view upstream_model,
-                                                                    std::optional<bool> stream,
-                                                                    mem::IoBufNodePool &node_pool) const noexcept {
+                                                                    std::optional<bool> stream) const noexcept {
     if (!raw_body_) {
         return std::unexpected(LlmBodyError{
                 .code = LlmBodyErrorCode::InvalidPatch,
@@ -103,7 +102,7 @@ std::expected<mem::IoBufChain, LlmBodyError> ParsedLlmBody::rewrite(std::string_
         encoded_stream.emplace(std::move(*value));
     }
 
-    mem::IoBufChain output(node_pool);
+    mem::IoBufChain output;
     if (protocol_ == LlmWireProtocol::OpenAiResponses) {
         constexpr std::string_view syntax = "{,\"store\":false,\"background\":false}";
         auto punctuation = mem::IoBuf::allocate(syntax.size());

@@ -47,7 +47,7 @@ wait_for_initial_config(async::Task<bool> worker_install,
                         std::chrono::milliseconds timeout) noexcept {
     auto install_or_rejection = wait_for_install_or_rejection(std::move(worker_install), std::move(initial_rejection));
     if (timeout <= std::chrono::milliseconds::zero()) {
-        co_return co_await install_or_rejection;
+        co_return co_await std::move(install_or_rejection);
     }
 
     auto result =

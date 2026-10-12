@@ -2019,7 +2019,7 @@ async::Task<bool> finish_sse_with_error(http::HttpExchange &exchange, LlmWirePro
     }
     std::memcpy(body.writable_data(), storage.data(), static_cast<std::size_t>(length));
     body.commit(static_cast<std::size_t>(length));
-    mem::IoBufChain chain(event::EventLoop::current().io_buf_node_pool());
+    mem::IoBufChain chain;
     if (!chain.append(std::move(body))) {
         co_return false;
     }
@@ -2106,7 +2106,7 @@ async::Task<SseRelayResult> relay_sse(http::HttpExchange &exchange, ProviderHttp
         }
         const bool complete = chunk->complete();
         const std::size_t expected_bytes = chunk->readable_bytes();
-        mem::IoBufChain relay_chunk(chunk->node_pool());
+        mem::IoBufChain relay_chunk;
         while (mem::IoBufNode *node = chunk->pop_front_node()) {
             const bool appended = relay_chunk.append_node(node);
             FIBER_ASSERT(appended);
@@ -2218,7 +2218,7 @@ async::Task<bool> finish_responses_error(http::HttpExchange &exchange, const Res
         co_return false;
     std::memcpy(body.writable_data(), text.data(), static_cast<std::size_t>(size));
     body.commit(static_cast<std::size_t>(size));
-    mem::IoBufChain chain(event::EventLoop::current().io_buf_node_pool());
+    mem::IoBufChain chain;
     if (!chain.append(std::move(body)))
         co_return false;
     chain.mark_complete();
@@ -2299,7 +2299,7 @@ async::Task<SseRelayResult> relay_responses(http::HttpExchange &exchange, Provid
         observe_closed();
         const bool complete = chunk->complete();
         const std::size_t expected_bytes = chunk->readable_bytes();
-        mem::IoBufChain relay_chunk(event::EventLoop::current().io_buf_node_pool());
+        mem::IoBufChain relay_chunk;
         while (auto *node = chunk->pop_front_node()) {
             const bool appended = relay_chunk.append_node(node);
             FIBER_ASSERT(appended);
@@ -2575,8 +2575,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
         const ProviderServiceSelection service_selection = service_instances.selection(attempt);
         auto rewritten =
                 parsed->rewrite(attempt.protocol->model,
-                                routing.stream.is_present() ? std::optional<bool>(*routing.stream) : std::nullopt,
-                                event::EventLoop::current().io_buf_node_pool());
+                                routing.stream.is_present() ? std::optional<bool>(*routing.stream) : std::nullopt);
         if (!rewritten) {
             co_await send_error(
                     exchange, cat_request, protocol,
@@ -2784,7 +2783,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                                          : responses_terminal_error(observed.terminal);
                 auto result = observed.failure == "upstream_missing_terminal_event" ? ResponsesResult::Interrupted
                               : !observed.failure.empty()                           ? ResponsesResult::InvalidResponse
-                              : !relay_result.upstream_complete                     ? ResponsesResult::Interrupted
+                              : !relay_result.upstream_complete ? ResponsesResult::Interrupted
                                                                 : responses_result(observed.terminal);
                 if (relay_result.downstream_delivery_failed)
                     result = ResponsesResult::Aborted;

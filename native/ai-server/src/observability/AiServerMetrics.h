@@ -145,7 +145,7 @@ public:
 
     void set_config_generation(std::uint64_t generation) noexcept;
     [[nodiscard]] async::Task<common::IoResult<mem::IoBufChain>>
-    collect(mem::IoBufNodePool &node_pool, TokenRateLimiterStats limiter_stats, std::size_t cluster_nodes,
+    collect(TokenRateLimiterStats limiter_stats, std::size_t cluster_nodes,
             const log::AppenderStats *audit_stats = nullptr,
             const LlmAuditDeliveryStats *audit_delivery_stats = nullptr) noexcept;
 

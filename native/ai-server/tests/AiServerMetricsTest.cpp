@@ -132,12 +132,12 @@ fiber::async::DetachedTask collect_metrics(AiServerMetrics *metrics,
             .retention_errors = 6,
             .active_file_bytes = 2048,
     };
-    auto collected = co_await metrics->collect(fiber::event::EventLoop::current().io_buf_node_pool(),
-                                               fiber::ai_server::TokenRateLimiterStats{
-                                                       .limiter_count = 3,
-                                                       .in_flight_count = 1,
-                                               },
-                                               2, &audit_stats);
+    auto collected = co_await metrics->collect(
+            fiber::ai_server::TokenRateLimiterStats{
+                    .limiter_count = 3,
+                    .in_flight_count = 1,
+            },
+            2, &audit_stats);
     if (!collected) {
         done->set_value(std::unexpected(collected.error()));
     } else {
