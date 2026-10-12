@@ -21,6 +21,7 @@ enum class ExecutionPlanErrorCode : std::uint8_t {
     ProviderTokenUnavailable,
     ProviderProtocolUnsupported,
     OutOfMemory,
+    IncompatibleEmbeddingModels,
 };
 
 struct ExecutionPlanError {

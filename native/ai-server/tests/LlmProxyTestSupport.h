@@ -12,6 +12,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -426,7 +427,8 @@ RawHttpResponse post_json(std::uint16_t port, std::string_view token, std::strin
 }
 
 int open_json_request(std::uint16_t port, std::string_view token, std::string_view body,
-                      std::string_view target = "/v1/chat/completions") {
+                      std::string_view target = "/v1/chat/completions",
+                      std::optional<std::size_t> declared_content_length = {}) {
     const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         return -1;
@@ -453,7 +455,7 @@ int open_json_request(std::uint16_t port, std::string_view token, std::string_vi
                           "Content-Type: application/json\r\nAuthorization: Bearer ";
     request.append(token);
     request.append("\r\nContent-Length: ");
-    request.append(std::to_string(body.size()));
+    request.append(std::to_string(declared_content_length.value_or(body.size())));
     request.append("\r\n\r\n");
     request.append(body);
     std::size_t sent = 0;
@@ -711,6 +713,8 @@ public:
         return provider_pause_reached_.load(std::memory_order_acquire);
     }
     void release_provider() noexcept { provider_pause_released_.store(true, std::memory_order_release); }
+
+    void stop_entry() noexcept { entry_server_.stop(); }
     [[nodiscard]] std::string_view rendezvous_route_key() const noexcept { return rendezvous_route_key_; }
 
 private:
@@ -844,6 +848,9 @@ private:
                 .model = "upstream-anthropic-primary",
         });
 
+        primary_config->protocols.push_back(ProviderProtocol{.type = ProviderProtocolType::OpenAiEmbedding,
+                                                             .path = "/provider/embeddings",
+                                                             .model = "upstream-embedding"});
         primary_config->protocols.push_back(ProviderProtocol{.type = ProviderProtocolType::OpenAiResponses,
                                                              .path = "/provider/responses",
                                                              .model = "upstream-responses-primary"});
@@ -865,6 +872,9 @@ private:
                 .model = "upstream-anthropic-fallback",
         });
 
+        fallback_config->protocols.push_back(ProviderProtocol{.type = ProviderProtocolType::OpenAiEmbedding,
+                                                              .path = "/provider/embeddings",
+                                                              .model = "upstream-embedding"});
         fallback_config->protocols.push_back(ProviderProtocol{.type = ProviderProtocolType::OpenAiResponses,
                                                               .path = "/provider/responses",
                                                               .model = "upstream-responses-fallback"});
@@ -1080,7 +1090,8 @@ private:
             co_return;
         }
         entry_calls_.fetch_add(1, std::memory_order_release);
-        const LlmWireProtocol protocol = exchange.uri().path == "/v1/responses" ? LlmWireProtocol::OpenAiResponses
+        const LlmWireProtocol protocol = exchange.uri().path == "/v1/embeddings"  ? LlmWireProtocol::OpenAiEmbedding
+                                         : exchange.uri().path == "/v1/responses" ? LlmWireProtocol::OpenAiResponses
                                          : exchange.uri().path == "/v1/chat/completions"
                                                  ? LlmWireProtocol::OpenAiChatCompletions
                                                  : LlmWireProtocol::AnthropicMessages;
@@ -1286,6 +1297,17 @@ public:
     }
 
     void release_provider() noexcept { fixture_->release_provider(); }
+
+    [[nodiscard]] bool stop_entry() {
+        auto promise = std::make_shared<std::promise<void>>();
+        auto future = promise->get_future();
+        fiber::async::spawn(group_.at(0), [this, promise]() -> fiber::async::DetachedTask {
+            fixture_->stop_entry();
+            promise->set_value();
+            co_return;
+        });
+        return future.wait_for(5s) == std::future_status::ready;
+    }
 
     [[nodiscard]] bool wait_for_completed_entry_calls(int count) const noexcept {
         for (std::size_t i = 0; i < 5000; ++i) {

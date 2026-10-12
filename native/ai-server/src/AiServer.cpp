@@ -29,6 +29,7 @@ DEFINE_LOGGER(LOG_HTTP, kAiServerHttpLogger);
 constexpr std::string_view kHealthPath = "/health";
 constexpr std::string_view kHealthBody = "{\"status\":\"ok\"}\n";
 constexpr std::string_view kReadyPath = "/ready";
+constexpr std::string_view kOpenAiEmbeddingPath = "/v1/embeddings";
 constexpr std::string_view kOpenAiResponsesPath = "/v1/responses";
 constexpr std::string_view kOpenAiChatPath = "/v1/chat/completions";
 constexpr std::string_view kAnthropicMessagesPath = "/v1/messages";
@@ -297,12 +298,13 @@ async::Task<void> AiServer::handle(http::HttpExchange &exchange) {
         (void) co_await send_fixed_response(exchange, headers, 200, std::move(*collected));
         co_return;
     }
-    if (path == kOpenAiResponsesPath || path == kOpenAiChatPath || path == kAnthropicMessagesPath ||
-        path == kAnthropicMessageAliasPath) {
+    if (path == kOpenAiEmbeddingPath || path == kOpenAiResponsesPath || path == kOpenAiChatPath ||
+        path == kAnthropicMessagesPath || path == kAnthropicMessageAliasPath) {
         WorkerState &worker = current_worker();
-        const LlmWireProtocol protocol = path == kOpenAiResponsesPath ? LlmWireProtocol::OpenAiResponses
-                                         : path == kOpenAiChatPath    ? LlmWireProtocol::OpenAiChatCompletions
-                                                                      : LlmWireProtocol::AnthropicMessages;
+        const LlmWireProtocol protocol = path == kOpenAiEmbeddingPath   ? LlmWireProtocol::OpenAiEmbedding
+                                         : path == kOpenAiResponsesPath ? LlmWireProtocol::OpenAiResponses
+                                         : path == kOpenAiChatPath      ? LlmWireProtocol::OpenAiChatCompletions
+                                                                        : LlmWireProtocol::AnthropicMessages;
         AiServerMetrics::Worker &metrics = metrics_.worker(event::EventLoop::current().group_index());
         metrics.request_started(protocol);
         const auto started = event::EventLoop::current().now();

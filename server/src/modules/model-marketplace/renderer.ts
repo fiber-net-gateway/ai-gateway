@@ -10,12 +10,14 @@ const protocolOrder = {
   OPENAI_CHAT_COMPLETIONS: 0,
   ANTHROPIC_MESSAGES: 1,
   OPENAI_RESPONSES: 2,
+  OPENAI_EMBEDDING: 3,
 } as const
 
 const protocolType = {
   OPENAI_CHAT_COMPLETIONS: 'openai-chat-completions',
   ANTHROPIC_MESSAGES: 'anthropic-messages',
   OPENAI_RESPONSES: 'openai-responses',
+  OPENAI_EMBEDDING: 'openai-embedding',
 } as const
 
 function stringifyConfig(value: unknown): string {

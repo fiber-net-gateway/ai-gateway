@@ -179,7 +179,7 @@ export function registerModelMarketplaceRoutes(
             view: { type: 'string', enum: ['available', 'admin'] },
             draftId: { type: 'string', format: 'uuid' },
             search: { type: 'string', maxLength: 100 },
-            protocol: { type: 'string', enum: ['openai', 'anthropic', 'responses'] },
+            protocol: { type: 'string', enum: ['openai', 'anthropic', 'responses', 'embedding'] },
             access: { type: 'string', enum: ['accessible'] },
             cursor: { type: 'string', maxLength: 1_024 },
             limit: { type: 'integer', minimum: 1, maximum: 100 },

@@ -179,6 +179,8 @@ private:
     }
 
     [[nodiscard]] bool parse_root() noexcept {
+        if (protocol_ == LlmWireProtocol::OpenAiEmbedding)
+            return parse_embedding_root();
         if (protocol_ == LlmWireProtocol::OpenAiResponses) {
             return parse_responses_root();
         }
@@ -261,6 +263,118 @@ private:
                 return false;
             }
         }
+        return true;
+    }
+
+    [[nodiscard]] bool embedding_input_error() noexcept {
+        return set_error(LlmBodyErrorCode::InvalidFieldType, "input", "expected nonempty homogeneous embedding input");
+    }
+
+    [[nodiscard]] bool parse_embedding_tokens() noexcept {
+        if (!advance("expected token ID"))
+            return false;
+        std::size_t count = 0;
+        while (current().kind != TokenKind::EndArr) {
+            if (current().kind != TokenKind::Integer || current().inum < 0)
+                return embedding_input_error();
+            ++count;
+            if (!advance("expected token ID"))
+                return false;
+        }
+        return count != 0 || embedding_input_error();
+    }
+
+    [[nodiscard]] bool parse_embedding_input() noexcept {
+        if (current().kind == TokenKind::Text) {
+            routing_.embedding.input_count = 1;
+            return !current().view.empty() || embedding_input_error();
+        }
+        if (current().kind != TokenKind::StartArr || !advance("expected embedding input"))
+            return embedding_input_error();
+        const auto kind = current().kind;
+        if (kind != TokenKind::Text && kind != TokenKind::Integer && kind != TokenKind::StartArr)
+            return embedding_input_error();
+        std::size_t count = 0;
+        while (current().kind != TokenKind::EndArr) {
+            if (current().kind != kind)
+                return embedding_input_error();
+            if (kind == TokenKind::Text && current().view.empty())
+                return embedding_input_error();
+            if (kind == TokenKind::Integer && current().inum < 0)
+                return embedding_input_error();
+            if (kind == TokenKind::StartArr && !parse_embedding_tokens())
+                return false;
+            if (++count > EmbeddingRequestInfo::kMaxInputs && kind != TokenKind::Integer)
+                return embedding_input_error();
+            if (!advance("expected embedding input"))
+                return false;
+        }
+        routing_.embedding.input_count = kind == TokenKind::Integer ? 1 : count;
+        return true;
+    }
+
+    [[nodiscard]] bool parse_embedding_root() noexcept {
+        constexpr std::string_view fields[] = {"model", "input", "dimensions", "encoding_format", "user", "stream"};
+        std::uint32_t seen = 0;
+        std::size_t count = 0;
+        if (!advance("expected object member"))
+            return false;
+        while (current().kind != TokenKind::EndObj) {
+            if (++count > 4096)
+                return set_error(LlmBodyErrorCode::TooManyFields, {}, "too many request fields");
+            std::size_t field = std::size(fields);
+            for (std::size_t i = 0; i < std::size(fields); ++i) {
+                if (current().view == fields[i]) {
+                    field = i;
+                    break;
+                }
+            }
+            if (field < std::size(fields)) {
+                if (seen & (1U << field))
+                    return set_error(LlmBodyErrorCode::DuplicateField, fields[field], "duplicate request field");
+                seen |= 1U << field;
+            }
+            if (!advance("expected member value"))
+                return false;
+            switch (field) {
+                case 0:
+                    if (current().kind != TokenKind::Text || current().view.empty() || current().view.size() > 512)
+                        return set_error(LlmBodyErrorCode::InvalidFieldType, "model", "expected nonempty model");
+                    if (!parse_model())
+                        return false;
+                    break;
+                case 1:
+                    if (!parse_embedding_input())
+                        return false;
+                    break;
+                case 2:
+                    if (current().kind != TokenKind::Integer || current().inum <= 0)
+                        return set_error(LlmBodyErrorCode::InvalidFieldType, "dimensions", "expected positive integer");
+                    routing_.embedding.dimensions = current().inum;
+                    break;
+                case 3:
+                    if (current().kind != TokenKind::Text || (current().view != "float" && current().view != "base64"))
+                        return set_error(LlmBodyErrorCode::InvalidFieldType, "encoding_format",
+                                         "expected float or base64");
+                    routing_.embedding.base64 = current().view == "base64";
+                    break;
+                case 4:
+                    if (current().kind != TokenKind::Text)
+                        return set_error(LlmBodyErrorCode::InvalidFieldType, "user", "expected string");
+                    break;
+                case 5:
+                    return set_error(LlmBodyErrorCode::InvalidFieldType, "stream", "embeddings do not support stream");
+                default:
+                    if (!skip_value())
+                        return false;
+            }
+            if (!advance("expected object member"))
+                return false;
+        }
+        if (!(seen & 1U))
+            return set_error(LlmBodyErrorCode::InvalidFieldType, "model", "model is required");
+        if (!(seen & 2U))
+            return set_error(LlmBodyErrorCode::InvalidFieldType, "input", "input is required");
         return true;
     }
 
@@ -638,6 +752,8 @@ private:
             }
             if (current().kind == TokenKind::StartObj || current().kind == TokenKind::StartArr) {
                 ++depth;
+                if (protocol_ == LlmWireProtocol::OpenAiEmbedding && depth > 64)
+                    return set_error(LlmBodyErrorCode::InvalidFieldType, {}, "request nesting exceeds limit");
             } else if (current().kind == TokenKind::EndObj || current().kind == TokenKind::EndArr) {
                 --depth;
             }
@@ -1113,6 +1229,8 @@ private:
     }
 
     [[nodiscard]] bool finish_affinity() noexcept {
+        if (protocol_ == LlmWireProtocol::OpenAiEmbedding)
+            return true;
         if (protocol_ == LlmWireProtocol::OpenAiResponses) {
             return combine_candidate(PromptRouteKeySource::ResponsesSemanticAnchor, &affinity_.tools, &affinity_.system,
                                      &affinity_.openai_messages, routing_.prompt_affinity) ||

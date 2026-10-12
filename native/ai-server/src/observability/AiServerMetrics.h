@@ -84,6 +84,7 @@ public:
         void rate_limit_settle(RateLimitSettleMetric result) noexcept;
         void sse_failure(LlmWireProtocol protocol) noexcept;
         void sse_drain(LlmWireProtocol protocol, SseDrainMetric result) noexcept;
+        void embedding_usage(bool known) noexcept { embedding_usage_[known ? 0 : 1].inc(); }
         void responses_result(ResponsesResult result) noexcept {
             responses_results_[static_cast<std::size_t>(result)].inc();
         }
@@ -130,6 +131,7 @@ public:
                 sse_drains_;
         std::array<prometheus::CounterRef, static_cast<std::size_t>(ResponsesResult::Count)> responses_results_;
         std::array<prometheus::CounterRef, 4> responses_rewrites_;
+        std::array<prometheus::CounterRef, 2> embedding_usage_;
         prometheus::CounterRef audit_generated_;
         prometheus::CounterRef audit_generation_failures_;
         prometheus::CounterRef audit_capture_incomplete_;

@@ -16,7 +16,7 @@ interface ProviderSummary {
 }
 
 interface ProviderProtocol {
-  type: 'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES' | 'OPENAI_RESPONSES'
+  type: 'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES' | 'OPENAI_RESPONSES' | 'OPENAI_EMBEDDING'
   path: string
   upstreamModelName: string
 }

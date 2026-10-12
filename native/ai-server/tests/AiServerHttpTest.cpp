@@ -295,5 +295,13 @@ TEST(AiServerHttpTest, ResponsesRouteUsesOpenAiEnvelopeAndRejectsHistoricalResou
     }
 }
 
+TEST(AiServerHttpTest, EmbeddingRouteUsesOpenAiAuthenticationEnvelope) {
+    AiServerHttpHarness server;
+    ASSERT_NE(server.port(), 0);
+    const auto response = request(server.port(), "POST", "/v1/embeddings");
+    EXPECT_EQ(response.status, 401);
+    EXPECT_NE(response.body.find("\"error\""), std::string::npos);
+}
+
 } // namespace
 } // namespace fiber::ai_server

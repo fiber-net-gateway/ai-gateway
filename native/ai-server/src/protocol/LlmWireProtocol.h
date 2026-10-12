@@ -13,6 +13,7 @@ enum class LlmWireProtocol : std::uint8_t {
     OpenAiChatCompletions = 0,
     AnthropicMessages = 1,
     OpenAiResponses = 2,
+    OpenAiEmbedding = 3,
     Count,
 };
 
@@ -20,6 +21,7 @@ constexpr bool uses_openai_error_envelope(LlmWireProtocol protocol) noexcept {
     switch (protocol) {
         case LlmWireProtocol::OpenAiChatCompletions:
         case LlmWireProtocol::OpenAiResponses:
+        case LlmWireProtocol::OpenAiEmbedding:
             return true;
         case LlmWireProtocol::AnthropicMessages:
             return false;
@@ -37,6 +39,8 @@ constexpr std::string_view llm_protocol_name(LlmWireProtocol protocol) noexcept 
             return "anthropic";
         case LlmWireProtocol::OpenAiResponses:
             return "openai-responses";
+        case LlmWireProtocol::OpenAiEmbedding:
+            return "openai-embedding";
         case LlmWireProtocol::Count:
             std::unreachable();
     }

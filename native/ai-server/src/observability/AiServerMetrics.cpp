@@ -24,7 +24,7 @@ namespace {
 
 constexpr std::size_t kMaxMetricsOutputBytes = 16 * 1024 * 1024;
 constexpr std::array<std::string_view, static_cast<std::size_t>(LlmWireProtocol::Count)> kProtocolNames{
-        "openai", "anthropic", "openai-responses"};
+        "openai", "anthropic", "openai-responses", "openai-embedding"};
 constexpr std::array<std::string_view, 3> kTokenTypes{"in_cache", "in_nocache", "out"};
 constexpr std::array<std::string_view, static_cast<std::size_t>(PromptRouteKeySource::Count)> kRouteKeySources{
         "openai_prompt_cache_key",         "openai_semantic_anchor",           "anthropic_metadata_user_id",
@@ -533,6 +533,19 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
             return false;
         response_field_series[i] = *id;
     }
+    auto embedding_usage = registry_.register_counter("ai_server_embedding_usage_total",
+                                                      "Embedding responses with known or unknown usage.", kResultLabel);
+    if (!embedding_usage)
+        return false;
+    std::array<prometheus::SeriesId, 2> embedding_usage_series;
+    constexpr std::array<std::string_view, 2> embedding_usage_results{"known", "unknown"};
+    for (std::size_t i = 0; i < embedding_usage_results.size(); ++i) {
+        auto id = registry_.register_series(*embedding_usage,
+                                            std::array<std::string_view, 1>{embedding_usage_results[i]});
+        if (!id)
+            return false;
+        embedding_usage_series[i] = *id;
+    }
     auto audit_generated =
             registry_.register_counter("ai_server_audit_generated_records_total", "LLM audit records generated.");
     auto audit_generation_failures = registry_.register_counter("ai_server_audit_generation_failures_total",
@@ -672,6 +685,12 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
         }
         Worker &worker = workers_[worker_index];
         worker.owner_ = this;
+        for (std::size_t i = 0; i < embedding_usage_series.size(); ++i) {
+            auto value = shard->counter(embedding_usage_series[i]);
+            if (!value)
+                return false;
+            worker.embedding_usage_[i] = *value;
+        }
         for (std::size_t i = 0; i < response_results.size(); ++i) {
             auto value = shard->counter(response_result_series[i]);
             if (!value)

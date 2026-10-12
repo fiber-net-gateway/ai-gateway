@@ -40,6 +40,8 @@ ProviderProtocolType provider_protocol_type(LlmWireProtocol protocol) noexcept {
             return ProviderProtocolType::AnthropicMessages;
         case LlmWireProtocol::OpenAiResponses:
             return ProviderProtocolType::OpenAiResponses;
+        case LlmWireProtocol::OpenAiEmbedding:
+            return ProviderProtocolType::OpenAiEmbedding;
         case LlmWireProtocol::Count:
             std::unreachable();
     }
@@ -206,6 +208,28 @@ resolve_execution_plan(const AuthorizedModel &model, LlmWireProtocol protocol, P
         });
     }
     const ProviderProtocolType provider_protocol = provider_protocol_type(protocol);
+    if (protocol == LlmWireProtocol::OpenAiEmbedding) {
+        std::string_view upstream_model;
+        const auto compatible = [&](const std::shared_ptr<const ProjectProvider> &provider) noexcept {
+            if (!provider || !provider->config)
+                return true;
+            const auto *mapping = provider->config->find_protocol(provider_protocol);
+            if (!mapping)
+                return true;
+            if (upstream_model.empty())
+                upstream_model = mapping->model;
+            return mapping->model == upstream_model;
+        };
+        bool valid = true;
+        for (const auto &provider: model.route->providers)
+            valid = compatible(provider) && valid;
+        if (model.route->load_balance.fallback_enabled)
+            valid = compatible(model.route->fallback_provider) && valid;
+        if (!valid)
+            return std::unexpected(
+                    ExecutionPlanError{.code = ExecutionPlanErrorCode::IncompatibleEmbeddingModels,
+                                       .message = "embedding candidates must use the same upstream model"});
+    }
     CandidateGroup primary =
             build_candidates(model.route->providers, provider_protocol, route_key, runtime_registry, now, pool);
     std::array<std::shared_ptr<const ProjectProvider>, 1> fallback_source;

@@ -170,6 +170,7 @@ export function MyLlmCallsPage({
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
                 <option value="openai-responses">OpenAI Responses</option>
+                <option value="openai-embedding">OpenAI Embeddings</option>
               </select>
             </label>
           </form>

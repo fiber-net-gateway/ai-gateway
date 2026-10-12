@@ -37,6 +37,13 @@ struct LlmBodyError {
     const char *message = nullptr;
 };
 
+struct EmbeddingRequestInfo {
+    static constexpr std::size_t kMaxInputs = 2048;
+    std::size_t input_count = 0;
+    std::optional<std::int64_t> dimensions;
+    bool base64 = false;
+};
+
 struct LlmRoutingData {
     json::Nullable<std::string_view> model;
     json::Nullable<bool> stream;
@@ -44,6 +51,7 @@ struct LlmRoutingData {
     PromptRouteCandidate prompt_affinity;
     std::size_t messages_count = 0;
     std::size_t tools_count = 0;
+    EmbeddingRequestInfo embedding;
 };
 
 enum class LlmBodyPatchKind : std::uint8_t {

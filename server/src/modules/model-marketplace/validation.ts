@@ -24,7 +24,8 @@ function validateProtocol(protocol: MarketplaceProtocolRecord, field: string): v
   if (
     protocol.type !== 'OPENAI_CHAT_COMPLETIONS' &&
     protocol.type !== 'ANTHROPIC_MESSAGES' &&
-    protocol.type !== 'OPENAI_RESPONSES'
+    protocol.type !== 'OPENAI_RESPONSES' &&
+    protocol.type !== 'OPENAI_EMBEDDING'
   ) {
     fail('PROTOCOL_UNSUPPORTED', '不支持的供应商协议', `${field}/type`)
   }
@@ -268,6 +269,7 @@ export function protocolCoverage(
   openai: ProtocolCoverage
   anthropic: ProtocolCoverage
   responses: ProtocolCoverage
+  embedding: ProtocolCoverage
 } {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]))
   const activeProviders = model.providerBindings
@@ -286,6 +288,7 @@ export function protocolCoverage(
     openai: supports('OPENAI_CHAT_COMPLETIONS'),
     anthropic: supports('ANTHROPIC_MESSAGES'),
     responses: supports('OPENAI_RESPONSES'),
+    embedding: supports('OPENAI_EMBEDDING'),
   }
 }
 
@@ -295,7 +298,7 @@ export function validateModelGraph(
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = []
   const coverage = protocolCoverage(model, providers)
-  if (coverage.openai === 'UNSUPPORTED') {
+  if (coverage.openai === 'UNSUPPORTED' && coverage.embedding === 'UNSUPPORTED') {
     issues.push({
       code: 'OPENAI_PROTOCOL_UNSUPPORTED',
       message: '当前模型没有可执行的 OpenAI Chat Completions 候选',
@@ -303,7 +306,7 @@ export function validateModelGraph(
       severity: 'WARNING',
     })
   }
-  if (coverage.anthropic === 'UNSUPPORTED') {
+  if (coverage.anthropic === 'UNSUPPORTED' && coverage.embedding === 'UNSUPPORTED') {
     issues.push({
       code: 'ANTHROPIC_PROTOCOL_UNSUPPORTED',
       message: '当前模型没有可执行的 Anthropic Messages 候选',
@@ -311,7 +314,7 @@ export function validateModelGraph(
       severity: 'WARNING',
     })
   }
-  if (coverage.responses === 'UNSUPPORTED') {
+  if (coverage.responses === 'UNSUPPORTED' && coverage.embedding === 'UNSUPPORTED') {
     issues.push({
       code: 'RESPONSES_PROTOCOL_UNSUPPORTED',
       message: '当前模型没有可执行的 OpenAI Responses 候选',
@@ -322,7 +325,8 @@ export function validateModelGraph(
   if (
     coverage.openai === 'UNSUPPORTED' &&
     coverage.anthropic === 'UNSUPPORTED' &&
-    coverage.responses === 'UNSUPPORTED'
+    coverage.responses === 'UNSUPPORTED' &&
+    coverage.embedding === 'UNSUPPORTED'
   ) {
     issues.push({
       code: 'PROTOCOL_COVERAGE_EMPTY',
@@ -342,6 +346,26 @@ export function validateModelGraph(
       code: 'PROVIDER_PROTOCOL_REQUIRED',
       message: '供应商至少需要一项协议映射',
       field: `/models/${model.id}/providers`,
+      severity: 'ERROR',
+    })
+  }
+  const embeddingModels = new Set(
+    model.providerBindings
+      .filter((binding) => binding.routeRole === 'PRIMARY' || model.fallbackEnabled)
+      .flatMap((binding) => {
+        const provider = providerById.get(binding.providerId)
+        return provider && !provider.archivedAt
+          ? provider.protocols
+              .filter((p) => p.type === 'OPENAI_EMBEDDING')
+              .map((p) => p.upstreamModelName)
+          : []
+      }),
+  )
+  if (embeddingModels.size > 1) {
+    issues.push({
+      code: 'EMBEDDING_MODELS_INCOMPATIBLE',
+      message: 'Embedding 主备候选必须使用相同的上游模型，并验证向量兼容性',
+      field: `/models/${model.id}/protocols/OPENAI_EMBEDDING`,
       severity: 'ERROR',
     })
   }

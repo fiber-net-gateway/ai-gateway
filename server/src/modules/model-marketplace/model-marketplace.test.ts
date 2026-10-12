@@ -86,6 +86,7 @@ function providerMutation(secret: string): ProviderMutationInput {
     baseUrl: 'https://api.vendor.example/',
     protocols: [
       { type: 'OPENAI_RESPONSES', path: '/v1/responses', upstreamModelName: 'vendor-responses' },
+      { type: 'OPENAI_EMBEDDING', path: '/v1/embeddings', upstreamModelName: 'vendor-embedding' },
       {
         type: 'OPENAI_CHAT_COMPLETIONS',
         path: '/v1/chat/completions',
@@ -214,6 +215,14 @@ test('model marketplace keeps draft, publication, activation and secrets separat
   assert.equal(created.json().published.state, 'NEVER')
   assert.equal(created.json().activation.state, 'UNKNOWN')
 
+  assert.equal(created.json().protocols.embedding, 'SUPPORTED')
+  const embeddingModels = await app.inject({
+    method: 'GET',
+    url: `/api/environments/${environmentId}/models?view=admin&protocol=embedding`,
+    headers: { cookie },
+  })
+  assert.equal(embeddingModels.statusCode, 200)
+  assert.equal(embeddingModels.json().items.length, 1)
   assert.equal(created.json().protocols.responses, 'SUPPORTED')
   const responseModels = await app.inject({
     method: 'GET',
@@ -786,6 +795,7 @@ test('renderer uses fixed Data IDs, deterministic ordering and exact int64 JSON 
     openai: 'UNSUPPORTED',
     anthropic: 'UNSUPPORTED',
     responses: 'SUPPORTED',
+    embedding: 'UNSUPPORTED',
   })
   assert.equal(
     validateModelGraph(version.models[0], [responseOnly]).some(
@@ -798,6 +808,48 @@ test('renderer uses fixed Data IDs, deterministic ordering and exact int64 JSON 
     protocols: version.providers[0].protocols.filter((p) => p.type === 'OPENAI_CHAT_COMPLETIONS'),
   }
   assert.equal(protocolCoverage(version.models[0], [chatOnly]).responses, 'UNSUPPORTED')
+
+  const embeddingVersion = structuredClone(version)
+  embeddingVersion.providers[0].protocols = [
+    {
+      type: 'OPENAI_EMBEDDING',
+      path: '/v1/embeddings',
+      upstreamModelName: 'embed-v1',
+    },
+  ]
+  assert.deepEqual(protocolCoverage(embeddingVersion.models[0], embeddingVersion.providers), {
+    openai: 'UNSUPPORTED',
+    anthropic: 'UNSUPPORTED',
+    responses: 'UNSUPPORTED',
+    embedding: 'SUPPORTED',
+  })
+  assert.deepEqual(validateModelGraph(embeddingVersion.models[0], embeddingVersion.providers), [])
+  const embeddingResource = (await renderProviderResources(embeddingVersion, secrets))[0]
+  assert.deepEqual(JSON.parse(embeddingResource.content).data.protocol, [
+    {
+      type: 'openai-embedding',
+      path: '/v1/embeddings',
+      model: 'embed-v1',
+    },
+  ])
+  const alternate = structuredClone(embeddingVersion.providers[0])
+  alternate.id = '00000000-0000-4000-8000-000000000007'
+  alternate.protocols[0].upstreamModelName = 'incompatible-vector-space'
+  embeddingVersion.providers.push(alternate)
+  embeddingVersion.models[0].providerBindings.push({
+    providerId: alternate.id,
+    routeRole: 'FALLBACK',
+    sortOrder: 1,
+  })
+  assert.equal(
+    validateModelGraph(embeddingVersion.models[0], embeddingVersion.providers)[0].code,
+    'EMBEDDING_MODELS_INCOMPATIBLE',
+  )
+  embeddingVersion.models[0].fallbackEnabled = false
+  assert.deepEqual(validateModelGraph(embeddingVersion.models[0], embeddingVersion.providers), [])
+  embeddingVersion.models[0].fallbackEnabled = true
+  alternate.protocols[0].upstreamModelName = 'embed-v1'
+  assert.deepEqual(validateModelGraph(embeddingVersion.models[0], embeddingVersion.providers), [])
 
   const models = renderModelsResource(version)
   assert.equal(models.dataId, 'ploto.ai-llm.models')

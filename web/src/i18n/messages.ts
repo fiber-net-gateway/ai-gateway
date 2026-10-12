@@ -93,6 +93,12 @@ const englishMessages: Record<string, string> = {
   '下面使用 SSE；普通 JSON 响应请将 stream 改为 false。':
     'The example uses SSE. Set stream to false for a regular JSON response.',
   '支持 OpenAI Responses': 'Supports OpenAI Responses',
+  '支持 OpenAI Embeddings': 'Supports OpenAI Embeddings',
+  '同步向量接口，支持 float 和 base64；主备候选必须产生兼容的向量。':
+    'Synchronous embeddings with float or base64 encoding. Primary and fallback candidates must produce compatible vectors.',
+  'Embedding 主备候选必须使用相同的上游模型，并验证向量兼容性':
+    'Embedding candidates must use the same upstream model and be verified for vector compatibility',
+
   '当前模型没有可执行的 OpenAI Responses 候选':
     'This model has no executable OpenAI Responses candidate',
   '强制无状态：不保存响应，不使用历史 ID；每次请求需提交完整上下文。':

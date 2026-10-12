@@ -2,7 +2,7 @@ import type { ProviderProtocolType } from '../api/model-marketplace'
 
 export const modelProtocols: ReadonlyArray<{
   type: ProviderProtocolType
-  coverageKey: 'openai' | 'anthropic' | 'responses'
+  coverageKey: 'openai' | 'anthropic' | 'responses' | 'embedding'
   auditName: string
   label: string
   shortLabel: string
@@ -35,5 +35,14 @@ export const modelProtocols: ReadonlyArray<{
     shortLabel: 'Responses',
     defaultPath: '/v1/responses',
     help: '强制无状态：不保存响应，不使用历史 ID；每次请求需提交完整上下文。',
+  },
+  {
+    type: 'OPENAI_EMBEDDING',
+    coverageKey: 'embedding',
+    auditName: 'openai-embedding',
+    label: 'OpenAI Embeddings',
+    shortLabel: 'Embeddings',
+    defaultPath: '/v1/embeddings',
+    help: '同步向量接口，支持 float 和 base64；主备候选必须产生兼容的向量。',
   },
 ]

@@ -98,6 +98,10 @@ export function ModelDetailPage({
               type="responses"
               coverage={available.protocols.responses ?? 'UNSUPPORTED'}
             />
+            <ProtocolBadge
+              type="embedding"
+              coverage={available.protocols.embedding ?? 'UNSUPPORTED'}
+            />
           </div>
         </header>
         <div
@@ -154,7 +158,19 @@ export function ModelDetailPage({
             </div>
           </div>
           <div className="detail-section">
-            <pre>{`curl -H "Authorization: Bearer <YOUR_BT1_TOKEN>" \\\n+  -H "Content-Type: application/json" \\\n+  -d '{"model":"${available.logicalModelName}","messages":[...]}' \\\n+  https://<ai-server>/v1/chat/completions`}</pre>
+            {available.protocols.openai === 'SUPPORTED' && (
+              <pre>{`curl -H "Authorization: Bearer <YOUR_BT1_TOKEN>" \\\n+  -H "Content-Type: application/json" \\\n+  -d '{"model":"${available.logicalModelName}","messages":[...]}' \\\n+  https://<ai-server>/v1/chat/completions`}</pre>
+            )}
+            {available.protocols.embedding === 'SUPPORTED' && (
+              <>
+                <h3>OpenAI Embeddings</h3>
+                <p>同步向量接口，支持 float 和 base64；主备候选必须产生兼容的向量。</p>
+                <pre>{`curl https://<ai-server>/v1/embeddings \\
+  -H "Authorization: Bearer <YOUR_BT1_TOKEN>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${available.logicalModelName}","input":["Hello"],"encoding_format":"float"}'`}</pre>
+              </>
+            )}
             {available.protocols.responses === 'SUPPORTED' && (
               <>
                 <h3>OpenAI Responses</h3>

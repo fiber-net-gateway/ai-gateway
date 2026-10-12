@@ -28,6 +28,7 @@ export function AdminModelCard({
         <ProtocolBadge type="openai" coverage={model.protocols.openai} />
         <ProtocolBadge type="anthropic" coverage={model.protocols.anthropic} />
         <ProtocolBadge type="responses" coverage={model.protocols.responses ?? 'UNSUPPORTED'} />
+        <ProtocolBadge type="embedding" coverage={model.protocols.embedding ?? 'UNSUPPORTED'} />
       </div>
       <dl className="model-card-facts">
         <div>
@@ -86,6 +87,7 @@ export function AvailableModelCard({
         <ProtocolBadge type="openai" coverage={model.protocols.openai} />
         <ProtocolBadge type="anthropic" coverage={model.protocols.anthropic} />
         <ProtocolBadge type="responses" coverage={model.protocols.responses ?? 'UNSUPPORTED'} />
+        <ProtocolBadge type="embedding" coverage={model.protocols.embedding ?? 'UNSUPPORTED'} />
       </div>
       <div className={`access-callout ${model.accessible ? 'allowed' : 'denied'}`}>
         <b>{model.accessible ? '你可以调用此模型' : '当前账号无访问权限'}</b>

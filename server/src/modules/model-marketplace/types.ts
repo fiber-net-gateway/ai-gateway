@@ -3,7 +3,7 @@ export type ConfigVersionState = 'OPEN' | 'FROZEN' | 'ABANDONED'
 export type ProviderRouteRole = 'PRIMARY' | 'FALLBACK'
 export type ProviderOwnership = 'DEDICATED' | 'SHARED'
 export type ProviderProtocolType =
-  'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES' | 'OPENAI_RESPONSES'
+  'OPENAI_CHAT_COMPLETIONS' | 'ANTHROPIC_MESSAGES' | 'OPENAI_RESPONSES' | 'OPENAI_EMBEDDING'
 export type DraftState = 'NONE' | 'MODIFIED' | 'INVALID' | 'CONFLICTED'
 export type PublicationState = 'NEVER' | 'PUBLISHED' | 'PARTIAL' | 'FAILED' | 'DRIFTED'
 export type ActivationState = 'UNKNOWN' | 'PENDING' | 'EFFECTIVE' | 'PARTIAL' | 'REJECTED'
@@ -302,7 +302,12 @@ export interface AdminModelView {
   displayName: string
   description: string
   tags: string[]
-  protocols: { openai: ProtocolCoverage; anthropic: ProtocolCoverage; responses: ProtocolCoverage }
+  protocols: {
+    openai: ProtocolCoverage
+    anthropic: ProtocolCoverage
+    responses: ProtocolCoverage
+    embedding: ProtocolCoverage
+  }
   providerCount: number
   primaryProviderCount: number
   fallbackConfigured: boolean
@@ -324,7 +329,12 @@ export interface AvailableModelView {
   displayName: string
   logicalModelName: string
   description: string
-  protocols: { openai: ProtocolCoverage; anthropic: ProtocolCoverage; responses: ProtocolCoverage }
+  protocols: {
+    openai: ProtocolCoverage
+    anthropic: ProtocolCoverage
+    responses: ProtocolCoverage
+    embedding: ProtocolCoverage
+  }
   accessible: boolean
   accessMode: ModelAccessMode
   requestable: boolean

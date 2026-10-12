@@ -10,6 +10,7 @@ import { accessGroupPublicationEvidenceMigration } from './migrations/007-access
 import { llmCallAuditUsageComponentsMigration } from './migrations/008-llm-call-audit-usage-components.js'
 
 import { openaiResponsesProtocolMigration } from './migrations/009-openai-responses-protocol.js'
+import { openaiEmbeddingProtocolMigration } from './migrations/010-openai-embedding-protocol.js'
 
 const migrations = [
   userModuleMigration,
@@ -21,6 +22,7 @@ const migrations = [
   accessGroupPublicationEvidenceMigration,
   llmCallAuditUsageComponentsMigration,
   openaiResponsesProtocolMigration,
+  openaiEmbeddingProtocolMigration,
 ]
 
 export async function runMigrations(pool: Pool): Promise<void> {

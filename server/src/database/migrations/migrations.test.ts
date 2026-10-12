@@ -11,6 +11,7 @@ import { accessGroupPublicationEvidenceMigration } from './007-access-group-publ
 import { llmCallAuditUsageComponentsMigration } from './008-llm-call-audit-usage-components.js'
 
 import { openaiResponsesProtocolMigration } from './009-openai-responses-protocol.js'
+import { openaiEmbeddingProtocolMigration } from './010-openai-embedding-protocol.js'
 
 const migrations = [
   userModuleMigration,
@@ -22,6 +23,7 @@ const migrations = [
   accessGroupPublicationEvidenceMigration,
   llmCallAuditUsageComponentsMigration,
   openaiResponsesProtocolMigration,
+  openaiEmbeddingProtocolMigration,
 ]
 
 test('every migration starts with the idempotent migration-table bootstrap', () => {
@@ -64,4 +66,13 @@ test('Responses migration preserves historical coverage and existing protocols',
     openaiResponsesProtocolMigration.statements[2],
     /'SUPPORTED', 'UNSUPPORTED', 'INVALID'/,
   )
+})
+
+test('Embedding migration retains all prior protocols and defaults historical coverage to unsupported', () => {
+  assert.match(
+    openaiEmbeddingProtocolMigration.statements[1],
+    /'OPENAI_CHAT_COMPLETIONS', 'ANTHROPIC_MESSAGES', 'OPENAI_RESPONSES', 'OPENAI_EMBEDDING'/,
+  )
+  assert.match(openaiEmbeddingProtocolMigration.statements[2], /ADD COLUMN embedding_coverage/)
+  assert.match(openaiEmbeddingProtocolMigration.statements[2], /NOT NULL DEFAULT 'UNSUPPORTED'/)
 })

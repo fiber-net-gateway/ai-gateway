@@ -38,6 +38,7 @@ add_library(ai_server_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/SseParser.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/TokenUsage.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/protocol/ResponsesObservation.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/protocol/EmbeddingObservation.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/routing/ModelAuthorization.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/routing/ProviderRouteKey.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/server/HttpResponse.cpp"
@@ -77,6 +78,8 @@ if (FIBER_BUILD_TESTS AND (GTest_FOUND OR TARGET GTest::gtest_main))
     include(GoogleTest)
 
     set(ai_server_test_sources
+        "${CMAKE_CURRENT_LIST_DIR}/tests/EmbeddingProtocolTest.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/tests/EmbeddingProxyIntegrationTest.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/tests/ResponsesProtocolTest.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/tests/ResponsesProxyIntegrationTest.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/tests/AiServerConfigTest.cpp"

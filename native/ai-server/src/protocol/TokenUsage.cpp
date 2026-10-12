@@ -221,6 +221,8 @@ void LlmTokenUsage::merge(const LlmTokenUsage &next) noexcept {
 
 std::optional<LlmTokenUsage> extract_token_usage(LlmWireProtocol protocol, std::string_view input, bool streaming_event,
                                                  mem::BufPool &pool) noexcept {
+    if (protocol == LlmWireProtocol::OpenAiEmbedding)
+        return std::nullopt; // Validated with request shape by observe_embedding.
     if (protocol == LlmWireProtocol::OpenAiResponses)
         return observe_responses(input, streaming_event).usage;
     RawUsage raw;
@@ -232,6 +234,8 @@ std::optional<LlmTokenUsage> extract_token_usage(LlmWireProtocol protocol, std::
 
 LlmStreamEventObservation analyze_stream_event(LlmWireProtocol protocol, std::string_view input,
                                                mem::BufPool &pool) noexcept {
+    if (protocol == LlmWireProtocol::OpenAiEmbedding)
+        return {};
     if (protocol == LlmWireProtocol::OpenAiResponses) {
         const auto observed = observe_responses(input, true);
         return {.usage = observed.usage, .output_token_observed = observed.output_token_observed};

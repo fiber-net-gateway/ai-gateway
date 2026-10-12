@@ -7,7 +7,12 @@ import type { ProtocolCoverage } from '../../api/model-marketplace'
 export function ProtocolCoverageMatrix({
   coverage,
 }: {
-  coverage: { openai: ProtocolCoverage; anthropic: ProtocolCoverage; responses: ProtocolCoverage }
+  coverage: {
+    openai: ProtocolCoverage
+    anthropic: ProtocolCoverage
+    responses: ProtocolCoverage
+    embedding: ProtocolCoverage
+  }
 }) {
   const cell = (value: ProtocolCoverage) => {
     if (value === 'SUPPORTED')

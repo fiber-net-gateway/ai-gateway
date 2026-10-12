@@ -107,6 +107,7 @@ export function ModelMarketplacePage({
             <option value="openai">支持 OpenAI</option>
             <option value="anthropic">支持 Anthropic</option>
             <option value="responses">支持 OpenAI Responses</option>
+            <option value="embedding">支持 OpenAI Embeddings</option>
           </select>
         </label>
         <span className="result-count">{models.length} 个模型</span>

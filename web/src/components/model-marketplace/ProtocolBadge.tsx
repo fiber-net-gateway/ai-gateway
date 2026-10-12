@@ -8,7 +8,7 @@ export function ProtocolBadge({
   type,
   coverage,
 }: {
-  type: 'openai' | 'anthropic' | 'responses'
+  type: 'openai' | 'anthropic' | 'responses' | 'embedding'
   coverage: ProtocolCoverage
 }) {
   const label = modelProtocols.find((protocol) => protocol.coverageKey === type)!.shortLabel

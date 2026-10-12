@@ -6,6 +6,7 @@
 #include "../auth/LlmRequestAuthenticator.h"
 #include "../observability/AiServerCatRequest.h"
 #include "../observability/AiServerLogCategories.h"
+#include "../protocol/EmbeddingObservation.h"
 #include "../protocol/LlmError.h"
 #include "../protocol/ResponsesObservation.h"
 #include "../protocol/SseParser.h"
@@ -880,7 +881,7 @@ public:
             return;
         }
         body_size_ = body ? body.readable() : 0;
-        if (protocol_ == LlmWireProtocol::OpenAiResponses)
+        if (protocol_ == LlmWireProtocol::OpenAiResponses || protocol_ == LlmWireProtocol::OpenAiEmbedding)
             return;
 #if AI_SERVER_AUDIT_HTTP
         return;
@@ -916,7 +917,8 @@ public:
 
     void output(std::string_view json, bool streaming) noexcept {
 #if !AI_SERVER_AUDIT_HTTP
-        if (protocol_ != LlmWireProtocol::OpenAiResponses && audit_enabled_ && !generation_disabled_) {
+        if (protocol_ != LlmWireProtocol::OpenAiResponses && protocol_ != LlmWireProtocol::OpenAiEmbedding &&
+            audit_enabled_ && !generation_disabled_) {
             (void) output_.observe(protocol_, json, streaming);
         }
 #else
@@ -927,7 +929,7 @@ public:
 
     void output_complete(bool complete) noexcept {
 #if !AI_SERVER_AUDIT_HTTP
-        if (protocol_ != LlmWireProtocol::OpenAiResponses)
+        if (protocol_ != LlmWireProtocol::OpenAiResponses && protocol_ != LlmWireProtocol::OpenAiEmbedding)
             output_.complete(complete);
 #else
         (void) complete;
@@ -1738,6 +1740,9 @@ LlmError plan_error(LlmWireProtocol protocol, const ExecutionPlanError &error) n
         case ExecutionPlanErrorCode::ProviderProtocolUnsupported:
             code = "provider_protocol_unsupported";
             break;
+        case ExecutionPlanErrorCode::IncompatibleEmbeddingModels:
+            code = "embedding_models_incompatible";
+            break;
         case ExecutionPlanErrorCode::OutOfMemory:
             return LlmError{
                     .status_code = 500,
@@ -2432,7 +2437,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
 
     auto parsed = ParsedLlmBody::parse(protocol, std::move(*raw_body), exchange.pool());
     if (!parsed) {
-        if (protocol == LlmWireProtocol::OpenAiResponses) {
+        if (protocol == LlmWireProtocol::OpenAiResponses || protocol == LlmWireProtocol::OpenAiEmbedding) {
             const auto &error = parsed.error();
             std::string_view code = "invalid_json";
             switch (error.code) {
@@ -2465,7 +2470,9 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                              .type = internal ? std::string_view("server_error")
                                               : std::string_view("invalid_request_error"),
                              .message = internal ? "internal server error"
-                                                 : "Invalid stateless Responses request; send complete input items.",
+                                        : protocol == LlmWireProtocol::OpenAiEmbedding
+                                                ? "Invalid embeddings request."
+                                                : "Invalid stateless Responses request; send complete input items.",
                              .field = field});
         } else {
             co_await send_error(exchange, cat_request, protocol,
@@ -2889,7 +2896,13 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
             if (response.error().dns_backoff_hit) {
                 metrics_->dns_backoff_hit(protocol);
             }
-            const ProviderErrorDecision decision = classify_provider_transport_error(response.error(), false);
+            ProviderErrorDecision decision = classify_provider_transport_error(response.error(), false);
+            if (protocol == LlmWireProtocol::OpenAiEmbedding &&
+                response.error().code == ProviderHttpErrorCode::ResponseTooLarge) {
+                decision.retry_target = ProviderRetryTarget::None;
+                decision.scope = ProviderErrorScope::None;
+                decision.instance_outcome = InstanceReportOutcome::Neutral;
+            }
             const auto observed_at = event::EventLoop::current().now();
             apply_observed_provider_error(attempt, decision, observed_at, *metrics_, protocol);
             const ProviderRetrySelection selection =
@@ -2915,14 +2928,18 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
             if (exchange.response_channel_closed()) {
                 co_return;
             }
-            co_await send_error(exchange, cat_request, protocol,
-                                LlmError{
-                                        .status_code = 502,
-                                        .code = "provider_transport_error",
-                                        .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
-                                                                                     : std::string_view("api_error"),
-                                        .message = "provider request failed",
-                                });
+            co_await send_error(
+                    exchange, cat_request, protocol,
+                    LlmError{
+                            .status_code = 502,
+                            .code = protocol == LlmWireProtocol::OpenAiEmbedding &&
+                                                    response.error().code == ProviderHttpErrorCode::ResponseTooLarge
+                                            ? "provider_response_too_large"
+                                            : "provider_transport_error",
+                            .type = uses_openai_error_envelope(protocol) ? std::string_view("server_error")
+                                                                         : std::string_view("api_error"),
+                            .message = "provider request failed",
+                    });
             co_return;
         }
 
@@ -2979,7 +2996,38 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                 co_return;
             }
             mem::BufPool usage_pool;
-            auto usage = extract_token_usage(protocol, io_buf_view(response->body), false, usage_pool);
+            std::optional<LlmTokenUsage> usage;
+            if (protocol == LlmWireProtocol::OpenAiEmbedding) {
+                const auto observed = observe_embedding(io_buf_view(response->body), routing.embedding);
+                if (!is_json_content_type(response->content_type) || observed.invalid_response) {
+                    response->load_balance.report(InstanceReportOutcome::Failure);
+                    const auto decision =
+                            classify_provider_transport_error(ProviderHttpErrorCode::InvalidResponse, true);
+                    apply_observed_provider_error(attempt, decision, event::EventLoop::current().now(), *metrics_,
+                                                  protocol);
+                    metrics_->provider_failure(protocol);
+                    audit.provider_attempt(attempt, index, plan->attempts.size(),
+                                           std::chrono::duration_cast<std::chrono::microseconds>(
+                                                   event::EventLoop::current().now() - attempt_started),
+                                           ProviderAttemptObservation{.timing = response->timing,
+                                                                      .failure_source = "embedding",
+                                                                      .outcome = "invalid_response",
+                                                                      .status = response->status_code,
+                                                                      .upstream_request_id = response->request_id},
+                                           provider_cat_transaction);
+                    rate_limit.settle_async({});
+                    co_await send_error(exchange, cat_request, protocol,
+                                        LlmError{.status_code = 502,
+                                                 .code = "upstream_invalid_response",
+                                                 .type = "server_error",
+                                                 .message = "Provider returned an invalid embeddings response."});
+                    co_return;
+                }
+                usage = observed.usage;
+                metrics_->embedding_usage(usage.has_value());
+            } else {
+                usage = extract_token_usage(protocol, io_buf_view(response->body), false, usage_pool);
+            }
             audit.output(io_buf_view(response->body), false);
             audit.output_complete(true);
             response->load_balance.report(InstanceReportOutcome::Success);
