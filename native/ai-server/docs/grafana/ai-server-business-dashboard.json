@@ -784,7 +784,7 @@
             "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "topk(${top_n:raw}, sum by (username) (rate(ai_server_user_token_usage_total{job=\"fiber-ai_exporter\",instance=~\"$instance\",username=~\"${username_regex:raw}\"}[$__rate_interval])))",
+          "expr": "topk(${top_n:raw}, sum by (username) (rate(ai_server_user_token_usage_total{job=\"fiber-ai_exporter\",instance=~\"$instance\"}[$__rate_interval])))",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -792,6 +792,67 @@
       ],
       "title": "用户 Token 吞吐 Top-N",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "当前时间范围内每个用户的累计 token 总量（全部 token_type 之和，跨实例求和），取前 40 位用户，从高到低排列。来自 ai_server_user_token_usage_total。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "overrides": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "id": 113,
+      "options": {
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "xTickLabelRotation": 45,
+        "xTickLabelSpacing": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "sort_desc(topk(40, sum by (username) (increase(ai_server_user_token_usage_total{job=\"fiber-ai_exporter\",instance=~\"$instance\"}[$__range]))))",
+          "format": "time_series",
+          "instant": true,
+          "legendFormat": "{{username}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "用户 Token 用量 Top-40（时间范围内累计）",
+      "type": "barchart"
     },
     {
       "datasource": {
@@ -1407,26 +1468,6 @@
         "skipUrlSync": false,
         "sort": 1,
         "type": "query"
-      },
-      {
-        "current": {
-          "selected": true,
-          "text": ".*",
-          "value": ".*"
-        },
-        "hide": 0,
-        "label": "Username Regex",
-        "name": "username_regex",
-        "options": [
-          {
-            "selected": true,
-            "text": ".*",
-            "value": ".*"
-          }
-        ],
-        "query": ".*",
-        "skipUrlSync": false,
-        "type": "textbox"
       },
       {
         "current": {
