@@ -12,7 +12,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <optional>
 #include <vector>
 
 #include <fiber/async/Task.h>
@@ -24,6 +24,7 @@
 #include <fiber/http/HttpExchange.h>
 #include <fiber/log/Appender.h>
 #include <fiber/prometheus/Counter.h>
+#include <fiber/prometheus/DynamicCounter.h>
 #include <fiber/prometheus/Gauge.h>
 #include <fiber/prometheus/Histogram.h>
 #include <fiber/prometheus/MetricsRegistry.h>
@@ -55,20 +56,9 @@ enum class SseDrainMetric : std::uint8_t {
 };
 
 class AiServerMetrics final : public common::NonCopyable, public common::NonMovable {
-    class TokenUsageStore;
-    class WorkerTokenUsageCache;
-
 public:
     class Worker {
     public:
-        Worker();
-        ~Worker();
-
-        Worker(const Worker &) = delete;
-        Worker &operator=(const Worker &) = delete;
-        Worker(Worker &&) noexcept;
-        Worker &operator=(Worker &&) noexcept;
-
         void request_started(LlmWireProtocol protocol) noexcept;
         void request_finished(LlmWireProtocol protocol, const http::HttpResponseStats &response,
                               std::chrono::microseconds duration) noexcept;
@@ -135,7 +125,8 @@ public:
         prometheus::CounterRef audit_generated_;
         prometheus::CounterRef audit_generation_failures_;
         prometheus::CounterRef audit_capture_incomplete_;
-        std::unique_ptr<WorkerTokenUsageCache> token_usage_cache_;
+        std::array<prometheus::CounterRef, 3> token_totals_;
+        std::array<prometheus::CounterRef, 2> token_usage_failures_;
         AiServerMetrics *owner_ = nullptr;
     };
 
@@ -156,11 +147,10 @@ public:
 
 private:
     [[nodiscard]] bool initialize(event::EventLoopGroup &workers);
-    void record_token_usage(Worker &worker, std::string_view username, std::string_view provider_name,
-                            LlmWireProtocol protocol, const LlmTokenUsage &usage) noexcept;
 
     prometheus::MetricsRegistry registry_;
-    std::unique_ptr<TokenUsageStore> token_usage_store_;
+    std::optional<prometheus::DynamicCounter> user_token_usage_;
+    std::optional<prometheus::DynamicCounter> provider_token_usage_;
     std::vector<Worker> workers_;
     std::atomic<std::uint64_t> config_generation_{0};
     bool collecting_stopped_ = false;

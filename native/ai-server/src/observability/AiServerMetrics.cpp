@@ -8,12 +8,8 @@
 #include <charconv>
 #include <cstring>
 #include <limits>
-#include <map>
-#include <mutex>
 #include <optional>
-#include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 
 #include <fiber/common/Assert.h>
@@ -37,6 +33,10 @@ constexpr std::array<std::string_view, static_cast<std::size_t>(ProviderHttpErro
 };
 constexpr std::string_view kUserTokenUsageMetric = "ai_server_user_token_usage_total";
 constexpr std::string_view kProviderTokenUsageMetric = "ai_server_provider_token_usage_total";
+constexpr std::string_view kUserTokenUsageFamily = "user_token_usage";
+constexpr std::string_view kProviderTokenUsageFamily = "provider_token_usage";
+constexpr std::size_t kMaxUserTokenUsageSeries = 4096;
+constexpr std::size_t kMaxProviderTokenUsageSeries = 2048;
 constexpr std::size_t kMetricsChunkBytes = 4 * 1024;
 constexpr std::uint64_t kNanosecondsPerSecond = 1'000'000'000;
 
@@ -207,172 +207,50 @@ private:
     return true;
 }
 
-struct TokenUsageCounters {
-    std::array<std::atomic<std::uint64_t>, 3> values{};
-    std::atomic<bool> observed{false};
-
-    void add(const LlmTokenUsage &usage) noexcept {
-        add_value(0, usage.in_cache);
-        add_value(1, usage.in_nocache);
-        add_value(2, usage.out);
-        observed.store(true, std::memory_order_release);
+[[nodiscard]] bool append_labeled_metric(BoundedTextBuilder &output, std::string_view name, std::string_view help,
+                                         std::string_view type, const std::array<std::string_view, 2> &families,
+                                         const std::array<std::uint64_t, 2> &values) noexcept {
+    if (!output.append("# HELP ") || !output.append(name) || !output.append(" ") || !output.append(help) ||
+        !output.append("\n# TYPE ") || !output.append(name) || !output.append(" ") || !output.append(type) ||
+        !output.append("\n")) {
+        return false;
     }
-
-private:
-    void add_value(std::size_t index, const std::optional<std::int64_t> &value) noexcept {
-        if (value && *value >= 0) {
-            values[index].fetch_add(static_cast<std::uint64_t>(*value), std::memory_order_relaxed);
+    for (std::size_t i = 0; i < families.size(); ++i) {
+        if (!output.append(name) || !output.append("{family=\"") || !output.append_label_value(families[i]) ||
+            !output.append("\"} ") || !output.append_uint(values[i]) || !output.append("\n")) {
+            return false;
         }
     }
-};
-
-struct UserTokenUsageSeries {
-    explicit UserTokenUsageSeries(std::string_view value) : username(value) {}
-
-    std::string username;
-    TokenUsageCounters usage;
-};
-
-struct ProviderTokenUsageSeries {
-    explicit ProviderTokenUsageSeries(std::string_view value) : provider_name(value) {}
-
-    std::string provider_name;
-    std::array<TokenUsageCounters, kProtocolNames.size()> protocols;
-};
-
-[[nodiscard]] bool append_family_header(BoundedTextBuilder &output, std::string_view name, std::string_view help) {
-    return output.append("# HELP ") && output.append(name) && output.append(" ") && output.append(help) &&
-           output.append("\n# TYPE ") && output.append(name) && output.append(" counter\n");
+    return true;
 }
 
-[[nodiscard]] bool append_user_sample(BoundedTextBuilder &output, std::string_view username,
-                                      std::string_view token_type, std::uint64_t value) {
-    return output.append(kUserTokenUsageMetric) && output.append("{username=\"") &&
-           output.append_label_value(username) && output.append("\",token_type=\"") && output.append(token_type) &&
-           output.append("\"} ") && output.append_uint(value) && output.append("\n");
-}
-
-[[nodiscard]] bool append_provider_sample(BoundedTextBuilder &output, std::string_view provider_name,
-                                          std::string_view protocol, std::string_view token_type, std::uint64_t value) {
-    return output.append(kProviderTokenUsageMetric) && output.append("{provider_name=\"") &&
-           output.append_label_value(provider_name) && output.append("\",protocol=\"") && output.append(protocol) &&
-           output.append("\",token_type=\"") && output.append(token_type) && output.append("\"} ") &&
-           output.append_uint(value) && output.append("\n");
+[[nodiscard]] bool append_dynamic_series_diagnostics(BoundedTextBuilder &output,
+                                                     const prometheus::DynamicSeriesDiagnostics &user,
+                                                     const prometheus::DynamicSeriesDiagnostics &provider) noexcept {
+    constexpr std::array<std::string_view, 2> kDynamicFamilies{kUserTokenUsageFamily, kProviderTokenUsageFamily};
+    const std::array<std::uint64_t, 2> active_series{user.active_series, provider.active_series};
+    const std::array<std::uint64_t, 2> capacity{user.capacity, provider.capacity};
+    const std::array<std::uint64_t, 2> storage_bytes{user.storage_bytes, provider.storage_bytes};
+    const std::array<std::uint64_t, 2> evictions{user.evictions, provider.evictions};
+    const std::array<std::uint64_t, 2> creation_failures{user.creation_failures, provider.creation_failures};
+    return append_labeled_metric(output, "ai_server_metrics_dynamic_active_series",
+                                 "Active dynamic metric series per family.", "gauge", kDynamicFamilies,
+                                 active_series) &&
+           append_labeled_metric(output, "ai_server_metrics_dynamic_series_capacity",
+                                 "Configured dynamic series capacity per family.", "gauge", kDynamicFamilies,
+                                 capacity) &&
+           append_labeled_metric(output, "ai_server_metrics_dynamic_storage_bytes",
+                                 "Owned dynamic series label storage bytes per family.", "gauge", kDynamicFamilies,
+                                 storage_bytes) &&
+           append_labeled_metric(output, "ai_server_metrics_dynamic_evictions_total",
+                                 "Dynamic metric series evicted by LRU capacity.", "counter", kDynamicFamilies,
+                                 evictions) &&
+           append_labeled_metric(output, "ai_server_metrics_dynamic_creation_failures_total",
+                                 "Dynamic metric series creations rejected by capacity or allocation.", "counter",
+                                 kDynamicFamilies, creation_failures);
 }
 
 } // namespace
-
-class AiServerMetrics::WorkerTokenUsageCache {
-public:
-    std::unordered_map<std::string_view, UserTokenUsageSeries *> users;
-    std::unordered_map<std::string_view, ProviderTokenUsageSeries *> providers;
-};
-
-class AiServerMetrics::TokenUsageStore {
-public:
-    void record(WorkerTokenUsageCache &cache, std::string_view username, std::string_view provider_name,
-                LlmWireProtocol protocol, const LlmTokenUsage &usage) {
-        if (!usage.has_usage_fields()) {
-            return;
-        }
-        find_user(cache, username)->usage.add(usage);
-        find_provider(cache, provider_name)->protocols[protocol_index(protocol)].add(usage);
-    }
-
-    [[nodiscard]] bool append_text(BoundedTextBuilder &output) {
-        if (!append_family_header(output, kUserTokenUsageMetric,
-                                  "LLM tokens by authenticated username and token type.")) {
-            return false;
-        }
-
-        std::lock_guard lock(mutex_);
-        for (const auto &[username, series]: users_) {
-            for (std::size_t type = 0; type < kTokenTypes.size(); ++type) {
-                if (!append_user_sample(output, username, kTokenTypes[type],
-                                        series->usage.values[type].load(std::memory_order_relaxed))) {
-                    return false;
-                }
-            }
-        }
-
-        if (!append_family_header(output, kProviderTokenUsageMetric,
-                                  "LLM tokens by provider, wire protocol, and token type.")) {
-            return false;
-        }
-        for (const auto &[provider_name, series]: providers_) {
-            for (std::size_t protocol = 0; protocol < kProtocolNames.size(); ++protocol) {
-                const TokenUsageCounters &usage = series->protocols[protocol];
-                if (!usage.observed.load(std::memory_order_acquire)) {
-                    continue;
-                }
-                for (std::size_t type = 0; type < kTokenTypes.size(); ++type) {
-                    if (!append_provider_sample(output, provider_name, kProtocolNames[protocol], kTokenTypes[type],
-                                                usage.values[type].load(std::memory_order_relaxed))) {
-                        return false;
-                    }
-                }
-            }
-        }
-        return true;
-    }
-
-private:
-    UserTokenUsageSeries *find_user(WorkerTokenUsageCache &cache, std::string_view username) {
-        const auto cached = cache.users.find(username);
-        if (cached != cache.users.end()) {
-            return cached->second;
-        }
-
-        UserTokenUsageSeries *series = nullptr;
-        {
-            std::lock_guard lock(mutex_);
-            auto found = users_.find(username);
-            if (found == users_.end()) {
-                auto created = std::make_unique<UserTokenUsageSeries>(username);
-                series = created.get();
-                users_.emplace(series->username, std::move(created));
-            } else {
-                series = found->second.get();
-            }
-        }
-        cache.users.emplace(series->username, series);
-        return series;
-    }
-
-    ProviderTokenUsageSeries *find_provider(WorkerTokenUsageCache &cache, std::string_view provider_name) {
-        const auto cached = cache.providers.find(provider_name);
-        if (cached != cache.providers.end()) {
-            return cached->second;
-        }
-
-        ProviderTokenUsageSeries *series = nullptr;
-        {
-            std::lock_guard lock(mutex_);
-            auto found = providers_.find(provider_name);
-            if (found == providers_.end()) {
-                auto created = std::make_unique<ProviderTokenUsageSeries>(provider_name);
-                series = created.get();
-                providers_.emplace(series->provider_name, std::move(created));
-            } else {
-                series = found->second.get();
-            }
-        }
-        cache.providers.emplace(series->provider_name, series);
-        return series;
-    }
-
-    std::mutex mutex_;
-    std::map<std::string, std::unique_ptr<UserTokenUsageSeries>, std::less<>> users_;
-    std::map<std::string, std::unique_ptr<ProviderTokenUsageSeries>, std::less<>> providers_;
-};
-
-AiServerMetrics::Worker::Worker() : token_usage_cache_(std::make_unique<WorkerTokenUsageCache>()) {}
-
-AiServerMetrics::Worker::~Worker() = default;
-
-AiServerMetrics::Worker::Worker(Worker &&) noexcept = default;
-
-AiServerMetrics::Worker &AiServerMetrics::Worker::operator=(Worker &&) noexcept = default;
 
 void AiServerMetrics::Worker::request_started(LlmWireProtocol protocol) noexcept {
     inflight_[protocol_index(protocol)].inc();
@@ -450,13 +328,31 @@ void AiServerMetrics::Worker::audit_capture_incomplete() noexcept { audit_captur
 void AiServerMetrics::Worker::token_usage(std::string_view username, std::string_view provider_name,
                                           LlmWireProtocol protocol, const LlmTokenUsage &usage) noexcept {
     FIBER_ASSERT(owner_ != nullptr);
-    owner_->record_token_usage(*this, username, provider_name, protocol, usage);
+    if (!usage.has_usage_fields()) {
+        return;
+    }
+    FIBER_ASSERT(owner_->user_token_usage_ && owner_->provider_token_usage_);
+    const std::string_view protocol_name = kProtocolNames[protocol_index(protocol)];
+    const std::array<const std::optional<std::int64_t> *, kTokenTypes.size()> fields{&usage.in_cache, &usage.in_nocache,
+                                                                                     &usage.out};
+    for (std::size_t type = 0; type < kTokenTypes.size(); ++type) {
+        const std::optional<std::int64_t> &tokens = *fields[type];
+        if (!tokens || *tokens < 0) {
+            continue;
+        }
+        const std::uint64_t delta = static_cast<std::uint64_t>(*tokens);
+        token_totals_[type].add(delta);
+        if (!owner_->user_token_usage_->add(std::array<std::string_view, 2>{username, kTokenTypes[type]}, delta)) {
+            token_usage_failures_[0].inc();
+        }
+        if (!owner_->provider_token_usage_->add(
+                    std::array<std::string_view, 3>{provider_name, protocol_name, kTokenTypes[type]}, delta)) {
+            token_usage_failures_[1].inc();
+        }
+    }
 }
 
-AiServerMetrics::AiServerMetrics(event::EventLoopGroup &workers) :
-    token_usage_store_(std::make_unique<TokenUsageStore>()) {
-    valid_ = initialize(workers);
-}
+AiServerMetrics::AiServerMetrics(event::EventLoopGroup &workers) { valid_ = initialize(workers); }
 
 AiServerMetrics::~AiServerMetrics() { FIBER_ASSERT(!valid_ || collecting_stopped_); }
 
@@ -552,10 +448,30 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
                                                                 "LLM audit records discarded during generation.");
     auto audit_capture_incomplete = registry_.register_counter(
             "ai_server_audit_capture_incomplete_total", "LLM audit records with incomplete request observations.");
+    auto token_totals = registry_.register_counter("ai_server_tokens_total", "LLM tokens by token type.",
+                                                   std::array<std::string_view, 1>{"token_type"});
+    auto token_usage_failures = registry_.register_counter("ai_server_token_usage_record_failures_total",
+                                                           "Dynamic token usage records rejected by the metrics store.",
+                                                           std::array<std::string_view, 1>{"family"});
+    auto user_token_usage =
+            registry_.register_counter(kUserTokenUsageMetric, "LLM tokens by authenticated username and token type.",
+                                       std::array<std::string_view, 2>{"username", "token_type"},
+                                       prometheus::SeriesOptions{
+                                               .mode = prometheus::SeriesMode::Lru,
+                                               .max_series = kMaxUserTokenUsageSeries,
+                                       });
+    auto provider_token_usage = registry_.register_counter(
+            kProviderTokenUsageMetric, "LLM tokens by provider, wire protocol, and token type.",
+            std::array<std::string_view, 3>{"provider_name", "protocol", "token_type"},
+            prometheus::SeriesOptions{
+                    .mode = prometheus::SeriesMode::Lru,
+                    .max_series = kMaxProviderTokenUsageSeries,
+            });
     if (!requests || !duration || !inflight || !provider_attempts || !provider_failures || !provider_retries ||
         !provider_transport_failures || !provider_attempts_skipped || !dns_backoff_hits || !provider_circuit_opens ||
         !route_keys || !rate_checks || !rate_settles || !sse_failures || !sse_drains || !audit_generated ||
-        !audit_generation_failures || !audit_capture_incomplete) {
+        !audit_generation_failures || !audit_capture_incomplete || !token_totals || !token_usage_failures ||
+        !user_token_usage || !provider_token_usage) {
         return false;
     }
 
@@ -564,6 +480,25 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
     auto audit_capture_incomplete_series = registry_.register_series(*audit_capture_incomplete);
     if (!audit_generated_series || !audit_generation_failure_series || !audit_capture_incomplete_series) {
         return false;
+    }
+
+    std::array<prometheus::SeriesId, kTokenTypes.size()> token_total_series;
+    for (std::size_t type = 0; type < kTokenTypes.size(); ++type) {
+        auto series = registry_.register_series(*token_totals, std::array<std::string_view, 1>{kTokenTypes[type]});
+        if (!series) {
+            return false;
+        }
+        token_total_series[type] = *series;
+    }
+    constexpr std::array<std::string_view, 2> kTokenUsageFailureFamilies{"user", "provider"};
+    std::array<prometheus::SeriesId, kTokenUsageFailureFamilies.size()> token_usage_failure_series;
+    for (std::size_t i = 0; i < kTokenUsageFailureFamilies.size(); ++i) {
+        auto series = registry_.register_series(*token_usage_failures,
+                                                std::array<std::string_view, 1>{kTokenUsageFailureFamilies[i]});
+        if (!series) {
+            return false;
+        }
+        token_usage_failure_series[i] = *series;
     }
 
     std::array<std::array<prometheus::SeriesId, 4>, kProtocolNames.size()> request_series;
@@ -677,6 +612,14 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
         return false;
     }
 
+    auto user_dynamic = registry_.dynamic_counter(*user_token_usage);
+    auto provider_dynamic = registry_.dynamic_counter(*provider_token_usage);
+    if (!user_dynamic || !provider_dynamic) {
+        return false;
+    }
+    user_token_usage_.emplace(*user_dynamic);
+    provider_token_usage_.emplace(*provider_dynamic);
+
     workers_.resize(worker_group.size());
     for (std::size_t worker_index = 0; worker_index < workers_.size(); ++worker_index) {
         prometheus::MetricsShard *shard = registry_.shard(shard_ids[worker_index]);
@@ -778,6 +721,20 @@ bool AiServerMetrics::initialize(event::EventLoopGroup &worker_group) {
             }
             worker.rate_limit_settles_[i] = *value;
         }
+        for (std::size_t type = 0; type < token_total_series.size(); ++type) {
+            auto value = shard->counter(token_total_series[type]);
+            if (!value) {
+                return false;
+            }
+            worker.token_totals_[type] = *value;
+        }
+        for (std::size_t i = 0; i < token_usage_failure_series.size(); ++i) {
+            auto value = shard->counter(token_usage_failure_series[i]);
+            if (!value) {
+                return false;
+            }
+            worker.token_usage_failures_[i] = *value;
+        }
     }
     return true;
 }
@@ -786,13 +743,6 @@ AiServerMetrics::Worker &AiServerMetrics::worker(std::size_t index) noexcept {
     FIBER_ASSERT(valid_);
     FIBER_ASSERT(index < workers_.size());
     return workers_[index];
-}
-
-void AiServerMetrics::record_token_usage(Worker &worker, std::string_view username, std::string_view provider_name,
-                                         LlmWireProtocol protocol, const LlmTokenUsage &usage) noexcept {
-    FIBER_ASSERT(worker.owner_ == this);
-    FIBER_ASSERT(worker.token_usage_cache_ != nullptr);
-    token_usage_store_->record(*worker.token_usage_cache_, username, provider_name, protocol, usage);
 }
 
 void AiServerMetrics::set_config_generation(std::uint64_t generation) noexcept {
@@ -812,6 +762,7 @@ AiServerMetrics::collect(TokenRateLimiterStats limiter_stats, std::size_t cluste
     if (!collected) {
         co_return std::unexpected(collected.error());
     }
+    FIBER_ASSERT(user_token_usage_ && provider_token_usage_);
     BoundedTextBuilder output(*collected, kMaxMetricsOutputBytes);
     if (!append_route_key_info(output) ||
         !append_gauge(output, "ai_server_config_generation", "Latest installed configuration generation.",
@@ -822,7 +773,9 @@ AiServerMetrics::collect(TokenRateLimiterStats limiter_stats, std::size_t cluste
                       limiter_stats.in_flight_count) ||
         !append_gauge(output, "ai_server_rate_limit_cluster_nodes", "Token rate limit shard ring nodes.",
                       cluster_nodes) ||
-        !append_process_metrics(output) || !token_usage_store_->append_text(output)) {
+        !append_process_metrics(output) ||
+        !append_dynamic_series_diagnostics(output, user_token_usage_->diagnostics(),
+                                           provider_token_usage_->diagnostics())) {
         co_return std::unexpected(output.error());
     }
     if (audit_stats && (!append_counter(output, "ai_server_audit_written_records_total", "LLM audit records written.",

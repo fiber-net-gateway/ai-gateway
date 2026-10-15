@@ -229,6 +229,21 @@ TEST(AiServerMetricsTest, AggregatesRuntimeAndDynamicTokenUsageMetrics) {
     EXPECT_NE(result->find("ai_server_provider_token_usage_total{provider_name=\"primary\",protocol=\"anthropic\","
                            "token_type=\"out\"} 13"),
               std::string::npos);
+    EXPECT_NE(result->find("ai_server_tokens_total{token_type=\"in_cache\"} 9"), std::string::npos);
+    EXPECT_NE(result->find("ai_server_tokens_total{token_type=\"in_nocache\"} 14"), std::string::npos);
+    EXPECT_NE(result->find("ai_server_tokens_total{token_type=\"out\"} 18"), std::string::npos);
+    EXPECT_NE(result->find("ai_server_token_usage_record_failures_total{family=\"user\"} 0"), std::string::npos);
+    EXPECT_NE(result->find("ai_server_token_usage_record_failures_total{family=\"provider\"} 0"), std::string::npos);
+    EXPECT_NE(result->find("ai_server_metrics_dynamic_active_series{family=\"user_token_usage\"} 3"),
+              std::string::npos);
+    EXPECT_NE(result->find("ai_server_metrics_dynamic_active_series{family=\"provider_token_usage\"} 6"),
+              std::string::npos);
+    EXPECT_NE(result->find("ai_server_metrics_dynamic_series_capacity{family=\"user_token_usage\"} 4096"),
+              std::string::npos);
+    EXPECT_NE(result->find("ai_server_metrics_dynamic_series_capacity{family=\"provider_token_usage\"} 2048"),
+              std::string::npos);
+    EXPECT_NE(result->find("ai_server_metrics_dynamic_evictions_total{family=\"user_token_usage\"} 0"),
+              std::string::npos);
     EXPECT_NE(result->find("ai_server_config_generation 7"), std::string::npos);
     EXPECT_NE(result->find("ai_server_rate_limit_entries 3"), std::string::npos);
     EXPECT_NE(result->find("ai_server_rate_limit_inflight 1"), std::string::npos);
