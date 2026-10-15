@@ -372,10 +372,13 @@ Prometheus 输出两个累计 Counter family：
 CPU，多线程进程可能超过 100%。RSS 是驻留物理内存，不等同于 allocator 堆大小。
 某项 Linux `/proc` 或 rlimit 读取失败时只省略对应进程指标，不影响已有业务指标。
 
-Grafana 面板位于 `docs/grafana/ai-server-dashboard.json`。进程面板直接使用 ai-server
-target；机器 CPU、内存和 load 面板使用 node_exporter，并通过独立的 `node_job`、
-`node_instance` 变量选择机器。ai-server 不重复采集整台机器的资源，Prometheus
-必须在同一数据源中另外抓取 node_exporter。
+Grafana 面板位于 `docs/grafana/ai-server-dashboard.json`，按两个维度组织，数据源固定为
+uid `prometheus-2`。业务维度覆盖请求速率、延迟分位数、在途请求、Token 吞吐（精确总量见
+`ai_server_tokens_total`）、用户/Provider 维度的 token usage、Provider 尝试与失败、限流
+检查结算以及 SSE 健康面板；运维维度覆盖进程 CPU、内存、运行时间、文件描述符、配置代数
+与限流集群状态、动态序列诊断（`ai_server_metrics_dynamic_*`）以及 FILE/HTTP 两种审计
+传输的健康面板。面板只使用 ai-server 自身暴露的指标；如需机器级 CPU、内存监控，请另外
+抓取 node_exporter 并单独建面板。
 
 下游交付失败后的 SSE drain 另由
 `ai_server_sse_drains_total{protocol,result}` 记录，`result` 固定为

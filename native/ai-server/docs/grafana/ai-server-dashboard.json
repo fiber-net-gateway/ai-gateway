@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "fiber-gateway-cpp ai-server application dashboard with process metrics and optional node_exporter host metrics. Scrape availability is not the same as /ready readiness.",
+  "description": "ai-server 数据面面板，按业务与运维两个维度组织。所有查询均来自 ai-server /metrics 实际输出的指标（AiServerMetrics）。抓取可用性不等于 /ready 就绪。",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -25,56 +25,38 @@
   "panels": [
     {
       "collapsed": false,
+      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 0
       },
-      "id": 1,
+      "id": 2,
       "panels": [],
-      "title": "总览",
+      "title": "业务维度（请求 / Token / Provider / 限流 / SSE）",
       "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "所选 Prometheus target 的最小 up 值。它只表示 /metrics 抓取是否成功，不等同于 ai-server /ready。",
+      "description": "所选实例与协议上的完成请求速率（ai_server_requests_total）。",
       "fieldConfig": {
         "defaults": {
-          "decimals": 0,
-          "max": 1,
-          "min": 0,
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "text": "DOWN"
-                },
-                "1": {
-                  "color": "green",
-                  "text": "UP"
-                }
-              },
-              "type": "value"
-            }
-          ],
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
                 "color": "green",
-                "value": 1
+                "value": null
               }
             ]
-          }
+          },
+          "unit": "reqps",
+          "decimals": 1
         },
         "overrides": []
       },
@@ -84,9 +66,9 @@
         "x": 0,
         "y": 1
       },
-      "id": 2,
+      "id": 3,
       "options": {
-        "colorMode": "background",
+        "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
@@ -103,74 +85,11 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "min(up{job=~\"$job\",instance=~\"$instance\"})",
-          "legendFormat": "selected targets",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "抓取可用性",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "所选实例与协议的当前请求吞吐。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "blue",
-            "mode": "fixed"
-          },
-          "decimals": 2,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 4,
-        "y": 1
-      },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
           "expr": "sum(rate(ai_server_requests_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "RPS",
+          "legendFormat": "req/s",
           "range": true,
           "refId": "A"
         }
@@ -181,28 +100,91 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "result=success 的请求占全部已完成请求的比例。当前实现将 2xx 和 3xx 归为 success。",
+      "description": "result=success 占完成请求的比例（2xx/3xx 为 success）。",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "fixedColor": "blue",
-            "mode": "fixed"
-          },
-          "decimals": 2,
-          "max": 100,
-          "min": 0,
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 95
+              },
+              {
+                "color": "green",
+                "value": 99
+              }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum(rate(ai_server_requests_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\",result=\"success\"}[$__rate_interval])) / clamp_min(sum(rate(ai_server_requests_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "success",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "请求成功率",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "所有选中实例按 le 聚合后的端到端请求时长 P95。",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
                 "value": null
               }
             ]
           },
-          "unit": "percent"
+          "unit": "s",
+          "decimals": 3
         },
         "overrides": []
       },
@@ -212,75 +194,10 @@
         "x": 8,
         "y": 1
       },
-      "id": 4,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "100 * sum(rate(ai_server_requests_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\",result=\"success\"}[$__rate_interval])) / clamp_min(sum(rate(ai_server_requests_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])), 1e-9)",
-          "legendFormat": "success",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "成功率",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "result=server_error 或 canceled 的请求占比；不包含 client_error。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "blue",
-            "mode": "fixed"
-          },
-          "decimals": 2,
-          "max": 100,
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 12,
-        "y": 1
-      },
       "id": 5,
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
@@ -296,70 +213,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "100 * sum(rate(ai_server_requests_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\",result=~\"server_error|canceled\"}[$__rate_interval])) / clamp_min(sum(rate(ai_server_requests_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])), 1e-9)",
-          "legendFormat": "server_error + canceled",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "服务失败率",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "所选协议的端到端请求时长 P95。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "blue",
-            "mode": "fixed"
-          },
-          "decimals": 3,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 16,
-        "y": 1
-      },
-      "id": 6,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum by (le) (rate(ai_server_request_duration_seconds_bucket{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])))",
@@ -374,21 +228,17 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "所选实例与协议当前正在处理的请求数。",
+      "description": "当前正在处理的请求（ai_server_requests_inflight 求和）。",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "fixedColor": "blue",
-            "mode": "fixed"
-          },
-          "decimals": 0,
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
+                "color": "green",
                 "value": null
               }
             ]
@@ -400,13 +250,13 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 20,
+        "x": 12,
         "y": 1
       },
-      "id": 7,
+      "id": 6,
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
@@ -422,7 +272,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
           "expr": "sum(ai_server_requests_inflight{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"})",
@@ -435,30 +285,146 @@
       "type": "stat"
     },
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 5
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
       },
-      "id": 8,
-      "panels": [],
-      "title": "请求与延迟",
-      "type": "row"
+      "description": "全部 token 类型的总吞吐（ai_server_tokens_total，精确总量，不受动态序列 LRU 逐出影响）。",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "id": 7,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(ai_server_tokens_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "tokens/s",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Token 吞吐",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "按 wire protocol 和最终请求结果拆分的每秒速率。",
+      "description": "失败的 Provider 尝试占全部尝试的比例。",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "id": 8,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum(rate(ai_server_provider_failures_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])) / clamp_min(sum(rate(ai_server_provider_attempts_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "failures",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Provider 失败率",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "ai_server_requests_total 按 protocol 与 result 聚合。result 取值：success / client_error / server_error / canceled。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "reqps"
+          "unit": "reqps",
+          "overrides": []
         },
         "overrides": []
       },
@@ -466,7 +432,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 5
       },
       "id": 9,
       "options": {
@@ -485,7 +451,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
           "expr": "sum by (protocol, result) (rate(ai_server_requests_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
@@ -500,16 +466,17 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "端到端请求时长分位数。Histogram 在所有选中实例上按 le 和 protocol 聚合。",
+      "description": "ai_server_request_duration_seconds 直方图分位数，按 le 与 protocol 聚合。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "decimals": 3,
-          "unit": "s"
+          "unit": "s",
+          "overrides": [],
+          "decimals": 3
         },
         "overrides": []
       },
@@ -517,7 +484,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 5
       },
       "id": 10,
       "options": {
@@ -536,7 +503,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.50, sum by (le, protocol) (rate(ai_server_request_duration_seconds_bucket{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])))",
@@ -547,35 +514,24 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.90, sum by (le, protocol) (rate(ai_server_request_duration_seconds_bucket{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])))",
-          "legendFormat": "{{protocol}} P90",
+          "expr": "histogram_quantile(0.95, sum by (le, protocol) (rate(ai_server_request_duration_seconds_bucket{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])))",
+          "legendFormat": "{{protocol}} P95",
           "range": true,
           "refId": "B"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, protocol) (rate(ai_server_request_duration_seconds_bucket{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])))",
-          "legendFormat": "{{protocol}} P95",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.99, sum by (le, protocol) (rate(ai_server_request_duration_seconds_bucket{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])))",
           "legendFormat": "{{protocol}} P99",
           "range": true,
-          "refId": "D"
+          "refId": "C"
         }
       ],
       "title": "请求延迟分位数",
@@ -584,91 +540,128 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "当前 Dashboard 时间范围内的请求累计量。Counter reset 由 increase() 处理。",
+      "description": "ai_server_requests_inflight 按 protocol 求和。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "decimals": 0,
-          "unit": "short"
+          "unit": "short",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 6,
         "x": 0,
-        "y": 14
+        "y": 13
       },
       "id": 11,
       "options": {
-        "displayMode": "gradient",
-        "minVizHeight": 10,
-        "minVizWidth": 0,
-        "namePlacement": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
         },
-        "showUnfilled": true,
-        "sizing": "auto",
-        "valueMode": "color"
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum by (protocol, result) (increase(ai_server_requests_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__range]))",
-          "instant": true,
-          "legendFormat": "{{protocol}} / {{result}}",
-          "range": false,
+          "expr": "sum by (protocol) (ai_server_requests_inflight{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"})",
+          "legendFormat": "{{protocol}}",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "当前时间范围请求量",
-      "type": "bargauge"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 22
-      },
-      "id": 12,
-      "panels": [],
-      "title": "Provider 调用",
-      "type": "row"
+      "title": "在途请求（按协议）",
+      "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "Provider 尝试、失败与实际重试的每秒速率。一次最终请求可能产生多个 Provider attempt。",
+      "description": "ai_server_tokens_total 按 token_type 聚合：in_cache / in_nocache / out。静态精确总量，不依赖动态序列。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "ops"
+          "unit": "short",
+          "overrides": [],
+          "decimals": 1
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 23
+        "w": 6,
+        "x": 6,
+        "y": 13
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (token_type) (rate(ai_server_tokens_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{token_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Token 吞吐（按类型）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "按 provider 统计 in_cache 占（in_cache + in_nocache）的比例，来自 ai_server_provider_token_usage_total。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percent",
+          "overrides": [],
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 13
       },
       "id": 13,
       "options": {
@@ -687,63 +680,39 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum by (protocol) (rate(ai_server_provider_attempts_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{protocol}} attempts",
+          "expr": "100 * sum by (provider_name) (rate(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\",provider_name=~\"$provider_name\",token_type=\"in_cache\"}[$__rate_interval])) / clamp_min(sum by (provider_name) (rate(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\",provider_name=~\"$provider_name\",token_type=~\"in_cache|in_nocache\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "{{provider_name}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum by (protocol) (rate(ai_server_provider_failures_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{protocol}} failures",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum by (protocol) (rate(ai_server_provider_retries_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{protocol}} retries",
-          "range": true,
-          "refId": "C"
         }
       ],
-      "title": "Provider 尝试、失败与重试",
+      "title": "输入 Token 缓存命中率",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "失败次数和重试次数分别除以 Provider attempt 数。指标只有 protocol 维度，无法按 provider_name 计算可靠性。",
+      "description": "ai_server_responses_results_total 按 result：completed / failed / incomplete / error / interrupted / invalid_response / aborted。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "decimals": 2,
-          "max": 100,
-          "min": 0,
-          "unit": "percent"
+          "unit": "reqps",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 23
+        "w": 6,
+        "x": 18,
+        "y": 13
       },
       "id": 14,
       "options": {
@@ -762,49 +731,40 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "100 * sum by (protocol) (rate(ai_server_provider_failures_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])) / clamp_min(sum by (protocol) (rate(ai_server_provider_attempts_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])), 1e-9)",
-          "legendFormat": "{{protocol}} failure %",
+          "expr": "sum by (result) (rate(ai_server_responses_results_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "100 * sum by (protocol) (rate(ai_server_provider_retries_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])) / clamp_min(sum by (protocol) (rate(ai_server_provider_attempts_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval])), 1e-9)",
-          "legendFormat": "{{protocol}} retry %",
-          "range": true,
-          "refId": "B"
         }
       ],
-      "title": "Provider 失败与重试占比",
+      "title": "Responses 结果",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "Provider transport failure 固定阶段：invalid_endpoint、no_service_endpoint、dns、pool_shutdown、connect、send_header、send_body、read_header、read_body、response_too_large、invalid_response。",
+      "description": "ai_server_user_token_usage_total（动态 LRU 序列，容量 4096）按 username 聚合取 Top-N。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "ops"
+          "unit": "short",
+          "overrides": [],
+          "decimals": 1
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 6,
         "x": 0,
-        "y": 31
+        "y": 21
       },
       "id": 15,
       "options": {
@@ -823,38 +783,40 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum by (protocol, phase) (rate(ai_server_provider_transport_failures_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{protocol}} / {{phase}}",
+          "expr": "topk(${top_n:raw}, sum by (username) (rate(ai_server_user_token_usage_total{job=~\"$job\",instance=~\"$instance\",username=~\"${username_regex:raw}\"}[$__rate_interval])))",
+          "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Provider 传输失败阶段",
+      "title": "用户 Token 吞吐 Top-N",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "重试计划剪枝数量、DNS timeout backoff 命中和 Provider 熔断开启速率。",
+      "description": "ai_server_provider_token_usage_total（动态 LRU 序列，容量 2048）按 provider_name 聚合。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "ops"
+          "unit": "short",
+          "overrides": [],
+          "decimals": 1
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 31
+        "w": 6,
+        "x": 6,
+        "y": 21
       },
       "id": 16,
       "options": {
@@ -873,73 +835,90 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum by (protocol) (rate(ai_server_provider_attempts_skipped_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{protocol}} skipped attempts",
+          "expr": "sum by (provider_name) (rate(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\",provider_name=~\"$provider_name\"}[$__rate_interval]))",
+          "legendFormat": "{{provider_name}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum by (protocol) (rate(ai_server_dns_backoff_hits_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{protocol}} DNS backoff",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum by (protocol) (rate(ai_server_provider_circuit_opens_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{protocol}} circuit opens",
-          "range": true,
-          "refId": "C"
         }
       ],
-      "title": "重试剪枝、DNS Backoff 与熔断",
+      "title": "Provider Token 吞吐",
       "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 39
-      },
-      "id": 17,
-      "panels": [],
-      "title": "限流与 SSE",
-      "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "Token rate limit check 结果：bypass、allowed、denied、error。",
+      "description": "ai_server_responses_policy_rewrites_total 按 field：store / background / previous_response_id / conversation。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "ops"
+          "unit": "reqps",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 40
+        "w": 6,
+        "x": 12,
+        "y": 21
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (field) (rate(ai_server_responses_policy_rewrites_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{field}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Responses 策略重写",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "ai_server_embedding_usage_total 按 result：known / unknown（响应是否带可解析的 usage 字段）。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "overrides": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 21
       },
       "id": 18,
       "options": {
@@ -958,38 +937,39 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum by (result) (rate(ai_server_rate_limit_checks_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "expr": "sum by (result) (rate(ai_server_embedding_usage_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{result}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "限流检查结果",
+      "title": "Embedding Usage",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "用量结算结果：usage 表示有 token usage，no_usage 表示未观察到 usage，error 表示结算失败。",
+      "description": "ai_server_provider_attempts_total / provider_failures_total / provider_retries_total 按 protocol。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "ops"
+          "unit": "reqps",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 40
+        "x": 0,
+        "y": 29
       },
       "id": 19,
       "options": {
@@ -1008,39 +988,61 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum by (result) (rate(ai_server_rate_limit_settlements_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "{{result}}",
+          "expr": "sum by (protocol) (rate(ai_server_provider_attempts_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
+          "legendFormat": "{{protocol}} attempts",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (protocol) (rate(ai_server_provider_failures_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
+          "legendFormat": "{{protocol}} failures",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (protocol) (rate(ai_server_provider_retries_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
+          "legendFormat": "{{protocol}} retries",
+          "range": true,
+          "refId": "C"
         }
       ],
-      "title": "限流用量结算结果",
+      "title": "Provider 尝试 / 失败 / 重试",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "本地 limiter 条目、在途 session 总数，以及所选实例观察到的最大集群节点数。",
+      "description": "ai_server_provider_transport_failures_total 按 phase：invalid_endpoint / no_service_endpoint / dns / pool_shutdown / connect / send_header / send_body / read_header / read_body / response_too_large / invalid_response。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "decimals": 0,
-          "unit": "short"
+          "unit": "reqps",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 48
+        "x": 12,
+        "y": 29
       },
       "id": 20,
       "options": {
@@ -1059,60 +1061,40 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum(ai_server_rate_limit_entries{job=~\"$job\",instance=~\"$instance\"})",
-          "legendFormat": "local entries (sum)",
+          "expr": "sum by (phase) (rate(ai_server_provider_transport_failures_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
+          "legendFormat": "{{phase}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum(ai_server_rate_limit_inflight{job=~\"$job\",instance=~\"$instance\"})",
-          "legendFormat": "inflight sessions (sum)",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "max(ai_server_rate_limit_cluster_nodes{job=~\"$job\",instance=~\"$instance\"})",
-          "legendFormat": "cluster nodes (max)",
-          "range": true,
-          "refId": "C"
         }
       ],
-      "title": "限流器状态",
+      "title": "Provider 传输失败（按阶段）",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "SSE relay/delivery failure，以及下游交付失败后 upstream drain 的 completed、upstream_error、timeout 结果。",
+      "description": "ai_server_dns_backoff_hits_total（DNS 退避抑制的解析）与 ai_server_provider_circuit_opens_total（熔断打开次数）。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "ops"
+          "unit": "short",
+          "overrides": [],
+          "decimals": 2
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 48
+        "w": 6,
+        "x": 0,
+        "y": 37
       },
       "id": 21,
       "options": {
@@ -1131,22 +1113,197 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum by (protocol) (rate(ai_server_sse_failures_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{protocol}} failures",
+          "expr": "sum(rate(ai_server_dns_backoff_hits_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
+          "legendFormat": "dns_backoff /s",
           "range": true,
           "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum by (protocol, result) (rate(ai_server_sse_drains_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{protocol}} drain / {{result}}",
+          "expr": "sum(rate(ai_server_provider_circuit_opens_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
+          "legendFormat": "circuit_opens /s",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "DNS Backoff 与熔断",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "ai_server_route_keys_total 按 source；算法常量见 ai_server_route_key_info{algorithm=\"cache-affinity-v1\"}。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "overrides": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 37
+      },
+      "id": 22,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source) (rate(ai_server_route_keys_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
+          "legendFormat": "{{source}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "路由键来源",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "ai_server_rate_limit_checks_total（bypass / allowed / denied / error）与 ai_server_rate_limit_settlements_total（usage / no_usage / error）。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "overrides": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 37
+      },
+      "id": 23,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (rate(ai_server_rate_limit_checks_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "check {{result}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (rate(ai_server_rate_limit_settlements_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "settle {{result}}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "限流检查与结算",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "ai_server_sse_failures_total（SSE 中继/投递失败，按 protocol）与 ai_server_sse_drains_total（下游失败后的上游排空：completed / upstream_error / timeout）。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "overrides": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 37
+      },
+      "id": 24,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (protocol) (rate(ai_server_sse_failures_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
+          "legendFormat": "failure {{protocol}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (rate(ai_server_sse_drains_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}[$__rate_interval]))",
+          "legendFormat": "drain {{result}}",
           "range": true,
           "refId": "B"
         }
@@ -1156,368 +1313,291 @@
     },
     {
       "collapsed": false,
+      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 56
+        "y": 45
       },
-      "id": 22,
+      "id": 25,
       "panels": [],
-      "title": "Token 用量",
+      "title": "运维维度（进程 / 配置与集群 / 审计 / 指标存储）",
       "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "认证用户维度聚合的 token 吞吐。token_type 固定为 in_cache、in_nocache、out；Username Regex 默认匹配全部用户。",
+      "description": "time() - process_start_time_seconds，取所选实例的最小值（最近一次重启的实例）。",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
           },
-          "unit": "ops"
+          "unit": "s"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 4,
+        "w": 6,
         "x": 0,
-        "y": 57
-      },
-      "id": 23,
-      "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "max", "sum"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum by (token_type) (rate(ai_server_user_token_usage_total{job=~\"$job\",instance=~\"$instance\",username=~\"${username_regex:raw}\"}[$__rate_interval]))",
-          "legendFormat": "{{token_type}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Token 吞吐（按类型）",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "in_cache / (in_cache + in_nocache)，按 wire protocol 计算。Provider 过滤仅作用于 Token 面板。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "decimals": 2,
-          "max": 100,
-          "min": 0,
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 57
-      },
-      "id": 24,
-      "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "min", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "100 * sum by (protocol) (rate(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\",provider_name=~\"$provider_name\",protocol=~\"$protocol\",token_type=\"in_cache\"}[$__rate_interval])) / clamp_min(sum by (protocol) (rate(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\",provider_name=~\"$provider_name\",protocol=~\"$protocol\",token_type=~\"in_cache|in_nocache\"}[$__rate_interval])), 1e-9)",
-          "legendFormat": "{{protocol}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "输入 Token 缓存命中率",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "按 provider_name、wire protocol 和 token_type 拆分的 Token 吞吐。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 65
-      },
-      "id": 25,
-      "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "max", "sum"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum by (provider_name, protocol, token_type) (rate(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\",provider_name=~\"$provider_name\",protocol=~\"$protocol\"}[$__rate_interval]))",
-          "legendFormat": "{{provider_name}} / {{protocol}} / {{token_type}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Provider Token 吞吐",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "按所有 token_type 求和后的用户 Token 吞吐 Top-N。Username Regex 是文本正则，不主动枚举全部高基数 username。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 65
+        "y": 46
       },
       "id": 26,
       "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "max", "sum"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "topk(${top_n:raw}, sum by (username) (rate(ai_server_user_token_usage_total{job=~\"$job\",instance=~\"$instance\",username=~\"${username_regex:raw}\"}[$__rate_interval])))",
-          "legendFormat": "{{username}}",
+          "expr": "min(time() - process_start_time_seconds{job=~\"$job\",instance=~\"$instance\"})",
+          "legendFormat": "uptime",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "用户 Token 吞吐 Top-N",
-      "type": "timeseries"
+      "title": "进程运行时间",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "当前 Dashboard 时间范围内，符合 Username Regex 的用户 Token 累计量。",
+      "description": "rate(process_cpu_seconds_total) × 100，取所选实例的最大值；100% = 单核打满。",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
           },
-          "decimals": 0,
-          "unit": "short"
+          "unit": "percent",
+          "decimals": 1
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 73
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 46
       },
       "id": 27,
       "options": {
-        "displayMode": "gradient",
-        "minVizHeight": 10,
-        "minVizWidth": 0,
-        "namePlacement": "auto",
-        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": ["lastNotNull"],
           "fields": "",
           "values": false
         },
-        "showUnfilled": true,
-        "sizing": "auto",
-        "valueMode": "color"
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum by (token_type) (increase(ai_server_user_token_usage_total{job=~\"$job\",instance=~\"$instance\",username=~\"${username_regex:raw}\"}[$__range]))",
-          "instant": true,
-          "legendFormat": "{{token_type}}",
-          "range": false,
+          "expr": "max(100 * rate(process_cpu_seconds_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "max",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "当前时间范围 Token 总量",
-      "type": "bargauge"
+      "title": "CPU（单核百分比）",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "当前 Dashboard 时间范围内 Provider + protocol 的 Token 总量 Top-N，三个 token_type 求和。",
+      "description": "process_resident_memory_bytes，取所选实例的最大值。",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
           },
-          "decimals": 0,
-          "unit": "short"
+          "unit": "bytes"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 4,
+        "w": 6,
         "x": 12,
-        "y": 73
+        "y": 46
       },
       "id": 28,
       "options": {
-        "displayMode": "gradient",
-        "minVizHeight": 10,
-        "minVizWidth": 0,
-        "namePlacement": "auto",
-        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": ["lastNotNull"],
           "fields": "",
           "values": false
         },
-        "showUnfilled": true,
-        "sizing": "auto",
-        "valueMode": "color"
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "topk(${top_n:raw}, sum by (provider_name, protocol) (increase(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\",provider_name=~\"$provider_name\",protocol=~\"$protocol\"}[$__range])))",
-          "instant": true,
-          "legendFormat": "{{provider_name}} / {{protocol}}",
-          "range": false,
+          "expr": "max(process_resident_memory_bytes{job=~\"$job\",instance=~\"$instance\"})",
+          "legendFormat": "max RSS",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "当前时间范围 Provider Token Top-N",
-      "type": "bargauge"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 81
-      },
-      "id": 29,
-      "panels": [],
-      "title": "审计日志健康",
-      "type": "row"
+      "title": "内存 RSS",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "审计记录在请求线程生成、日志线程写入和 backlog 丢弃的速率。generated 与 written 存在异步时间差，不应仅用两者瞬时差值判定丢失。",
+      "description": "process_open_fds / process_max_fds，取所选实例的最大值。",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 46
+      },
+      "id": 29,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "max(100 * process_open_fds{job=~\"$job\",instance=~\"$instance\"} / process_max_fds{job=~\"$job\",instance=~\"$instance\"})",
+          "legendFormat": "max",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "文件描述符使用率",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "rate(process_cpu_seconds_total) × 100，按实例。100% 表示占满一个核。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "ops"
+          "unit": "percent",
+          "overrides": [],
+          "decimals": 1
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 6,
         "x": 0,
-        "y": 82
+        "y": 50
       },
       "id": 30,
       "options": {
         "legend": {
-          "calcs": ["lastNotNull", "max", "sum"],
+          "calcs": ["lastNotNull", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1531,65 +1611,44 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_generated_records_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "generated records",
+          "expr": "100 * rate(process_cpu_seconds_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_written_records_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "written records",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_dropped_records_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "dropped records",
-          "range": true,
-          "refId": "C"
         }
       ],
-      "title": "审计记录流水线",
+      "title": "进程 CPU（单核百分比）",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "审计 JSON 生成失败、观测不完整和文件写入失败速率。",
+      "description": "process_resident_memory_bytes（RSS）与 process_virtual_memory_bytes（VSZ），按实例。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "ops"
+          "unit": "bytes",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 82
+        "w": 6,
+        "x": 6,
+        "y": 50
       },
       "id": 31,
       "options": {
         "legend": {
-          "calcs": ["lastNotNull", "max", "sum"],
+          "calcs": ["lastNotNull", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1603,73 +1662,50 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_generation_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "generation failures",
+          "expr": "process_resident_memory_bytes{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} RSS",
           "range": true,
           "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_capture_incomplete_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "capture incomplete",
+          "expr": "process_virtual_memory_bytes{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} virtual",
           "range": true,
           "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_write_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "write failures",
-          "range": true,
-          "refId": "C"
         }
       ],
-      "title": "审计生成、捕获与写入异常",
+      "title": "进程内存",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "所有选中实例的活动审计文件大小之和，以及审计日志写入字节速率。",
+      "description": "time() - process_start_time_seconds，按实例；数值回落到 0 表示进程重启。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "bytes"
+          "unit": "s",
+          "overrides": []
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "write throughput"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "Bps"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 90
+        "w": 6,
+        "x": 12,
+        "y": 50
       },
       "id": 32,
       "options": {
@@ -1688,54 +1724,44 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum(ai_server_audit_active_file_bytes{job=~\"$job\",instance=~\"$instance\"})",
-          "legendFormat": "active file size",
+          "expr": "time() - process_start_time_seconds{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_written_bytes_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "write throughput",
-          "range": true,
-          "refId": "B"
         }
       ],
-      "title": "审计文件大小与写入量",
+      "title": "进程运行时间",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "审计日志轮转，以及 rotation、reopen、retention 维护失败速率。",
+      "description": "process_open_fds 与 process_max_fds，按实例。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "unit": "ops"
+          "unit": "short",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 16,
-        "x": 8,
-        "y": 90
+        "w": 6,
+        "x": 18,
+        "y": 50
       },
       "id": 33,
       "options": {
         "legend": {
-          "calcs": ["lastNotNull", "max", "sum"],
+          "calcs": ["lastNotNull", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1749,92 +1775,57 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_rotations_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "rotations",
+          "expr": "process_open_fds{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} open",
           "range": true,
           "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_rotation_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "rotation failures",
+          "expr": "process_max_fds{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} limit",
           "range": true,
           "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_reopen_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "reopen failures",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(ai_server_audit_retention_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "retention failures",
-          "range": true,
-          "refId": "D"
         }
       ],
-      "title": "审计轮转与维护",
+      "title": "进程文件描述符",
       "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 98
-      },
-      "id": 34,
-      "panels": [],
-      "title": "实例与配置",
-      "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "Prometheus scrape target 的 up 状态，按 instance 展示。它不代表 ai-server /ready。",
+      "description": "Prometheus up 指标。只证明 /metrics 抓取成功，不等同于 ai-server /ready 就绪。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "decimals": 0,
-          "max": 1,
+          "unit": "short",
+          "overrides": [],
           "min": 0,
-          "unit": "short"
+          "max": 1
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 6,
         "x": 0,
-        "y": 99
+        "y": 58
       },
-      "id": 35,
+      "id": 34,
       "options": {
         "legend": {
-          "calcs": ["lastNotNull"],
+          "calcs": ["lastNotNull", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1848,7 +1839,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
           "expr": "up{job=~\"$job\",instance=~\"$instance\"}",
@@ -1857,35 +1848,130 @@
           "refId": "A"
         }
       ],
-      "title": "Target Up（按实例）",
+      "title": "目标抓取可用性",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "每个实例已安装的最新配置 generation。不同实例长期不一致通常表示配置传播存在问题。",
+      "description": "ai_server_config_generation（已安装配置代数）、ai_server_rate_limit_cluster_nodes（限流分片环节点数）、ai_server_rate_limit_entries / inflight（本地限流器条目与在途）、ai_server_audit_http_endpoints（HTTP 审计健康端点数），按实例。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "decimals": 0,
-          "unit": "short"
+          "unit": "short",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 99
+        "w": 6,
+        "x": 6,
+        "y": 58
+      },
+      "id": 35,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "ai_server_config_generation{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} config_generation",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "ai_server_rate_limit_cluster_nodes{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} rate_limit_cluster_nodes",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "ai_server_rate_limit_entries{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} rate_limit_entries",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "ai_server_rate_limit_inflight{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} rate_limit_inflight",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "ai_server_audit_http_endpoints{job=~\"$job\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} audit_http_endpoints",
+          "range": true,
+          "refId": "E"
+        }
+      ],
+      "title": "配置与集群状态",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "ai_server_metrics_dynamic_active_series（活跃序列，跨实例求和）与 ai_server_metrics_dynamic_series_capacity（容量 4096/2048，取单实例最大值），按 family：user_token_usage / provider_token_usage。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "overrides": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 58
       },
       "id": 36,
       "options": {
         "legend": {
-          "calcs": ["lastNotNull"],
+          "calcs": ["lastNotNull", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1899,44 +1985,56 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "ai_server_config_generation{job=~\"$job\",instance=~\"$instance\"}",
-          "legendFormat": "{{instance}}",
+          "expr": "sum by (family) (ai_server_metrics_dynamic_active_series{job=~\"$job\",instance=~\"$instance\"})",
+          "legendFormat": "{{family}} active (sum)",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "max by (family) (ai_server_metrics_dynamic_series_capacity{job=~\"$job\",instance=~\"$instance\"})",
+          "legendFormat": "{{family}} capacity (max)",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "配置 Generation（按实例）",
+      "title": "动态序列容量",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "每个实例观察到的 Token rate-limit shard ring 节点数。与 config generation 结合可辅助判断就绪状态，但不是 /ready 的精确替代。",
+      "description": "ai_server_metrics_dynamic_evictions_total / creation_failures_total（按 family：user_token_usage / provider_token_usage）与 ai_server_token_usage_record_failures_total（按 family：user / provider）。持续非零说明容量不足或分配失败。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "decimals": 0,
-          "unit": "short"
+          "unit": "short",
+          "overrides": [],
+          "decimals": 2
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 99
+        "w": 6,
+        "x": 18,
+        "y": 58
       },
       "id": 37,
       "options": {
         "legend": {
-          "calcs": ["lastNotNull"],
+          "calcs": ["lastNotNull", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1950,53 +2048,134 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "ai_server_rate_limit_cluster_nodes{job=~\"$job\",instance=~\"$instance\"}",
-          "legendFormat": "{{instance}}",
+          "expr": "sum by (family) (rate(ai_server_metrics_dynamic_evictions_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{family}} evictions/s",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (family) (rate(ai_server_metrics_dynamic_creation_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{family}} creation_failures/s",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "sum by (family) (rate(ai_server_token_usage_record_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{family}} record_failures/s",
+          "range": true,
+          "refId": "C"
         }
       ],
-      "title": "限流集群节点（按实例）",
+      "title": "动态序列驱逐与记录失败",
       "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 107
-      },
-      "id": 38,
-      "panels": [],
-      "title": "ai-server 进程资源",
-      "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "进程消耗的 CPU 时间速率。100% 表示占用一个逻辑 CPU，多线程进程可能超过 100%。",
+      "description": "ai_server_audit_generated_records_total（生成）、audit_generation_failures_total（生成失败）、audit_capture_incomplete_total（观测不完整），按实例。与审计传输模式无关。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "decimals": 1,
-          "min": 0,
-          "unit": "percent"
+          "unit": "reqps",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 6,
         "x": 0,
-        "y": 108
+        "y": 66
+      },
+      "id": 38,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "rate(ai_server_audit_generated_records_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} generated",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "rate(ai_server_audit_generation_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} generation_failures",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "rate(ai_server_audit_capture_incomplete_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} capture_incomplete",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "审计记录生成",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-2"
+      },
+      "description": "ai_server_audit_written_records_total / dropped_records_total / write_failures_total，按实例。仅 FILE 审计构建输出，HTTP 构建无数据。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "overrides": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 66
       },
       "id": 39,
       "options": {
@@ -2015,39 +2194,61 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "100 * rate(process_cpu_seconds_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
-          "legendFormat": "{{instance}}",
+          "expr": "rate(ai_server_audit_written_records_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} written",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "rate(ai_server_audit_dropped_records_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} dropped",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "rate(ai_server_audit_write_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} write_failures",
+          "range": true,
+          "refId": "C"
         }
       ],
-      "title": "进程 CPU（单核百分比）",
+      "title": "审计落盘（FILE）",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "RSS 是当前驻留物理内存，Virtual 是进程虚拟地址空间；RSS 不等同于 C++ allocator 堆大小。",
+      "description": "ai_server_audit_http_queued / delivered / dropped_records_total 与 retryable / permanent_failures_total，按实例。仅 HTTP 审计构建输出，FILE 构建无数据。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "min": 0,
-          "unit": "bytes"
+          "unit": "reqps",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 6,
         "x": 12,
-        "y": 108
+        "y": 66
       },
       "id": 40,
       "options": {
@@ -2066,107 +2267,87 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "process_resident_memory_bytes{job=~\"$job\",instance=~\"$instance\"}",
-          "legendFormat": "{{instance}} RSS",
+          "expr": "rate(ai_server_audit_http_queued_records_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} queued",
           "range": true,
           "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "process_virtual_memory_bytes{job=~\"$job\",instance=~\"$instance\"}",
-          "legendFormat": "{{instance}} virtual",
+          "expr": "rate(ai_server_audit_http_delivered_records_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} delivered",
           "range": true,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "rate(ai_server_audit_http_dropped_records_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} dropped",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "rate(ai_server_audit_http_retryable_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} retryable",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-2"
+          },
+          "editorMode": "code",
+          "expr": "rate(ai_server_audit_http_permanent_failures_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} permanent",
+          "range": true,
+          "refId": "E"
         }
       ],
-      "title": "进程内存",
+      "title": "审计 HTTP 投递",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$datasource"
+        "uid": "prometheus-2"
       },
-      "description": "当前 Prometheus 时间减去进程启动时间。",
+      "description": "ai_server_audit_active_file_bytes（当前审计文件大小，FILE）、ai_server_audit_http_queue_bytes（HTTP 投递队列积压）、ai_server_metrics_dynamic_storage_bytes（动态序列标签存储，按 family），按实例取最大值。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
-          "decimals": 0,
-          "min": 0,
-          "unit": "s"
+          "unit": "bytes",
+          "overrides": []
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 116
+        "w": 6,
+        "x": 18,
+        "y": 66
       },
       "id": 41,
       "options": {
         "legend": {
-          "calcs": ["lastNotNull"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "time() - process_start_time_seconds{job=~\"$job\",instance=~\"$instance\"}",
-          "legendFormat": "{{instance}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "进程运行时间",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "进程当前打开 FD 数与 RLIMIT_NOFILE 软限制。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "decimals": 0,
-          "min": 0,
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 116
-      },
-      "id": 42,
-      "options": {
-        "legend": {
           "calcs": ["lastNotNull", "max"],
           "displayMode": "table",
           "placement": "bottom",
@@ -2181,388 +2362,38 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "process_open_fds{job=~\"$job\",instance=~\"$instance\"}",
-          "legendFormat": "{{instance}} open",
+          "expr": "max by (instance) (ai_server_audit_active_file_bytes{job=~\"$job\",instance=~\"$instance\"})",
+          "legendFormat": "{{instance}} audit_file",
           "range": true,
           "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "process_max_fds{job=~\"$job\",instance=~\"$instance\"}",
-          "legendFormat": "{{instance}} limit",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "进程文件描述符",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 124
-      },
-      "id": 43,
-      "panels": [],
-      "title": "机器资源（node_exporter）",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "node_exporter 所在机器的非 idle CPU 比例。需要 Prometheus 已抓取 node_exporter。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "decimals": 1,
-          "max": 100,
-          "min": 0,
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 125
-      },
-      "id": 44,
-      "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "100 * (1 - avg by (job, instance) (rate(node_cpu_seconds_total{job=~\"$node_job\",instance=~\"$node_instance\",mode=\"idle\"}[$__rate_interval])))",
-          "legendFormat": "{{job}} / {{instance}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "机器 CPU 使用率",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "使用 MemAvailable 计算机器内存使用率，避免把可回收 page cache 直接视为不可用内存。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "decimals": 1,
-          "max": 100,
-          "min": 0,
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 125
-      },
-      "id": 45,
-      "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=~\"$node_job\",instance=~\"$node_instance\"} / node_memory_MemTotal_bytes{job=~\"$node_job\",instance=~\"$node_instance\"})",
-          "legendFormat": "{{job}} / {{instance}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "机器内存使用率",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "机器总内存、可用内存和按 Total - Available 计算的已用内存。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "min": 0,
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 133
-      },
-      "id": 46,
-      "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "node_memory_MemTotal_bytes{job=~\"$node_job\",instance=~\"$node_instance\"} - node_memory_MemAvailable_bytes{job=~\"$node_job\",instance=~\"$node_instance\"}",
-          "legendFormat": "{{job}} / {{instance}} used",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "node_memory_MemAvailable_bytes{job=~\"$node_job\",instance=~\"$node_instance\"}",
-          "legendFormat": "{{job}} / {{instance}} available",
+          "expr": "max by (instance) (ai_server_audit_http_queue_bytes{job=~\"$job\",instance=~\"$instance\"})",
+          "legendFormat": "{{instance}} audit_http_queue",
           "range": true,
           "refId": "B"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "$datasource"
+            "uid": "prometheus-2"
           },
           "editorMode": "code",
-          "expr": "node_memory_MemTotal_bytes{job=~\"$node_job\",instance=~\"$node_instance\"}",
-          "legendFormat": "{{job}} / {{instance}} total",
+          "expr": "max by (family) (ai_server_metrics_dynamic_storage_bytes{job=~\"$job\",instance=~\"$instance\"})",
+          "legendFormat": "{{family}} dynamic_labels",
           "range": true,
           "refId": "C"
         }
       ],
-      "title": "机器内存容量",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "node_exporter 暴露的 1、5、15 分钟系统 load average。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "min": 0,
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 133
-      },
-      "id": 47,
-      "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "node_load1{job=~\"$node_job\",instance=~\"$node_instance\"}",
-          "legendFormat": "{{job}} / {{instance}} load1",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "node_load5{job=~\"$node_job\",instance=~\"$node_instance\"}",
-          "legendFormat": "{{job}} / {{instance}} load5",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "editorMode": "code",
-          "expr": "node_load15{job=~\"$node_job\",instance=~\"$node_instance\"}",
-          "legendFormat": "{{job}} / {{instance}} load15",
-          "range": true,
-          "refId": "C"
-        }
-      ],
-      "title": "机器 Load Average",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "模型终态独立于 HTTP 状态；HTTP 200 也可能为 failed 或 incomplete。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 141,
-        "w": 12,
-        "h": 8
-      },
-      "id": 48,
-      "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "expr": "sum by (result) (rate(ai_server_responses_results_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "{{result}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Responses 终态与交付结果",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource"
-      },
-      "description": "按请求统计强制关闭 store/background 或删除历史引用字段。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 141,
-        "w": 12,
-        "h": 8
-      },
-      "id": 49,
-      "options": {
-        "legend": {
-          "calcs": ["lastNotNull", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "expr": "sum by (field) (rate(ai_server_responses_policy_rewrites_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "{{field}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Responses 无状态改写",
+      "title": "存储字节数（审计 / 动态序列）",
       "type": "timeseries"
     }
   ],
@@ -2572,20 +2403,6 @@
   "templating": {
     "list": [
       {
-        "current": {},
-        "hide": 0,
-        "includeAll": false,
-        "label": "Prometheus 数据源",
-        "multi": false,
-        "name": "datasource",
-        "options": [],
-        "query": "prometheus",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "type": "datasource"
-      },
-      {
         "allValue": ".*",
         "current": {
           "selected": true,
@@ -2594,7 +2411,7 @@
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "$datasource"
+          "uid": "prometheus-2"
         },
         "definition": "label_values(ai_server_requests_total, job)",
         "hide": 0,
@@ -2619,57 +2436,7 @@
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "$datasource"
-        },
-        "definition": "label_values(node_cpu_seconds_total, job)",
-        "hide": 0,
-        "includeAll": true,
-        "label": "Node Job",
-        "multi": true,
-        "name": "node_job",
-        "options": [],
-        "query": "label_values(node_cpu_seconds_total, job)",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 1,
-        "type": "query"
-      },
-      {
-        "allValue": ".*",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
-        "datasource": {
-          "type": "prometheus",
-          "uid": "$datasource"
-        },
-        "definition": "label_values(node_cpu_seconds_total{job=~\"$node_job\"}, instance)",
-        "hide": 0,
-        "includeAll": true,
-        "label": "Node Instance",
-        "multi": true,
-        "name": "node_instance",
-        "options": [],
-        "query": "label_values(node_cpu_seconds_total{job=~\"$node_job\"}, instance)",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 1,
-        "type": "query"
-      },
-      {
-        "allValue": ".*",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
-        "datasource": {
-          "type": "prometheus",
-          "uid": "$datasource"
+          "uid": "prometheus-2"
         },
         "definition": "label_values(ai_server_requests_total{job=~\"$job\"}, instance)",
         "hide": 0,
@@ -2717,9 +2484,14 @@
             "selected": false,
             "text": "openai-responses",
             "value": "openai-responses"
+          },
+          {
+            "selected": false,
+            "text": "openai-embedding",
+            "value": "openai-embedding"
           }
         ],
-        "query": "openai,anthropic,openai-responses",
+        "query": "openai,anthropic,openai-responses,openai-embedding",
         "skipUrlSync": false,
         "type": "custom"
       },
@@ -2732,16 +2504,16 @@
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "$datasource"
+          "uid": "prometheus-2"
         },
-        "definition": "label_values(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}, provider_name)",
+        "definition": "label_values(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\"}, provider_name)",
         "hide": 0,
         "includeAll": true,
         "label": "Provider",
         "multi": true,
         "name": "provider_name",
         "options": [],
-        "query": "label_values(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\",protocol=~\"$protocol\"}, provider_name)",
+        "query": "label_values(ai_server_provider_token_usage_total{job=~\"$job\",instance=~\"$instance\"}, provider_name)",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
@@ -2812,6 +2584,6 @@
   "timezone": "browser",
   "title": "ai-server Overview",
   "uid": "fiber-ai-server",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }
