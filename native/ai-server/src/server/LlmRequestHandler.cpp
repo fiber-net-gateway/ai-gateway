@@ -1969,7 +1969,7 @@ async::Task<bool> send_sse_header(http::HttpExchange &exchange, AiServerCatReque
             .kind = http::OutgoingHeaderKind::Final,
             .status_code = status_code,
             .headers = &headers,
-            .body = http::HttpBodySpec::Stream(),
+            .body = http::HttpBodySpec::Auto(),
             .connection_mode = http::ResponseConnectionMode::Auto,
             .end_stream = false,
     });
@@ -2790,7 +2790,7 @@ async::Task<void> LlmRequestHandler::handle(http::HttpExchange &exchange, LlmWir
                                                          : responses_terminal_error(observed.terminal);
                 auto result = observed.failure == "upstream_missing_terminal_event" ? ResponsesResult::Interrupted
                               : !observed.failure.empty()                           ? ResponsesResult::InvalidResponse
-                              : !relay_result.upstream_complete                     ? ResponsesResult::Interrupted
+                              : !relay_result.upstream_complete ? ResponsesResult::Interrupted
                                                                 : responses_result(observed.terminal);
                 if (relay_result.downstream_delivery_failed)
                     result = ResponsesResult::Aborted;
