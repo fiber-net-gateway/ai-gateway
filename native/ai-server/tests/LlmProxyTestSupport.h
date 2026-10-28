@@ -1011,7 +1011,7 @@ private:
                 .kind = fiber::http::OutgoingHeaderKind::Final,
                 .status_code = reply.status,
                 .headers = &headers,
-                .body = reply.stream ? fiber::http::HttpBodySpec::Chunked()
+                .body = reply.stream ? fiber::http::HttpBodySpec::Stream()
                                      : fiber::http::HttpBodySpec::ContentLength(body_size),
                 .connection_mode = fiber::http::ResponseConnectionMode::Auto,
                 .end_stream = !reply.stream && body_size == 0,
